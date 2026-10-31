@@ -522,7 +522,7 @@ function buildTiles(inp: SurfaceInput): Surface {
 
   const top = new Float32Array(N);
   for (let c = 0; c < N; c++) {
-    if (w.water[c] === WATER_OCEAN) top[c] = w.biome[c] === B.SEA_ICE ? SEA + 0.0018 : SEA + w.elevation[c] * 0.035;
+    if (w.water[c] === WATER_OCEAN) top[c] = w.biome[c] === B.SEA_ICE ? SEA + 0.0018 : seaFloor(w.elevation[c]);
     else if (w.water[c] === WATER_LAKE) top[c] = LAND + w.surface[c] * relief;
     else top[c] = LAND + w.elevation[c] * relief;
   }
