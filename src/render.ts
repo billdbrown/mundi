@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
+import { WATER_LAND, WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { hash01 } from './rng.ts';
 import { makeSimplex } from './noise.ts';
 import { SEA, surfaceQueries, type MeshData, type SurfaceData, type SurfaceQueries } from './surface.ts';
@@ -335,126 +335,209 @@ export class PlanetView {
   }
 
   /**
-   * Rivers as ribbons of the water surface: in through one edge, bending through the cell centre
-   * with a little meander, out through the next. Width grows with flow, so a river visibly
-   * gathers its tributaries, and mouths flare where they meet the sea.
+   * Rivers as continuous ribbons of the water surface.
+   *
+   * Each river is traced from its mouth upstream along its biggest branch, so one channel is one
+   * path. The path's control points are the points where it crosses cell edges; a Catmull-Rom
+   * spline through them gives one smooth curve, drawn as one strip, so there are no joints to
+   * crease. Side branches are traced the same way and end on the main channel's centreline.
+   * Width follows flow; mouths reach a little way into the sea, widen, and fade to its colour.
+   * Streams (below the river threshold) go in their own mesh, shown only up close.
    */
   private buildRivers(w: World, s: SurfaceQueries, P: Float32Array, C: Float32Array) {
-    const g = w.grid, T = w.riverThreshold;
-    const spacing = Math.sqrt((4 * Math.PI) / g.count);
+    const g = w.grid, T = w.riverThreshold, N = g.count;
+    const spacing = Math.sqrt((4 * Math.PI) / N);
     const meander = makeSimplex(w.params.seed * 5 + 13);
-    const mf = 1.6 / spacing;
+    const mf = 1.1 / spacing;
     const widthOf = (f: number) => spacing * Math.min(0.26, 0.035 + 0.045 * Math.log2(1 + f / T));
+    const STREAM = 0.35 * T;
+    const LIFT = 0.0012, RIVER_DEPTH = 0.0045, MOUTH_DEPTH = 0.0016;
+    const flows = (c: number) => w.water[c] === WATER_LAND && w.temperature[c] > 0.12 && w.flow[c] >= STREAM;
+    const unit = (x: number, y: number, z: number) => { const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
+    const center = (c: number) => [P[c * 3], P[c * 3 + 1], P[c * 3 + 2]];
     const edgePoint = (c: number, i: number): number[] => {
       const ks = g.corners[c];
       let k0 = ks[i], k1 = ks[(i + 1) % ks.length];
       if (k0 > k1) [k0, k1] = [k1, k0]; // same point from both sides
       const t = 0.3 + 0.4 * hash01(k0 * 7919 + k1);
-      const x = C[k0 * 3] + (C[k1 * 3] - C[k0 * 3]) * t;
-      const y = C[k0 * 3 + 1] + (C[k1 * 3 + 1] - C[k0 * 3 + 1]) * t;
-      const z = C[k0 * 3 + 2] + (C[k1 * 3 + 2] - C[k0 * 3 + 2]) * t;
-      const l = Math.hypot(x, y, z);
-      return [x / l, y / l, z / l];
+      return unit(C[k0 * 3] + (C[k1 * 3] - C[k0 * 3]) * t, C[k0 * 3 + 1] + (C[k1 * 3 + 1] - C[k0 * 3 + 1]) * t,
+        C[k0 * 3 + 2] + (C[k1 * 3 + 2] - C[k0 * 3 + 2]) * t);
     };
 
     type Buf = { pos: number[]; depth: number[]; index: number[] };
     const riverBuf: Buf = { pos: [], depth: [], index: [] }, streamBuf: Buf = { pos: [], depth: [], index: [] };
-    let buf = riverBuf;
-    const LIFT = 0.0012, RIVER_DEPTH = 0.0045;
-    const strip = (pts: number[][], widths: number[], side?: number[]) => {
+    /** A control point: direction, surface height, width, water depth (colour), and whether it is river or stream. */
+    interface CP { p: number[]; h: number; w: number; d: number; river: boolean; cell: number }
+    interface Sample { x: number; y: number; z: number; w: number; d: number; river: boolean }
+    /** Drawn centreline points per cell, so branches can find the channel they join. */
+    const cellSamples = new Map<number, { p: number[]; h: number }[]>();
+
+    const strip = (buf: Buf, pts: Sample[]) => {
+      if (pts.length < 2) return;
       const base = buf.pos.length / 3;
+      let sx = 1, sy = 0, sz = 0;
       for (let i = 0; i < pts.length; i++) {
-        const p = pts[i];
-        let sx: number, sy: number, sz: number;
-        if (side) [sx, sy, sz] = side;
-        else {
-          const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
-          const tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2];
-          const l = Math.hypot(p[0], p[1], p[2]);
-          const ux = p[0] / l, uy = p[1] / l, uz = p[2] / l;
-          sx = ty * uz - tz * uy; sy = tz * ux - tx * uz; sz = tx * uy - ty * ux;
-          const sl = Math.hypot(sx, sy, sz) || 1; sx /= sl; sy /= sl; sz /= sl;
-        }
-        const hw = widths[i] / 2;
-        buf.pos.push(p[0] + sx * hw, p[1] + sy * hw, p[2] + sz * hw, p[0] - sx * hw, p[1] - sy * hw, p[2] - sz * hw);
-        buf.depth.push(RIVER_DEPTH, RIVER_DEPTH);
+        const p = pts[i], a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+        const l = Math.hypot(p.x, p.y, p.z), ux = p.x / l, uy = p.y / l, uz = p.z / l;
+        // Tangent flattened onto the ground; vertical steps (waterfalls) keep the last side.
+        let tx = b.x - a.x, ty = b.y - a.y, tz = b.z - a.z;
+        const tu = tx * ux + ty * uy + tz * uz;
+        tx -= ux * tu; ty -= uy * tu; tz -= uz * tu;
+        const cx = ty * uz - tz * uy, cy = tz * ux - tx * uz, cz = tx * uy - ty * ux;
+        const cl = Math.hypot(cx, cy, cz);
+        if (cl > 1e-9) { sx = cx / cl; sy = cy / cl; sz = cz / cl; }
+        const hw = p.w / 2;
+        buf.pos.push(p.x + sx * hw, p.y + sy * hw, p.z + sz * hw, p.x - sx * hw, p.y - sy * hw, p.z - sz * hw);
+        buf.depth.push(p.d, p.d);
       }
       for (let i = 0; i < pts.length - 1; i++) {
         const a = base + i * 2;
         buf.index.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
-        if (side) buf.index.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); // waterfalls: both faces
       }
     };
 
-    // Streams: flow too small to count as a river, drawn thin and only when zoomed in.
-    const STREAM = 0.35 * T;
-    const flows = (c: number) => w.water[c] === 0 && w.temperature[c] > 0.12 && w.flow[c] >= STREAM;
-    const curve = (from: number[], hFrom: number, wFrom: number, ctr: number[], hC: number, to: number[], hTo: number, wTo: number) => {
-      // Meander sideways, perpendicular to the chord, tapering to zero at both ends so
-      // neighbouring cells still join up.
-      const chx = to[0] - from[0], chy = to[1] - from[1], chz = to[2] - from[2];
-      let px = chy * ctr[2] - chz * ctr[1], py = chz * ctr[0] - chx * ctr[2], pz = chx * ctr[1] - chy * ctr[0];
-      const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
-      const pts: number[][] = [], widths: number[] = [];
-      const STEPS = 10;
-      for (let k = 0; k <= STEPS; k++) {
-        const t = k / STEPS, a = (1 - t) * (1 - t), b = 2 * t * (1 - t), cc = t * t;
-        let x = a * from[0] + b * ctr[0] + cc * to[0];
-        let y = a * from[1] + b * ctr[1] + cc * to[1];
-        let z = a * from[2] + b * ctr[2] + cc * to[2];
-        const off = Math.sin(Math.PI * t) * spacing * 0.22 * meander(x * mf, y * mf, z * mf);
-        x += px * off; y += py * off; z += pz * off;
-        const l = Math.hypot(x, y, z);
-        const h = Math.max(a * hFrom + b * hC + cc * hTo, SEA) + LIFT;
-        pts.push([(x / l) * h, (y / l) * h, (z / l) * h]);
-        widths.push(wFrom + (wTo - wFrom) * t);
+    /** Spline through the control points, meander, then emit river and stream runs. */
+    const emit = (cps: CP[]) => {
+      if (cps.length < 2) return;
+      const out: (Sample & { dir: number[]; h: number; cell: number })[] = [];
+      const STEPS = 8;
+      for (let k = 0; k < cps.length - 1; k++) {
+        const p1 = cps[k].p, p2 = cps[k + 1].p;
+        const p0 = k > 0 ? cps[k - 1].p : p1.map((v, i) => 2 * v - p2[i]);
+        const p3 = k + 2 < cps.length ? cps[k + 2].p : p2.map((v, i) => 2 * v - p1[i]);
+        const same = Math.hypot(p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2]) < 1e-9;
+        const cell = cps[k].cell, hMid = cell >= 0 ? s.centerH(cell) : (cps[k].h + cps[k + 1].h) / 2;
+        for (let st = k === 0 ? 0 : 1; st <= STEPS; st++) {
+          if (same && st < STEPS) continue;       // a waterfall: just the drop
+          const t = st / STEPS, t2 = t * t, t3 = t2 * t;
+          const dir = unit(...([0, 1, 2].map((i) => 0.5 * (2 * p1[i] + (-p0[i] + p2[i]) * t
+            + (2 * p0[i] - 5 * p1[i] + 4 * p2[i] - p3[i]) * t2 + (-p0[i] + 3 * p1[i] - 3 * p2[i] + p3[i]) * t3))) as [number, number, number]);
+          const h = (1 - t) * (1 - t) * cps[k].h + 2 * t * (1 - t) * hMid + t * t * cps[k + 1].h;
+          out.push({
+            dir, h, cell, x: 0, y: 0, z: 0, river: cps[k + 1].river,
+            w: cps[k].w + (cps[k + 1].w - cps[k].w) * t, d: cps[k].d + (cps[k + 1].d - cps[k].d) * t,
+          });
+        }
       }
-      strip(pts, widths);
+      // Meander sideways along the whole path, tapering to nothing at both ends so sources,
+      // junctions and mouths stay put. Arc length tracks the taper.
+      const arc = [0];
+      for (let i = 1; i < out.length; i++) {
+        const a = out[i - 1].dir, b = out[i].dir;
+        arc.push(arc[i - 1] + Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+      }
+      const total = arc[arc.length - 1], ramp = spacing * 0.7;
+      for (let i = 0; i < out.length; i++) {
+        const o = out[i], a = out[Math.max(0, i - 1)].dir, b = out[Math.min(out.length - 1, i + 1)].dir;
+        const [ux, uy, uz] = o.dir;
+        const tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2];
+        const perp = unit(uy * tz - uz * ty, uz * tx - ux * tz, ux * ty - uy * tx);
+        const taper = Math.min(1, arc[i] / ramp, (total - arc[i]) / ramp);
+        const off = taper * spacing * 0.17 * meander(ux * mf, uy * mf, uz * mf);
+        const d = unit(ux + perp[0] * off, uy + perp[1] * off, uz + perp[2] * off);
+        // Mouth points sit just above the sea; everything else rides LIFT above the ground.
+        const h = (o.h < SEA ? o.h : Math.max(o.h, SEA)) + LIFT;
+        o.x = d[0] * h; o.y = d[1] * h; o.z = d[2] * h;
+        if (o.cell >= 0) {
+          let list = cellSamples.get(o.cell);
+          if (!list) cellSamples.set(o.cell, (list = []));
+          list.push({ p: d, h: o.h });
+        }
+      }
+      // Split into river and stream runs; the boundary point belongs to both.
+      let start = 0;
+      for (let i = 1; i <= out.length; i++) {
+        if (i === out.length || out[i].river !== out[start].river) {
+          strip(out[start].river ? riverBuf : streamBuf, out.slice(start, Math.min(out.length, i + 1)));
+          start = i;
+        }
+      }
     };
 
-    for (let c = 0; c < g.count; c++) {
-      if (!flows(c)) continue;
-      buf = w.river[c] ? riverBuf : streamBuf;
-      const d = w.downstream[c];
-      const iOut = g.neighbors[c].indexOf(d);
-      if (iOut < 0) continue;
-      const out = edgePoint(c, iOut);
-      const [hOut, hOutFar] = s.edgeH(c, iOut);
-      const ctr = [P[c * 3], P[c * 3 + 1], P[c * 3 + 2]];
-      const hC = s.centerH(c);
-      const toSea = w.water[d] === WATER_OCEAN;
-      let wOut = widthOf(w.flow[c]);
-      if (w.water[d] !== 0) wOut *= 1.35; // mouth
+    const nearest = (cell: number, p: number[]) => {
+      let best: { p: number[]; h: number } | null = null, bd = Infinity;
+      for (const smp of cellSamples.get(cell) ?? []) {
+        const d = (smp.p[0] - p[0]) ** 2 + (smp.p[1] - p[1]) ** 2 + (smp.p[2] - p[2]) ** 2;
+        if (d < bd) { bd = d; best = smp; }
+      }
+      return best;
+    };
 
-      // Inflows: tributaries and streams from upstream, and the outflow of a lake.
-      const starts: { p: number[]; h: number; w: number }[] = [];
-      g.neighbors[c].forEach((u, j) => {
-        if (w.downstream[u] !== c) return;
-        if (flows(u)) starts.push({ p: edgePoint(c, j), h: s.edgeH(c, j)[0], w: widthOf(w.flow[u]) });
-        else if (w.water[u] === WATER_LAKE) starts.push({ p: edgePoint(c, j), h: s.edgeH(c, j)[0], w: wOut });
-      });
-      if (!starts.length) starts.push({ p: ctr, h: hC, w: wOut * 0.4 });
-      for (const st of starts) curve(st.p, st.h, st.w, ctr, hC, out, hOut, wOut);
+    const drawPath = (cells: number[], junction: number) => {
+      const first = cells[0], last = cells[cells.length - 1], down = w.downstream[last];
+      const cps: CP[] = [];
+      const lakeIn = g.neighbors[first].findIndex((u) => w.downstream[u] === first && w.water[u] === WATER_LAKE);
+      if (lakeIn >= 0) {
+        cps.push({ p: edgePoint(first, lakeIn), h: s.edgeH(first, lakeIn)[0], w: widthOf(w.flow[first]), d: RIVER_DEPTH, river: !!w.river[first], cell: first });
+      } else {
+        cps.push({ p: center(first), h: s.centerH(first), w: widthOf(w.flow[first]) * 0.35, d: RIVER_DEPTH, river: !!w.river[first], cell: first });
+      }
+      for (let i = 0; i < cells.length; i++) {
+        const c = cells[i], next = i + 1 < cells.length ? cells[i + 1] : down;
+        const j = g.neighbors[c].indexOf(next);
+        if (j < 0) return;
+        const [h0, h1] = s.edgeH(c, j);
+        const wid = widthOf(w.flow[c]), river = !!w.river[c], e = edgePoint(c, j);
+        if (i + 1 < cells.length) {
+          cps.push({ p: e, h: h0, w: wid, d: RIVER_DEPTH, river, cell: next });
+          if (h1 < h0 - 1e-5) cps.push({ p: e, h: h1, w: wid, d: RIVER_DEPTH, river, cell: next }); // terrace waterfall
+        } else if (w.water[next] !== WATER_LAND) {
+          // Mouth: on through the shore a little way into the water, widening and taking its colour.
+          const sea = w.water[next] === WATER_OCEAN;
+          const ctr = center(c);
+          const outP = unit(e[0] + (e[0] - ctr[0]) * 0.5, e[1] + (e[1] - ctr[1]) * 0.5, e[2] + (e[2] - ctr[2]) * 0.5);
+          cps.push({ p: e, h: h0, w: wid * 1.15, d: RIVER_DEPTH * 0.75, river, cell: -1 });
+          cps.push({ p: outP, h: sea ? SEA - LIFT + 0.0002 : h0, w: wid * (sea ? 1.8 : 1.2), d: sea ? MOUTH_DEPTH : RIVER_DEPTH, river, cell: -1 });
+        } else if (junction >= 0) {
+          cps.push({ p: e, h: h0, w: wid, d: RIVER_DEPTH, river, cell: junction });
+          const join = nearest(junction, e) ?? { p: center(junction), h: s.centerH(junction) };
+          cps.push({ p: join.p, h: join.h, w: wid, d: RIVER_DEPTH, river, cell: -1 });
+        } else {
+          cps.push({ p: e, h: h0, w: wid * 0.5, d: RIVER_DEPTH, river, cell: -1 }); // runs into frozen ground
+        }
+      }
+      emit(cps);
 
-      // Delta: a big river splits into distributaries toward the other sea edges of its mouth cell.
-      if (toSea && w.river[c] && w.flow[c] > 6 * T) {
+      // Delta: a big river also spills toward the mouth cell's other sea edges.
+      if (junction < 0 && w.river[last] && w.water[down] === WATER_OCEAN && w.flow[last] > 6 * T) {
+        const wid = widthOf(w.flow[last]), ctr = center(last);
+        const from = nearest(last, ctr) ?? { p: ctr, h: s.centerH(last) };
         let extra = 0;
-        g.neighbors[c].forEach((n, j) => {
-          if (j === iOut || extra >= 2 || w.water[n] !== WATER_OCEAN) return;
+        g.neighbors[last].forEach((n, j) => {
+          if (n === down || extra >= 2 || w.water[n] !== WATER_OCEAN) return;
           extra++;
-          const e = edgePoint(c, j);
-          const mid = [(ctr[0] + e[0]) / 2, (ctr[1] + e[1]) / 2, (ctr[2] + e[2]) / 2];
-          curve(ctr, hC, wOut * 0.45, mid, hC, e, s.edgeH(c, j)[0], wOut * 0.7);
+          const e = edgePoint(last, j);
+          const outP = unit(e[0] + (e[0] - ctr[0]) * 0.5, e[1] + (e[1] - ctr[1]) * 0.5, e[2] + (e[2] - ctr[2]) * 0.5);
+          emit([
+            { p: from.p, h: from.h, w: wid * 0.4, d: RIVER_DEPTH, river: true, cell: last },
+            { p: e, h: s.edgeH(last, j)[0], w: wid * 0.7, d: RIVER_DEPTH * 0.75, river: true, cell: -1 },
+            { p: outP, h: SEA - LIFT + 0.0002, w: wid * 1.1, d: MOUTH_DEPTH, river: true, cell: -1 },
+          ]);
         });
       }
-      if (hOutFar < hOut - 1e-5) { // a waterfall down a terrace wall
-        const h0 = hOut + LIFT, h1 = Math.max(hOutFar, SEA) + LIFT;
-        const fx = P[d * 3] - ctr[0], fy = P[d * 3 + 1] - ctr[1], fz = P[d * 3 + 2] - ctr[2];
-        let sx = out[1] * fz - out[2] * fy, sy = out[2] * fx - out[0] * fz, sz = out[0] * fy - out[1] * fx;
-        const sl = Math.hypot(sx, sy, sz) || 1; sx /= sl; sy /= sl; sz /= sl;
-        strip([[out[0] * h0, out[1] * h0, out[2] * h0], [out[0] * h1, out[1] * h1, out[2] * h1]], [wOut, wOut], [sx, sy, sz]);
+    };
+
+    // Trace: mouths first (biggest first), each up its biggest branch; side branches queue up
+    // behind with the cell they join, so the channel they join is always drawn before them.
+    const ups = (c: number) => g.neighbors[c].filter((u) => w.downstream[u] === c && flows(u));
+    const queue: { start: number; junction: number }[] = [];
+    for (let c = 0; c < N; c++) if (flows(c) && !flows(w.downstream[c])) queue.push({ start: c, junction: -1 });
+    queue.sort((a, b) => w.flow[b.start] - w.flow[a.start]);
+    for (let qi = 0; qi < queue.length; qi++) {
+      const { start, junction } = queue[qi];
+      const cells = [start];
+      let cur = start;
+      for (;;) {
+        const us = ups(cur).sort((a, b) => w.flow[b] - w.flow[a]);
+        if (!us.length) break;
+        for (const o of us.slice(1)) queue.push({ start: o, junction: cur });
+        cur = us[0];
+        cells.push(cur);
       }
+      cells.reverse();                       // source first, mouth (or junction) last
+      drawPath(cells, junction);
     }
+
     const mesh = (b: Buf) => {
       if (!b.index.length) return undefined;
       const geo = new THREE.BufferGeometry();
