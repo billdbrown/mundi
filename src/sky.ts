@@ -93,10 +93,14 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
   return mat;
 }
 
-/** Patches a built-in lit material so clouds darken what is under them. Handles instancing. */
-export function applyCloudShadow(mat: THREE.Material, u: CloudUniforms) {
+/**
+ * Patches a built-in lit material so clouds darken what is under them. Handles instancing.
+ * With `sun`, it also darkens things past the terminator: small objects like trees have faces
+ * that point at a sun below their horizon, and with no shadows those would glow at night.
+ */
+export function applyCloudShadow(mat: THREE.Material, u: CloudUniforms, sun?: { uSunDir: { value: THREE.Vector3 } }) {
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, u);
+    Object.assign(sh.uniforms, u, sun ?? {});
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
@@ -106,8 +110,9 @@ export function applyCloudShadow(mat: THREE.Material, u: CloudUniforms) {
         #endif
         vCloudP = (modelMatrix * cloudP).xyz;`);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;\n' + CLOUD_GLSL)
-      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= cloudShade(vCloudP);');
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;\n' + CLOUD_GLSL + (sun ? 'uniform vec3 uSunDir;\n' : ''))
+      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= cloudShade(vCloudP);' +
+        (sun ? '\ndiffuseColor.rgb *= mix(0.12, 1.0, smoothstep(-0.12, 0.12, dot(normalize(vCloudP), uSunDir)));' : ''));
   };
   mat.needsUpdate = true;
 }
@@ -236,21 +241,28 @@ export function makeClouds(): THREE.Group {
   return g;
 }
 
-function fresnelShell(radius: number, side: THREE.Side, power: number, strength: number, color: number): THREE.Mesh {
+/** Shared by the atmosphere shells: the sun's direction in world space. */
+export interface SunUniforms { uSunDir: { value: THREE.Vector3 } }
+
+function fresnelShell(radius: number, side: THREE.Side, power: number, strength: number, color: number, sun: SunUniforms): THREE.Mesh {
   const c = new THREE.Color(color);
   const mat = new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: c }, uPower: { value: power }, uStrength: { value: strength }, uBack: { value: side === THREE.BackSide ? 1 : 0 } },
+    uniforms: {
+      ...sun, uColor: { value: c }, uPower: { value: power }, uStrength: { value: strength },
+      uBack: { value: side === THREE.BackSide ? 1 : 0 },
+    },
     vertexShader: /* glsl */`
-      varying vec3 vN; varying vec3 vV;
+      varying vec3 vN; varying vec3 vV; varying vec3 vWN;
       void main() {
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         vN = normalize(normalMatrix * normal);
+        vWN = normalize(mat3(modelMatrix) * normal);
         vV = normalize(-mv.xyz);
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: /* glsl */`
-      uniform vec3 uColor; uniform float uPower, uStrength, uBack;
-      varying vec3 vN; varying vec3 vV;
+      uniform vec3 uColor, uSunDir; uniform float uPower, uStrength, uBack;
+      varying vec3 vN; varying vec3 vV; varying vec3 vWN;
       void main() {
         float d = dot(vN, vV);
         float f = uBack > 0.5
@@ -258,7 +270,12 @@ function fresnelShell(radius: number, side: THREE.Side, power: number, strength:
           ? pow(smoothstep(0.0, 0.32, -d), uPower)
           // Near side: a haze that thickens toward the planet's edge but fades out at the shell's.
           : pow(1.0 - d, uPower) * smoothstep(0.0, 0.25, d);
-        gl_FragColor = vec4(uColor * f * uStrength, 1.0);
+        // Lit by the sun: bright on the day side, faint at night, orange along the terminator.
+        float s = dot(normalize(vWN), uSunDir);
+        float day = 0.08 + 0.92 * smoothstep(-0.3, 0.35, s);
+        float dusk = 1.0 - smoothstep(0.0, 0.32, abs(s + 0.04));
+        vec3 col = mix(uColor, vec3(1.0, 0.5, 0.25), dusk * 0.75);
+        gl_FragColor = vec4(col * f * uStrength * day, 1.0);
       }`,
     side, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
   });
@@ -266,10 +283,10 @@ function fresnelShell(radius: number, side: THREE.Side, power: number, strength:
 }
 
 /** Outer glow at the limb plus a faint blue haze over the planet's edge. */
-export function makeAtmosphere(): THREE.Group {
+export function makeAtmosphere(sun: SunUniforms): THREE.Group {
   const g = new THREE.Group();
-  g.add(fresnelShell(1.05, THREE.BackSide, 1.8, 0.7, 0x6aaeff));
-  const haze = fresnelShell(1.045, THREE.FrontSide, 3.0, 0.45, 0x8fc4ff);
+  g.add(fresnelShell(1.05, THREE.BackSide, 1.8, 0.7, 0x6aaeff, sun));
+  const haze = fresnelShell(1.045, THREE.FrontSide, 3.0, 0.45, 0x8fc4ff, sun);
   haze.renderOrder = 6;
   g.add(haze);
   return g;

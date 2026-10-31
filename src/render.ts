@@ -20,9 +20,14 @@ export interface ViewOptions {
   clouds: boolean;
   blend: boolean;
   relief: number;
+  /** follow: the sun rides with the camera, always lit. cycle: a fixed sun, day and night. */
+  light: 'follow' | 'cycle';
 }
 
-export const DEFAULT_VIEW: ViewOptions = { mode: 'biome', style: 'smooth', grid: true, rivers: true, trees: true, clouds: true, blend: true, relief: 1 };
+export const DEFAULT_VIEW: ViewOptions = { mode: 'biome', style: 'smooth', grid: true, rivers: true, trees: true, clouds: true, blend: true, relief: 1, light: 'follow' };
+
+/** Seconds for one full day in cycle lighting. */
+const DAY_SECONDS = 120;
 
 /** Options that change the meshes, so need a trip to the worker; the rest only toggle visibility. */
 export const REBUILD_KEYS: (keyof ViewOptions)[] = ['mode', 'style', 'blend', 'relief', 'trees'];
@@ -51,6 +56,9 @@ export class PlanetView {
   private raycaster = new THREE.Raycaster();
   private clock = new THREE.Clock();
   private sunDir = new THREE.Vector3();
+  private sunU = { uSunDir: { value: new THREE.Vector3(0, 0, 1) } };
+  private ambient: THREE.AmbientLight;
+  private time = 0;
   /** When set, animation stops at this time, so renders are repeatable (visual tests). */
   private frozen: number | null = null;
 
@@ -79,7 +87,8 @@ export class PlanetView {
     this.sun.position.set(-3, 1.6, 2.2);
     this.camera.add(this.sun);
     // Ambient, not hemisphere: a hemisphere light's "up" is world +Y, which means nothing on a sphere.
-    this.scene.add(new THREE.AmbientLight(0xc8d8f0, 0.75));
+    this.ambient = new THREE.AmbientLight(0xc8d8f0, 0.75);
+    this.scene.add(this.ambient);
 
     this.hover = new THREE.LineLoop(
       new THREE.BufferGeometry(),
@@ -89,10 +98,10 @@ export class PlanetView {
     this.hover.visible = false;
     this.planet.add(this.hover);
     this.planet.add(this.clouds);
-    applyCloudShadow(treeMaterial, this.cloudU);
+    applyCloudShadow(treeMaterial, this.cloudU, this.sunU);
 
     this.scene.add(this.planet);
-    this.scene.add(makeAtmosphere());
+    this.scene.add(makeAtmosphere(this.sunU));
     this.scene.add(makeStars());
 
     new ResizeObserver(() => this.resize()).observe(container);
@@ -124,8 +133,25 @@ export class PlanetView {
 
   /** Visibility-only options apply at once; mesh options take effect with the next setData. */
   setOptions(o: Partial<ViewOptions>) {
+    const light = o.light !== undefined && o.light !== this.opts.light;
     this.opts = { ...this.opts, ...o };
+    if (light) this.applyLighting();
     this.applyVisibility();
+  }
+
+  /** Follow: the sun is parented to the camera. Cycle: it lives in the scene and orbits the planet. */
+  private applyLighting() {
+    this.sun.removeFromParent();
+    if (this.opts.light === 'cycle') {
+      this.scene.add(this.sun);
+      this.ambient.intensity = 0.16;     // night is dark, with a little moonlight
+      this.ambient.color.set(0x8ea6d8);
+    } else {
+      this.sun.position.set(-3, 1.6, 2.2);
+      this.camera.add(this.sun);
+      this.ambient.intensity = 0.75;
+      this.ambient.color.set(0xc8d8f0);
+    }
   }
 
   private applyVisibility() {
@@ -170,18 +196,25 @@ export class PlanetView {
 
   private frame() {
     const dt = this.frozen === null ? this.clock.getDelta() : 0;
+    this.time = this.frozen ?? this.time + dt;
+    if (this.opts.light === 'cycle') {
+      // Sun circles the equator with a slight tilt; phase puts it ahead-left of the start view.
+      const a = (this.time / DAY_SECONDS) * Math.PI * 2 - 0.6;
+      this.sun.position.set(Math.sin(a) * 5, 1.4, Math.cos(a) * 5);
+    }
     const d = this.camera.position.length();
     // Slow the orbit as you close in, so ground-level views stay controllable.
     this.controls.rotateSpeed = Math.min(1, (d - 1) * 0.55);
     this.controls.update();
 
     this.sun.getWorldPosition(this.sunDir).normalize();
+    this.sunU.uSunDir.value.copy(this.sunDir);
     this.waterMat.uniforms.uTime.value += dt;
     this.waterMat.uniforms.uSunDir.value.copy(this.sunDir);
 
     if (this.gridLines) {
       const top = this.opts.style === 'smooth' ? 0.13 : 0.3;
-      (this.gridLines.material as THREE.LineBasicMaterial).opacity = THREE.MathUtils.clamp(0.04 + (d - 1.1) * 0.08, 0.04, top);
+      (this.gridLines.material as THREE.ShaderMaterial).uniforms.uOpacity.value = THREE.MathUtils.clamp(0.04 + (d - 1.1) * 0.08, 0.04, top);
     }
     // Clouds thin out as you descend; their shadows stay, a little softer, so the ground keeps
     // its dappled light.
@@ -250,7 +283,7 @@ export class PlanetView {
     }
     const gg = new THREE.BufferGeometry();
     gg.setAttribute('position', new THREE.Float32BufferAttribute(gl, 3));
-    this.gridLines = new THREE.LineSegments(gg, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.2, depthWrite: false }));
+    this.gridLines = new THREE.LineSegments(gg, makeGridMaterial(this.sunU));
     this.gridLines.renderOrder = 2;
     this.planet.add(this.gridLines);
 
@@ -366,6 +399,28 @@ export class PlanetView {
     this.rivers.renderOrder = 3;
     this.planet.add(this.rivers);
   }
+}
+
+/** Grid lines that dim on the night side instead of glowing white in the dark. */
+function makeGridMaterial(sun: { uSunDir: { value: THREE.Vector3 } }): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false,
+    uniforms: { ...sun, uOpacity: { value: 0.2 } },
+    vertexShader: /* glsl */`
+      varying vec3 vW;
+      void main() {
+        vec4 w = modelMatrix * vec4(position, 1.0);
+        vW = w.xyz;
+        gl_Position = projectionMatrix * viewMatrix * w;
+      }`,
+    fragmentShader: /* glsl */`
+      uniform vec3 uSunDir; uniform float uOpacity;
+      varying vec3 vW;
+      void main() {
+        float day = 0.12 + 0.88 * smoothstep(-0.15, 0.25, dot(normalize(vW), uSunDir));
+        gl_FragColor = vec4(vec3(1.0), uOpacity * day);
+      }`,
+  });
 }
 
 function toGeometry(m: MeshData): THREE.BufferGeometry {
