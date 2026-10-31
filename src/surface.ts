@@ -36,6 +36,8 @@ export interface SurfaceInput {
   relief: number;
   blend: boolean;
   flora: boolean;
+  /** Biome view: shade snow, rock and sand per vertex from height, slope and latitude. */
+  natural: boolean;
   tint: Noise3;
   rough: Noise3;
 }
@@ -100,6 +102,44 @@ function inRiver(w: World, c: number, i: number, a: number): boolean {
   return w.river[c] > 0 && a > 0.55;
 }
 
+/** Temperature at a point, the same formula the generator uses per cell (minus its noise). */
+function vertexTemp(y: number, e: number, heat: number): number {
+  const lat = Math.abs(Math.asin(Math.max(-1, Math.min(1, y)))) / (Math.PI / 2);
+  return 1 - 1.1 * Math.pow(lat, 1.25) - 0.55 * Math.max(0, e) + heat;
+}
+
+const SNOW = new THREE.Color(0xf2f5f8), ROCK = new THREE.Color(0x776b5f), SAND = new THREE.Color(0xd9c89b);
+
+/**
+ * Per-vertex detail the cell biomes are too coarse for: snow where it is cold enough at that
+ * height (so snow lines follow the terrain, not cell edges), bare rock on steep slopes, and
+ * sand in a thin strip at the waterline.
+ */
+function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number) {
+  const pos = geo.getAttribute('position'), nor = geo.getAttribute('normal'), col = geo.getAttribute('color');
+  const mix = (i: number, c: THREE.Color, t: number) => {
+    if (t <= 0) return;
+    col.setXYZ(i, col.getX(i) + (c.r - col.getX(i)) * t, col.getY(i) + (c.g - col.getY(i)) * t, col.getZ(i) + (c.b - col.getZ(i)) * t);
+  };
+  const sm = (a: number, b: number, x: number) => {
+    const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  };
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const l = Math.hypot(x, y, z), above = l - SEA;
+    if (above <= 0) continue;
+    const e = above / relief;
+    const up = (nor.getX(i) * x + nor.getY(i) * y + nor.getZ(i) * z) / l;
+    const slope = 1 - up;                         // 0 flat, ~0.3 steep
+    mix(i, SAND, sm(0.0017, 0.0007, above) * sm(0.25, 0.4, vertexTemp(y / l, e, heat)));
+    mix(i, ROCK, sm(0.025, 0.09, slope) * 0.75);
+    // Snow settles on gentler slopes first.
+    mix(i, SNOW, sm(0.24, 0.12, vertexTemp(y / l, e, heat)) * (1 - 0.6 * sm(0.06, 0.16, slope)));
+  }
+  col.needsUpdate = true;
+}
+
 function treeBudget(world: World): number {
   let land = 0;
   for (let c = 0; c < world.grid.count; c++) if (world.water[c] === WATER_LAND) land++;
@@ -121,6 +161,8 @@ export function buildSmooth(inp: SurfaceInput): Surface {
     if (w.water[c] === WATER_OCEAN) {
       cellH[c] = w.biome[c] === B.SEA_ICE ? SEA + 0.0016 : seaFloor(w.elevation[c]);
       level[c] = SEA;
+    } else if (w.water[c] === WATER_LAKE && w.biome[c] === B.ICE) {
+      cellH[c] = landH(w.surface[c]);      // frozen lake: a flat ice sheet, no open water
     } else if (w.water[c] === WATER_LAKE) {
       cellH[c] = landH(w.elevation[c]) - 0.003;
     } else {
@@ -143,7 +185,7 @@ export function buildSmooth(inp: SurfaceInput): Surface {
   // A lake's surface sits between its floor and its lowest rim corner, so the shore falls
   // inside the cell instead of tracing the hexagon.
   for (let c = 0; c < N; c++) {
-    if (w.water[c] !== WATER_LAKE) continue;
+    if (w.water[c] !== WATER_LAKE || w.biome[c] === B.ICE) continue;
     let lo = Infinity;
     for (const k of g.corners[c]) lo = Math.min(lo, rimH(k));
     level[c] = cellH[c] + 0.7 * Math.max(0.0005, lo - cellH[c]);
@@ -263,6 +305,14 @@ export function buildSmooth(inp: SurfaceInput): Surface {
   terrain.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   terrain.setIndex(index);
   terrain.computeVertexNormals();
+  if (inp.natural) {
+    naturalShading(terrain, relief, w.params.heat);
+    // No trees on snow.
+    for (let i = trees.length - 1; i >= 0; i--) {
+      const t = trees[i], l = Math.hypot(t.x, t.y, t.z);
+      if (vertexTemp(t.y / l, (l - SEA) / relief, w.params.heat) < 0.2) trees.splice(i, 1);
+    }
+  }
 
   let water: THREE.BufferGeometry | null = null;
   if (windex.length) {

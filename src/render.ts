@@ -214,7 +214,7 @@ export class PlanetView {
     }
     const seed = w.params.seed;
     const input = {
-      world: w, cellColor, relief: o.relief, blend: o.blend, flora: o.trees,
+      world: w, cellColor, relief: o.relief, blend: o.blend, flora: o.trees, natural: o.mode === 'biome',
       tint: makeSimplex(seed * 5 + 11), rough: makeSimplex(seed * 5 + 12),
     };
     const s = o.style === 'smooth' ? buildSmooth(input) : buildTiles(input);

@@ -263,13 +263,46 @@ export function generateWorld(params: WorldParams): World {
     for (const nb of nbrs[c]) if (coastDist[nb] < 0) { coastDist[nb] = coastDist[c] + 1; queue.push(nb); }
   }
   const reach = Math.max(2, detail / 4.5);
+
+  // Prevailing winds in Earth's three bands: trade winds blow toward the west below 30°,
+  // westerlies toward the east from 30° to 60°, polar easterlies beyond. For each cell, the
+  // neighbour most nearly upwind.
+  const upwind = new Int32Array(N);
+  for (let c = 0; c < N; c++) {
+    const x = P[c * 3], z = P[c * 3 + 2];
+    const deg = Math.abs(lat[c]) * 180 / Math.PI;
+    const toward = deg < 30 || deg > 60 ? -1 : 1;      // +1 = blowing east
+    const ux = -toward * z, uz = toward * x;           // upwind = −(wind); east is (z, 0, −x)
+    let best = nbrs[c][0], bd = -Infinity;
+    for (const nb of nbrs[c]) {
+      const d = (P[nb * 3] - x) * ux + (P[nb * 3 + 2] - z) * uz;
+      if (d > bd) { bd = d; best = nb; }
+    }
+    upwind[c] = best;
+  }
+  // Walk upwind: how soon do we reach the sea, and what is the highest ground in between?
+  // Air that has crossed mountains has rained out (rain shadow); air rising up a slope rains
+  // more (windward side).
+  const walk = Math.max(3, Math.round(detail / 3));
   const moisture = new Float32Array(N);
   for (let c = 0; c < N; c++) {
     const x = P[c * 3], y = P[c * 3 + 1], z = P[c * 3 + 2];
     const coast = Math.exp(-Math.max(0, coastDist[c]) / reach);
     const band = 0.5 + 0.5 * Math.cos(6 * lat[c]); // wet equator, dry 30°, wet 60°, dry poles
     const n = 0.5 + 0.5 * fbm(noiseB, x + 5, y, z, 3, 2);
-    const m = 0.45 * coast + 0.3 * band + 0.3 * n - 0.05 + params.wetness;
+    let fromSea = 0, shadow = 0, windward = 0;
+    if (water[c] !== WATER_OCEAN) {
+      let cur = c, maxE = 0;
+      for (let k = 1; k <= walk; k++) {
+        cur = upwind[cur];
+        if (water[cur] === WATER_OCEAN) { fromSea = Math.exp(-(k - 1) / (walk * 0.45)); break; }
+        maxE = Math.max(maxE, elev[cur]);
+      }
+      shadow = Math.max(0, Math.min(1, (maxE - Math.max(0, elev[c])) * 1.6));
+      windward = Math.max(0, Math.min(0.25, (elev[c] - Math.max(0, elev[upwind[c]])) * 4));
+    }
+    const m = 0.3 * coast + 0.35 * fromSea * (1 - shadow) + 0.25 * band + 0.25 * n
+      - 0.08 - 0.25 * shadow + windward + params.wetness;
     moisture[c] = Math.max(0, Math.min(1, m));
   }
 
