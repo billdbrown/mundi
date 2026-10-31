@@ -71,21 +71,34 @@ function subTri(a: number, b: number, c: number, iA: number, iB: number, iC: num
   return [[iAB, iBC, iCA], [a + b - c, b + c - a, a + c - b]];
 }
 
+/**
+ * Groves and clearings: a slow noise scales tree density from near zero to almost double, so
+ * forests come in stands with gaps instead of an even scatter.
+ */
+function clumpAt(noise: Noise3, x: number, y: number, z: number, spacing: number): number {
+  const f = 0.45 / spacing;
+  const n = 0.5 + 0.5 * noise(x * f + 17.3, y * f, z * f);
+  return Math.max(0, Math.min(1.9, 1.9 * n * n + 0.05));
+}
+
 function placeTrees(
   world: World, c: number, m: number, rng: () => number, mul: number, spacing: number,
   sample: (a: number, b: number, cc: number) => [number, number, number] | null, out: TreeSpot[],
+  clump = 1,
 ) {
   const spec = FLORA[world.biome[c]];
   if (!spec) return;
-  for (const [kind, color, density] of spec) {
-    const expected = (density * mul) / m;
+  for (const [kind, color, density, size = 1] of spec) {
+    const expected = (density * mul * clump) / m;
     let n = Math.floor(expected) + (rng() < expected % 1 ? 1 : 0);
     while (n-- > 0) {
       let b = rng(), cc = rng();
       if (b + cc > 1) { b = 1 - b; cc = 1 - cc; }
       const p = sample(1 - b - cc, b, cc);
       if (!p) continue;
-      out.push({ x: p[0], y: p[1], z: p[2], kind, color, s: spacing * (0.2 + 0.14 * rng()), spin: rng() * Math.PI * 2, shade: 0.82 + 0.3 * rng() });
+      // Sizes skew small: lots of young trees, a few big ones.
+      const r = rng();
+      out.push({ x: p[0], y: p[1], z: p[2], kind, color, s: spacing * size * (0.16 + 0.22 * r * r), spin: rng() * Math.PI * 2, shade: 0.8 + 0.32 * rng() });
     }
   }
 }
@@ -297,7 +310,7 @@ export function buildSmooth(inp: SurfaceInput): Surface {
           let x = 0, y = 0, z = 0;
           for (let j = 0; j < 3; j++) { x += pos[vs[j] * 3] * ws[j]; y += pos[vs[j] * 3 + 1] * ws[j]; z += pos[vs[j] * 3 + 2] * ws[j]; }
           return Math.hypot(x, y, z) < SEA + 0.0008 ? null : [x, y, z];
-        }, trees);
+        }, trees, clumpAt(tint, C[k0 * 3], C[k0 * 3 + 1], C[k0 * 3 + 2], spacing));
       }
     }
   }

@@ -3,8 +3,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { B } from './biomes.ts';
 
-export const CONIFER = 0, BROADLEAF = 1, SCRUB = 2;
-export type TreeKind = typeof CONIFER | typeof BROADLEAF | typeof SCRUB;
+export const CONIFER = 0, BROADLEAF = 1, SCRUB = 2, PALM = 3;
+export type TreeKind = typeof CONIFER | typeof BROADLEAF | typeof SCRUB | typeof PALM;
 
 export interface TreeSpot {
   x: number; y: number; z: number;
@@ -17,12 +17,13 @@ export interface TreeSpot {
   shade: number;
 }
 
-/** Per biome: [kind, colour, expected trees per cell]. */
-export const FLORA: Partial<Record<number, [TreeKind, number, number][]>> = {
-  [B.TAIGA]: [[CONIFER, 0x2d4a30, 7]],
-  [B.FOREST]: [[BROADLEAF, 0x3d6b2c, 6], [CONIFER, 0x33553a, 1.5]],
-  [B.TEMPERATE_RAIN]: [[CONIFER, 0x2a4c34, 6], [BROADLEAF, 0x335f2e, 3]],
-  [B.RAINFOREST]: [[BROADLEAF, 0x2a5c24, 10]],
+/** Per biome: [kind, colour, expected trees per cell, size multiplier]. */
+export const FLORA: Partial<Record<number, [TreeKind, number, number, number?][]>> = {
+  [B.TAIGA]: [[CONIFER, 0x2d4a30, 8, 1.1]],
+  [B.FOREST]: [[BROADLEAF, 0x3d6b2c, 6], [BROADLEAF, 0x5a7a2c, 1.2], [CONIFER, 0x33553a, 1.5]],
+  [B.TEMPERATE_RAIN]: [[CONIFER, 0x2a4c34, 6, 1.25], [BROADLEAF, 0x335f2e, 3]],
+  [B.RAINFOREST]: [[BROADLEAF, 0x2a5c24, 9, 1.2], [BROADLEAF, 0x3b6e22, 2, 1.4], [PALM, 0x3d7a2a, 1.5]],
+  [B.BEACH]: [[PALM, 0x4a8a30, 0.5]],
   [B.DRY_FOREST]: [[BROADLEAF, 0x687a35, 4], [SCRUB, 0x7b8440, 1]],
   [B.SAVANNA]: [[SCRUB, 0x7c873d, 1.3]],
   [B.GRASSLAND]: [[BROADLEAF, 0x4b7834, 0.4]],
@@ -49,7 +50,12 @@ function treeGeometries(): THREE.BufferGeometry[] {
     new THREE.IcosahedronGeometry(0.36, 0).scale(1.35, 0.55, 1.35).translate(0, 0.42, 0),
     trunk(),
   ]);
-  return [conifer, broadleaf, scrub];
+  // Palm: a tall thin trunk with a flat, drooping crown.
+  const palm = mergeGeometries([
+    new THREE.CylinderGeometry(0.035, 0.06, 1.0, 4).translate(0, 0.5, 0).toNonIndexed(),
+    new THREE.ConeGeometry(0.42, 0.22, 7).rotateX(Math.PI).translate(0, 1.0, 0).toNonIndexed(),
+  ]);
+  return [conifer, broadleaf, scrub, palm];
 }
 
 let shared: THREE.BufferGeometry[] | null = null;
@@ -57,7 +63,7 @@ export const treeMaterial = new THREE.MeshStandardMaterial({ flatShading: true, 
 
 export function buildForest(spots: TreeSpot[]): THREE.InstancedMesh[] {
   shared ??= treeGeometries();
-  const byKind: TreeSpot[][] = [[], [], []];
+  const byKind: TreeSpot[][] = [[], [], [], []];
   for (const s of spots) byKind[s.kind].push(s);
   const up = new THREE.Vector3(0, 1, 0), n = new THREE.Vector3(), q = new THREE.Quaternion(),
     spin = new THREE.Quaternion(), m = new THREE.Matrix4(), p = new THREE.Vector3(), sc = new THREE.Vector3(),
