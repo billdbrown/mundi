@@ -336,9 +336,37 @@ function buildSmooth(inp: SurfaceInput): Surface {
 
   const pos: number[] = [], col: number[] = [], wpos: number[] = [], depth: number[] = [];
   const rgb: number[] = [];
+  /**
+   * Colour at a point from the nearby cell centres, weighted by distance from a noise-warped
+   * position. Interpolating centre-to-corner made every biome boundary trace hexagon edges;
+   * this gives boundaries that wander like real ones. Only cells on the same side of the
+   * waterline as the owner count, so coasts stay crisp.
+   */
+  let owner = 0;
+  const wf = 1.1 / spacing, sigma2 = (0.42 * spacing) ** 2, warpAmp = 0.38 * spacing;
+  const wetOf = (c: number) => (w.water[c] !== WATER_LAND || w.biome[c] === B.SEA_ICE ? 1 : 0);
+  const colourAt = (dx: number, dy: number, dz: number, out: number[]) => {
+    const qx = dx + warpAmp * (tint(dx * wf + 11.3, dy * wf, dz * wf) + 0.5 * tint(dx * wf * 2.3, dy * wf * 2.3 + 5.1, dz * wf * 2.3));
+    const qy = dy + warpAmp * (tint(dx * wf, dy * wf + 23.7, dz * wf) + 0.5 * tint(dx * wf * 2.3 + 3.3, dy * wf * 2.3, dz * wf * 2.3));
+    const qz = dz + warpAmp * (tint(dx * wf, dy * wf, dz * wf + 37.1) + 0.5 * tint(dx * wf * 2.3, dy * wf * 2.3, dz * wf * 2.3 + 8.9));
+    const side = wetOf(owner);
+    let sr = 0, sg = 0, sb = 0, sw = 0;
+    const consider = (c: number) => {
+      if (wetOf(c) !== side) return;
+      const ex = P[c * 3] - qx, ey = P[c * 3 + 1] - qy, ez = P[c * 3 + 2] - qz;
+      const wt = Math.exp(-(ex * ex + ey * ey + ez * ez) / sigma2);
+      sr += cellColor[c * 3] * wt; sg += cellColor[c * 3 + 1] * wt; sb += cellColor[c * 3 + 2] * wt; sw += wt;
+    };
+    consider(owner);
+    for (const n of g.neighbors[owner]) consider(n);
+    if (sw < 1e-9) { out[0] = cellColor[owner * 3]; out[1] = cellColor[owner * 3 + 1]; out[2] = cellColor[owner * 3 + 2]; return; }
+    out[0] = sr / sw; out[1] = sg / sw; out[2] = sb / sw;
+  };
+  const blendRGB = [0, 0, 0];
   const add = (dx: number, dy: number, dz: number, h: number, r: number, gg: number, b: number, lvl: number, lake = false) => {
     const i = pos.length / 3;
     pos.push(dx * h, dy * h, dz * h);
+    if (inp.blend) { colourAt(dx, dy, dz, blendRGB); r = blendRGB[0]; gg = blendRGB[1]; b = blendRGB[2]; }
     rgb.length = 0;
     tinted(tint, dx, dy, dz, r, gg, b, rgb);
     col.push(rgb[0], rgb[1], rgb[2]);
@@ -409,6 +437,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
   const mul = treeBudget(w);
 
   for (let c = 0; c < N; c++) {
+    owner = c;
     const ks = g.corners[c], m = ks.length;
     const r = cellColor[c * 3], gg = cellColor[c * 3 + 1], b = cellColor[c * 3 + 2];
     const lvl = vLevel[c] > 0 ? vLevel[c] : SEA;
