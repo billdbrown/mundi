@@ -10,8 +10,14 @@ const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 await page.goto(url);
-await page.waitForTimeout(1500);
+await page.waitForFunction(() => document.querySelector('#stats')?.textContent);
+await page.waitForTimeout(800);
 await page.screenshot({ path: `${out}/orbit.png` });
+// Drag to spin the globe round and shoot the far side.
+await page.mouse.move(900, 400); await page.mouse.down();
+await page.mouse.move(250, 400, { steps: 20 }); await page.mouse.up();
+await page.waitForTimeout(1500);
+await page.screenshot({ path: `${out}/orbit-back.png` });
 console.log('stats:', await page.textContent('#stats'));
 // Zoom in close to the surface.
 await page.mouse.move(640, 400);

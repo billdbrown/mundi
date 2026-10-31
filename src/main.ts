@@ -29,6 +29,8 @@ const sliders: [keyof WorldParams | 'relief', (v: number) => string][] = [
   ['detail', (v) => (10 * v * v + 2).toLocaleString()],
   ['ocean', (v) => `${Math.round(v * 100)}%`],
   ['plates', (v) => String(v)],
+  ['continents', (v) => String(v)],
+  ['roughness', (v) => v.toFixed(2)],
   ['heat', (v) => (v > 0 ? '+' : '') + v.toFixed(2)],
   ['wetness', (v) => (v > 0 ? '+' : '') + v.toFixed(2)],
   ['rivers', (v) => `×${v.toFixed(2)}`],

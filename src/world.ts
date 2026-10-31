@@ -10,6 +10,10 @@ export interface WorldParams {
   /** Fraction of cells below sea level, 0..1. */
   ocean: number;
   plates: number;
+  /** How many separate clusters the continental plates are grouped into. */
+  continents: number;
+  /** Coastline noise strength, 0..1. Low = solid landmasses, high = archipelagos. */
+  roughness: number;
   /** Climate offsets, about −0.3..0.3. */
   heat: number;
   wetness: number;
@@ -18,7 +22,7 @@ export interface WorldParams {
 }
 
 export const DEFAULT_PARAMS: WorldParams = {
-  seed: 1, detail: 40, ocean: 0.62, plates: 14, heat: 0, wetness: 0, rivers: 1,
+  seed: 1, detail: 40, ocean: 0.68, plates: 12, continents: 3, roughness: 0.45, heat: 0, wetness: 0, rivers: 1,
 };
 
 export const WATER_LAND = 0, WATER_OCEAN = 1, WATER_LAKE = 2;
@@ -78,17 +82,32 @@ export function generateWorld(params: WorldParams): World {
   const plateSize = new Int32Array(plateCount);
   for (let c = 0; c < N; c++) plateSize[plate[c]]++;
 
-  // Continental plates until they cover roughly the requested land share.
-  const order = Array.from({ length: plateCount }, (_, i) => i);
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [order[i], order[j]] = [order[j], order[i]];
-  }
+  // Continental plates, grouped: a few seed plates, then grow each cluster into neighbouring
+  // plates until land covers roughly the requested share. Picking plates independently
+  // scatters land everywhere; clustering is what makes continents.
+  const plateAdj: Set<number>[] = Array.from({ length: plateCount }, () => new Set());
+  for (let c = 0; c < N; c++) for (const nb of nbrs[c]) if (plate[nb] !== plate[c]) plateAdj[plate[c]].add(plate[nb]);
   const continental = new Uint8Array(plateCount);
-  const baseHeight = new Float32Array(plateCount);
+  const target = (1 - params.ocean) * N * 1.05;
   let covered = 0;
-  for (const p of order) {
-    if (covered < (1 - params.ocean) * N * 1.05) { continental[p] = 1; covered += plateSize[p]; }
+  const clusters = Math.max(1, Math.min(Math.round(params.continents), plateCount));
+  for (let k = 0; k < clusters && covered < target; k++) {
+    let p: number;
+    do p = Math.floor(rng() * plateCount); while (continental[p]);
+    continental[p] = 1; covered += plateSize[p];
+  }
+  while (covered < target) {
+    const candidates: number[] = [];
+    for (let p = 0; p < plateCount; p++) {
+      if (continental[p]) continue;
+      for (const q of plateAdj[p]) if (continental[q]) { candidates.push(p); break; }
+    }
+    if (!candidates.length) break;
+    const p = candidates[Math.floor(rng() * candidates.length)];
+    continental[p] = 1; covered += plateSize[p];
+  }
+  const baseHeight = new Float32Array(plateCount);
+  for (let p = 0; p < plateCount; p++) {
     baseHeight[p] = continental[p] ? 0.22 + rng() * 0.12 : -0.48 + rng() * 0.12;
   }
 
@@ -110,7 +129,7 @@ export function generateWorld(params: WorldParams): World {
   // --- Base elevation, smoothed so continents get shelves instead of cliffs ---
   let elev = new Float32Array(N);
   for (let c = 0; c < N; c++) elev[c] = baseHeight[plate[c]];
-  const smoothPasses = Math.max(1, Math.round(detail / 10));
+  const smoothPasses = Math.max(1, Math.round(detail / 7));
   for (let s = 0; s < smoothPasses; s++) {
     const next = new Float32Array(N);
     for (let c = 0; c < N; c++) {
@@ -142,7 +161,7 @@ export function generateWorld(params: WorldParams): World {
         if (ca && cb) e = 0.85 * conv;        // continent hits continent: Himalaya
         else if (ca) e = 0.6 * conv;          // ocean dives under continent: Andes
         else if (cb) e = -0.25 * conv;        // the diving side: trench
-        else e = 0.3 * conv;                  // ocean on ocean: island arc
+        else e = 0.14 * conv;                 // ocean on ocean: island arc, mostly shoals
       } else {
         e = ca ? 0.18 * conv : -0.12 * conv;  // rift on land, ridge at sea
       }
@@ -173,7 +192,7 @@ export function generateWorld(params: WorldParams): World {
   // --- Noise for coastlines and texture; ridged noise roughens the high ground ---
   for (let c = 0; c < N; c++) {
     const x = P[c * 3], y = P[c * 3 + 1], z = P[c * 3 + 2];
-    elev[c] += 0.32 * fbm(noiseA, x, y, z, 5, 1.6);
+    elev[c] += 0.4 * params.roughness * fbm(noiseA, x, y, z, 5, 1.3);
     const ridge = 1 - Math.abs(fbm(noiseB, x, y, z, 4, 3));
     elev[c] += 0.12 * ridge * ridge * Math.max(0, elev[c]);
   }
@@ -190,6 +209,35 @@ export function generateWorld(params: WorldParams): World {
 
   const water = new Uint8Array(N);
   for (let c = 0; c < N; c++) water[c] = elev[c] < 0 ? WATER_OCEAN : WATER_LAND;
+
+  // --- Cleanup: sink specks of land, and fill small seas cut off from the main ocean ---
+  const comp = new Int32Array(N).fill(-1);
+  const comps: number[][] = [];
+  for (let c = 0; c < N; c++) {
+    if (comp[c] >= 0) continue;
+    const id = comps.length, members = [c], kind = water[c];
+    comp[c] = id;
+    for (let qi = 0; qi < members.length; qi++) {
+      for (const nb of nbrs[members[qi]]) {
+        if (comp[nb] < 0 && water[nb] === kind) { comp[nb] = id; members.push(nb); }
+      }
+    }
+    comps.push(members);
+  }
+  let mainOcean = -1;
+  for (let i = 0; i < comps.length; i++) {
+    if (water[comps[i][0]] === WATER_OCEAN && (mainOcean < 0 || comps[i].length > comps[mainOcean].length)) mainOcean = i;
+  }
+  const minIsland = Math.max(2, N * 0.0005);
+  const maxInlandSea = N * 0.004;
+  for (let i = 0; i < comps.length; i++) {
+    const m = comps[i];
+    if (water[m[0]] === WATER_LAND && m.length < minIsland) {
+      for (const c of m) { elev[c] = -0.03; water[c] = WATER_OCEAN; }
+    } else if (water[m[0]] === WATER_OCEAN && i !== mainOcean && m.length < maxInlandSea) {
+      for (const c of m) { elev[c] = 0.01; water[c] = WATER_LAND; }
+    }
+  }
 
   // --- Temperature: latitude, altitude, a little noise ---
   const lat = new Float32Array(N);
@@ -243,7 +291,7 @@ export function generateWorld(params: WorldParams): World {
   }
   const surface = Float32Array.from(elev);
   for (let c = 0; c < N; c++) {
-    if (water[c] === WATER_LAND && filled[c] - elev[c] > 0.06) {
+    if (water[c] === WATER_LAND && filled[c] - elev[c] > 0.09) {
       water[c] = WATER_LAKE;
       surface[c] = filled[c];
     }

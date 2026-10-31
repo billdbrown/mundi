@@ -16,7 +16,8 @@ test('ocean fraction lands near the request', () => {
     let n = 0;
     for (const x of w.water) if (x === WATER_OCEAN) n++;
     const share = n / w.grid.count;
-    assert.ok(Math.abs(share - ocean) < 0.03, `asked ${ocean}, got ${share.toFixed(3)}`);
+    // Sea level is exact; the speck/inland-sea cleanup afterwards moves it a little.
+    assert.ok(Math.abs(share - ocean) < 0.05, `asked ${ocean}, got ${share.toFixed(3)}`);
   }
 });
 
