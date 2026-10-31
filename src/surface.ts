@@ -16,6 +16,8 @@ import { cellColors, type ViewMode, type TerrainStyle } from './colors.ts';
 import type { Grid } from './grid.ts';
 
 export const SEA = 1.0;
+/** Height of the highest land above sea level at relief ×1, in planet radii. */
+export const RELIEF = 0.035;
 
 interface Surface {
   terrain: THREE.BufferGeometry;
@@ -69,7 +71,8 @@ function meshData(geo: THREE.BufferGeometry): MeshData {
 export function buildSurfaceData(world: World, o: BuildOptions): SurfaceData {
   const seed = world.params.seed;
   const input: SurfaceInput = {
-    world, cellColor: cellColors(world, o.mode), relief: o.relief, blend: o.blend, flora: o.trees,
+    // Plants are placed near the camera by LodFlora; the worker only builds the ground.
+    world, cellColor: cellColors(world, o.mode), relief: o.relief, blend: o.blend, flora: false,
     natural: o.mode === 'biome', tint: makeSimplex(seed * 5 + 11), rough: makeSimplex(seed * 5 + 12),
   };
   const s = o.style === 'smooth' ? buildSmooth(input) : buildTiles(input);
@@ -252,7 +255,9 @@ function treeBudget(world: World): number {
 function buildSmooth(inp: SurfaceInput): Surface {
   const { world: w, cellColor, tint, rough } = inp;
   const g = w.grid, N = g.count, P = g.centers, C = g.cornerPos, K = C.length / 3;
-  const relief = 0.05 * inp.relief;
+  // Vertical exaggeration: peaks reach ~3.5% of the radius (~220 km on an Earth-sized planet,
+  // ~25× Everest). Real scale would look smooth as a marble; this keeps relief readable.
+  const relief = RELIEF * inp.relief;
   const spacing = spacingOf(N);
   const landH = (e: number) => SEA + 0.0012 + Math.pow(Math.max(0, e), 1.35) * relief;
 
@@ -516,7 +521,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
 function buildTiles(inp: SurfaceInput): Surface {
   const { world: w, cellColor, tint } = inp;
   const g = w.grid, N = g.count, P = g.centers, C = g.cornerPos;
-  const relief = 0.04 * inp.relief;
+  const relief = RELIEF * 0.85 * inp.relief;
   const LAND = SEA + 0.0025;
   const spacing = spacingOf(N);
 

@@ -34,6 +34,8 @@
         <input id="wetness" type="range" min="-0.35" max="0.35" step="0.01" /></label>
       <label class="row">Rivers <output id="rivers-out"></output>
         <input id="rivers" type="range" min="0" max="3" step="0.05" /></label>
+      <label class="row">Planet radius <output id="radius-out"></output>
+        <input id="radius" type="range" min="500" max="15000" step="100" /></label>
       <label class="row">Relief <output id="relief-out"></output>
         <input id="relief" type="range" min="0" max="3" step="0.05" /></label>
 
@@ -67,6 +69,9 @@
   </aside>
 
   <div id="info" hidden></div>
+  <div id="scale" title="Distance at the centre of the view, if the planet has the radius set in the panel">
+    <div id="scale-bar"></div><span id="scale-label"></span>
+  </div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

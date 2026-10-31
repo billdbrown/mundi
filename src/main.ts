@@ -12,6 +12,8 @@ let params: WorldParams = { ...DEFAULT_PARAMS, seed: Math.floor(Math.random() * 
 let viewOpts: ViewOptions = { ...DEFAULT_VIEW };
 let world: World;
 let timings = { gen: 0, mesh: 0, clouds: 0 };
+/** Display only: what the planet's radius means in km, for the scale bar and readouts. */
+let radiusKm = 6371;
 let game: GameData | null = null;
 /** Site name per cell, for the hover readout. */
 let siteAt = new Map<number, string>();
@@ -78,7 +80,8 @@ function showStats() {
   }
   $('stats').textContent =
     `${world.grid.count.toLocaleString()} cells · ${Math.round((1 - ocean / world.grid.count) * 100)}% land · ` +
-    `${lakes} lake · ${rivers} river cells · gen ${timings.gen} ms, mesh ${timings.mesh} ms`;
+    `${lakes} lake · ${rivers} river cells · a cell ≈ ${Math.round(Math.sqrt((4 * Math.PI) / world.grid.count) * radiusKm)} km · ` +
+    `gen ${timings.gen} ms, mesh ${timings.mesh} ms`;
 }
 
 /** View options: visibility toggles apply at once; mesh options go through the worker. */
@@ -98,11 +101,14 @@ function readHash() {
   }
   const r = h.get('relief');
   if (r) viewOpts.relief = Number(r);
+  const km = Number(h.get('radius'));
+  if (km > 0) radiusKm = km;
 }
 function writeHash() {
   const h = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) h.set(k, String(v));
   h.set('relief', String(viewOpts.relief));
+  h.set('radius', String(radiusKm));
   history.replaceState(null, '', '#' + h.toString());
 }
 
@@ -120,6 +126,8 @@ const sliders: [keyof WorldParams | 'relief', (v: number) => string][] = [
 
 function syncInputs() {
   $<HTMLInputElement>('seed').value = String(params.seed);
+  $<HTMLInputElement>('radius').value = String(radiusKm);
+  $<HTMLOutputElement>('radius-out').textContent = `${radiusKm.toLocaleString()} km`;
   for (const [k, fmt] of sliders) {
     const v = k === 'relief' ? viewOpts.relief : params[k];
     $<HTMLInputElement>(k).value = String(v);
@@ -174,6 +182,35 @@ $('export').addEventListener('click', () => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
+$<HTMLInputElement>('radius').addEventListener('input', (e) => {
+  radiusKm = Number((e.target as HTMLInputElement).value);
+  $<HTMLOutputElement>('radius-out').textContent = `${radiusKm.toLocaleString()} km`;
+  if (world) showStats();
+  writeHash();
+});
+
+// --- Scale bar: a round distance about 120 px long, measured at the centre of the view. ---
+const scaleBar = $('scale-bar'), scaleLabel = $('scale-label');
+let lastScale = '';
+function updateScale() {
+  const cam = view.camera, d = cam.position.length();
+  const above = Math.max(1e-4, d - 1);                    // distance to the ground below the centre
+  const viewH = 2 * above * Math.tan((cam.fov * Math.PI) / 360);
+  const pxPerUnit = view.renderer.domElement.clientHeight / viewH;
+  const kmPerPx = radiusKm / pxPerUnit;
+  const raw = kmPerPx * 120, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const nice = [5, 2, 1].map((m) => m * mag).find((v) => v <= raw) ?? mag;
+  const label = nice >= 1 ? `${nice.toLocaleString()} km` : `${Math.round(nice * 1000)} m`;
+  const key = `${label}:${Math.round(nice / kmPerPx)}`;
+  if (key !== lastScale) {
+    scaleBar.style.width = `${Math.round(nice / kmPerPx)}px`;
+    scaleLabel.textContent = label;
+    lastScale = key;
+  }
+  requestAnimationFrame(updateScale);
+}
+requestAnimationFrame(updateScale);
+
 $('collapse').addEventListener('click', () => {
   const p = $('panel');
   p.classList.toggle('collapsed');

@@ -3,8 +3,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { WATER_LAND, WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { hash01 } from './rng.ts';
 import { makeSimplex } from './noise.ts';
-import { SEA, surfaceQueries, type MeshData, type SurfaceData, type SurfaceQueries } from './surface.ts';
+import { SEA, RELIEF, surfaceQueries, type MeshData, type SurfaceData, type SurfaceQueries } from './surface.ts';
 import { buildForest, treeMaterial } from './flora.ts';
+import { LodFlora } from './lodflora.ts';
 import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere, makeStars, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
 import type { CloudPixels } from './clouds.ts';
 import type { ViewMode, TerrainStyle } from './colors.ts';
@@ -32,7 +33,7 @@ export const DEFAULT_VIEW: ViewOptions = { mode: 'biome', style: 'smooth', grid:
 const DAY_SECONDS = 120;
 
 /** Options that change the meshes, so need a trip to the worker; the rest only toggle visibility. */
-export const REBUILD_KEYS: (keyof ViewOptions)[] = ['mode', 'style', 'blend', 'relief', 'trees'];
+export const REBUILD_KEYS: (keyof ViewOptions)[] = ['mode', 'style', 'blend', 'relief'];
 
 export class PlanetView {
   readonly renderer: THREE.WebGLRenderer;
@@ -58,6 +59,7 @@ export class PlanetView {
   private siteMarks?: THREE.Points;
   private siteCells: number[] = [];
   private forest: THREE.InstancedMesh[] = [];
+  private flora: LodFlora;
   private clouds: THREE.Group;
   private hover: THREE.LineLoop;
   private sun: THREE.DirectionalLight;
@@ -82,7 +84,7 @@ export class PlanetView {
     this.renderer.toneMappingExposure = 1.0;
     container.appendChild(this.renderer.domElement);
 
-    this.camera = new THREE.PerspectiveCamera(40, 1, 0.003, 200);
+    this.camera = new THREE.PerspectiveCamera(40, 1, 0.0015, 100);
     this.camera.position.set(0, 0.9, 3.4);
     this.scene.add(this.camera);
     this.scene.background = new THREE.Color(0x04060b);
@@ -90,7 +92,7 @@ export class PlanetView {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.enablePan = false;
-    this.controls.minDistance = 1.08;
+    this.controls.minDistance = 1.045;
     this.controls.maxDistance = 7;
     this.controls.zoomSpeed = 0.8;
 
@@ -103,6 +105,7 @@ export class PlanetView {
     this.scene.add(this.ambient);
 
     this.clouds = makeClouds(this.cloudU);
+    this.flora = new LodFlora(this.planet);
     this.hover = new THREE.LineLoop(
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, depthTest: false }),
@@ -279,6 +282,7 @@ export class PlanetView {
     if (this.streams) this.streams.visible = this.opts.rivers && this.opts.mode === 'biome' && d < 1.6;
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
 
+    this.flora.update(this.camera.position, this.opts.trees && this.opts.mode === 'biome');
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -315,6 +319,7 @@ export class PlanetView {
 
     this.forest = buildForest(data.trees);
     for (const f of this.forest) this.planet.add(f);
+    this.flora.setSurface(w, data, RELIEF * o.relief);
 
     // Grid outlines, each edge once.
     const gl: number[] = [];
@@ -356,7 +361,7 @@ export class PlanetView {
     const spacing = Math.sqrt((4 * Math.PI) / N);
     const meander = makeSimplex(w.params.seed * 5 + 13);
     const mf = 1.1 / spacing;
-    const widthOf = (f: number) => spacing * Math.min(0.26, 0.035 + 0.045 * Math.log2(1 + f / T));
+    const widthOf = (f: number) => spacing * Math.min(0.15, 0.022 + 0.028 * Math.log2(1 + f / T));
     const STREAM = 0.35 * T;
     const LIFT = 0.0012, RIVER_DEPTH = 0.0045, MOUTH_DEPTH = 0.0016;
     const flows = (c: number) => w.water[c] === WATER_LAND && w.temperature[c] > 0.12 && w.flow[c] >= STREAM;

@@ -94,6 +94,12 @@ function treeGeometries(): THREE.BufferGeometry[] {
 }
 
 let shared: THREE.BufferGeometry[] | null = null;
+
+/** The shared low-poly geometry for one kind of plant or prop. */
+export function treeGeometry(kind: number): THREE.BufferGeometry {
+  shared ??= treeGeometries();
+  return shared[kind];
+}
 export const treeMaterial = new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.9 });
 
 export function buildForest(t: TreeData): THREE.InstancedMesh[] {

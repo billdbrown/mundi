@@ -278,7 +278,8 @@ export function makeClouds(u: CloudUniforms): THREE.Group {
     m.userData.baseOpacity = opacity;
     return m;
   };
-  const deck = layer(1.028, 0.85), cirrus = layer(1.042, 0.5);
+  // Low over the ground (the highest peaks poke through, as real ones do).
+  const deck = layer(1.016, 0.85), cirrus = layer(1.024, 0.5);
   // The deck's texture holds raw cover; shapes are decided here, live.
   const mat = deck.material as THREE.MeshStandardMaterial;
   mat.onBeforeCompile = (sh) => {
@@ -327,7 +328,7 @@ function fresnelShell(radius: number, side: THREE.Side, power: number, strength:
         float d = dot(vN, vV);
         float f = uBack > 0.5
           // Far side of the shell: 0 at its silhouette, rising toward the planet's limb.
-          ? pow(smoothstep(0.0, 0.32, -d), uPower)
+          ? pow(smoothstep(0.0, 0.24, -d), uPower)
           // Near side: a haze that thickens toward the planet's edge but fades out at the shell's.
           : pow(1.0 - d, uPower) * smoothstep(0.0, 0.25, d);
         // Lit by the sun: bright on the day side, faint at night, orange along the terminator.
@@ -345,8 +346,9 @@ function fresnelShell(radius: number, side: THREE.Side, power: number, strength:
 /** Outer glow at the limb plus a faint blue haze over the planet's edge. */
 export function makeAtmosphere(sun: SunUniforms): THREE.Group {
   const g = new THREE.Group();
-  g.add(fresnelShell(1.05, THREE.BackSide, 1.8, 0.7, 0x6aaeff, sun));
-  const haze = fresnelShell(1.045, THREE.FrontSide, 3.0, 0.45, 0x8fc4ff, sun);
+  // Thin, as a real atmosphere is next to its planet.
+  g.add(fresnelShell(1.03, THREE.BackSide, 1.8, 0.75, 0x6aaeff, sun));
+  const haze = fresnelShell(1.027, THREE.FrontSide, 3.0, 0.45, 0x8fc4ff, sun);
   haze.renderOrder = 6;
   g.add(haze);
   return g;
