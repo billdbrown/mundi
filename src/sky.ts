@@ -105,6 +105,11 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
         float ridge(float n) { return 1.0 - abs(2.0 * n - 1.0); }
         float rockNoise(vec3 p) {
           return ridge(vnoise(p * 320.0)) * 0.5 + ridge(vnoise(p * 900.0)) * 0.3 + vnoise(p * 2600.0) * 0.2;
+        }
+        // Orbit-scale relief: ridge-and-valley texture a few hundred km across, the hillshaded
+        // look of land from space. Takes over as the fine rock detail fades out.
+        float landNoise(vec3 p) {
+          return ridge(vnoise(p * 45.0)) * 0.55 + ridge(vnoise(p * 120.0)) * 0.3 + vnoise(p * 300.0) * 0.15;
         }`)
       .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
         float hAbove = length(vCloudP) - 1.0;
@@ -113,6 +118,9 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
         float highland = smoothstep(0.004, 0.03, hAbove);
         float rn = rockNoise(vCloudP);
         diffuseColor.rgb *= mix(1.0, 0.82 + 0.36 * rn, (0.35 + 0.65 * highland) * detailFade);
+        float farFade = smoothstep(0.12, 0.8, camDist) * step(0.0005, hAbove);
+        float ln = landNoise(vCloudP);
+        diffuseColor.rgb *= mix(1.0, 0.74 + 0.52 * ln, (0.45 + 0.55 * highland) * farFade);
         diffuseColor.rgb *= cloudShade(vCloudP);`)
       .replace('#include <normal_fragment_maps>', /* glsl */`#include <normal_fragment_maps>
         if (detailFade > 0.0 && hAbove > 0.0) {
@@ -122,6 +130,15 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
           float e = 0.0003;
           vec3 grad = t1 * (rockNoise(vCloudP + t1 * e) - rn) + t2 * (rockNoise(vCloudP + t2 * e) - rn);
           float amp = (0.2 + 1.6 * highland) * detailFade;
+          normal = normalize(normal - (viewMatrix * vec4(grad * amp, 0.0)).xyz);
+        }
+        if (farFade > 0.0) {
+          vec3 up = normalize(vCloudP);
+          vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
+          vec3 t2 = cross(up, t1);
+          float e = 0.002;
+          vec3 grad = t1 * (landNoise(vCloudP + t1 * e) - ln) + t2 * (landNoise(vCloudP + t2 * e) - ln);
+          float amp = (1.2 + 7.0 * highland) * farFade;
           normal = normalize(normal - (viewMatrix * vec4(grad * amp, 0.0)).xyz);
         }`);
   };
@@ -265,6 +282,12 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         col = mix(col, vec3(0.94, 0.97, 0.98) * shade * mix(0.06, 1.0, day), foam * 0.8);
 
         float a = mix(0.5, 0.95, smoothstep(0.0, 0.35, d));
+        // Ragged coastline: in a noisy fringe along the shore the water thins out and the sandy
+        // floor shows, so the land edge is jagged at every scale instead of a smooth curve.
+        float cn = vnoise(vWorld * 110.0) * 0.75 + vnoise(vWorld * 330.0) * 0.25;
+        float coast = smoothstep(0.0, uFoam * 0.35, vDepth - (cn - 0.4) * uFoam * 1.1);
+        a *= coast;
+        foam *= coast;
         gl_FragColor = vec4(col, max(a, foam * 0.9));
         #ifdef USE_FADE
           gl_FragColor.a *= vFade;
