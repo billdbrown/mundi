@@ -28,14 +28,21 @@ The URL hash holds every parameter, so a world you like is just a link.
 6. **Biomes.** A Whittaker-style table on temperature and moisture, plus beaches, mountains,
    sea ice. ([src/biomes.ts](src/biomes.ts))
 
-Rendering ([src/render.ts](src/render.ts)) draws each cell as a flat terrace with cliff walls down
-to lower neighbours, blends colours at corners so tile borders soften, and fades the grid lines as
-you zoom in.
+## Rendering
+
+Two terrain styles. **Realistic** (default, [src/surface.ts](src/surface.ts)) blends heights across
+cells and splits each triangle with a little noise, so coasts and ridges don't trace hex edges.
+**Hex tiles** draws flat terraces with cliff walls. Both get:
+
+- a water mesh that knows its depth: turquoise shallows to deep blue, ripples, sun glint, foam
+  where it meets land ([src/sky.ts](src/sky.ts))
+- instanced low-poly trees chosen by biome ([src/flora.ts](src/flora.ts))
+- a cloud layer banded like Earth's, fading as you zoom in, and an atmosphere glow
+- rivers that curve through cells and widen downstream
 
 ## Not yet
 
-Trees and props, a proper water shader, smooth river splines, rain shadows, and pentagon-aware
-anything (they work, they just aren't special-cased).
+Rain shadows behind mountains, cloud shadows, a day/night side, and more tree variety.
 
 ## License
 
