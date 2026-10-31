@@ -210,6 +210,7 @@ function vertexTemp(y: number, e: number, heat: number): number {
   return 1 - 1.1 * Math.pow(lat, 1.25) - 0.55 * Math.max(0, e) + heat;
 }
 
+const ALPINE = new THREE.Color(0x6e6858);
 const SNOW = new THREE.Color(0xf2f5f8), ROCK = new THREE.Color(0x776b5f), SAND = new THREE.Color(0xd9c89b);
 
 /**
@@ -217,7 +218,7 @@ const SNOW = new THREE.Color(0xf2f5f8), ROCK = new THREE.Color(0x776b5f), SAND =
  * height (so snow lines follow the terrain, not cell edges), bare rock on steep slopes, and
  * sand in a thin strip at the waterline.
  */
-function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number) {
+function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number, noise: Noise3) {
   const pos = geo.getAttribute('position'), nor = geo.getAttribute('normal'), col = geo.getAttribute('color');
   const mix = (i: number, c: THREE.Color, t: number) => {
     if (t <= 0) return;
@@ -236,10 +237,20 @@ function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number)
     const slope = 1 - up;                         // 0 flat, ~0.3 steep
     mix(i, SAND, sm(0.0017, 0.0007, above) * sm(0.25, 0.4, vertexTemp(y / l, e, heat)));
     mix(i, ROCK, sm(0.025, 0.09, slope) * 0.75);
+    // Altitude zones: vegetation thins to bare rock and alpine scrub above the tree line, so
+    // mountains step through rock before snow instead of snow sitting on desert sand.
+    const n = noise(x * 90, y * 90, z * 90) * 0.5 + noise(x * 260 + 4.1, y * 260, z * 260) * 0.25;
+    mix(i, ALPINE, sm(0.28, 0.5, e + n * 0.12) * 0.75);
     // Snow settles on gentler slopes first.
     const tv = vertexTemp(y / l, e, heat);
-    const snow = Math.max(sm(0.24, 0.12, tv), sm(0.6, 0.8, e) * sm(0.55, 0.4, tv));
-    mix(i, SNOW, snow * (1 - 0.6 * sm(0.06, 0.16, slope)));
+    // Patchy edge: noise moves the snow line, so it breaks into streaks along ridges.
+    const tvn = tv + n * 0.07;
+    const snow = Math.max(sm(0.24, 0.12, tvn), sm(0.6, 0.82, e + n * 0.1) * sm(0.55, 0.4, tvn));
+    // Snow sheds off steep faces and lies in streaks along ridges, with rock showing between:
+    // the striped look of high ranges from space, rather than a solid white cap.
+    const streak = 1 - Math.abs(noise(x * 170 + 9.7, y * 170, z * 170));
+    const lie = (1 - 0.85 * sm(0.035, 0.11, slope)) * (0.35 + 0.65 * sm(0.45, 0.85, streak + (snow - 0.5) * 0.4));
+    mix(i, SNOW, snow * lie);
   }
   col.needsUpdate = true;
 }
@@ -530,7 +541,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
   terrain.setIndex(index);
   terrain.computeVertexNormals();
   if (inp.natural) {
-    naturalShading(terrain, relief, w.params.heat);
+    naturalShading(terrain, relief, w.params.heat, tint);
     // No trees on snow.
     for (let i = trees.length - 1; i >= 0; i--) {
       const t = trees[i], l = Math.hypot(t.x, t.y, t.z);

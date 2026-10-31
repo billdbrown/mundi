@@ -26,7 +26,8 @@ export const BIOMES: Biome[] = [
   { name: 'Rainforest', color: 0x34552a },
   { name: 'Beach', color: 0xd8c59a },
   { name: 'Mountain', color: 0x7a6c5f },
-  { name: 'Snowy peak', color: 0xf0f0f2 },
+  // Rock, not white: per-vertex shading puts snow only where it is cold enough (summits, ridges).
+  { name: 'Snowy peak', color: 0x857b72 },
 ];
 
 /** Whittaker-style lookup on temperature and moisture, both 0..1. */
