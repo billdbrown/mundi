@@ -1,29 +1,99 @@
-import { PlanetView, DEFAULT_VIEW, type ViewMode, type TerrainStyle, type ViewOptions } from './render.ts';
-import { generateWorld, DEFAULT_PARAMS, WATER_OCEAN, WATER_LAKE, type World, type WorldParams } from './world.ts';
+import { PlanetView, DEFAULT_VIEW, REBUILD_KEYS, type ViewMode, type TerrainStyle, type ViewOptions } from './render.ts';
+import { DEFAULT_PARAMS, WATER_OCEAN, WATER_LAKE, type World, type WorldParams } from './world.ts';
 import { BIOMES } from './biomes.ts';
 import { flyTo, orbit, type Spot } from './debug.ts';
+import type { BuildRequest, BuildResult } from './worker.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const view = new PlanetView($('view'));
 let params: WorldParams = { ...DEFAULT_PARAMS, seed: Math.floor(Math.random() * 1e6) };
-let relief = 1;
+let viewOpts: ViewOptions = { ...DEFAULT_VIEW };
 let world: World;
-let timings = { gen: 0, mesh: 0 };
+let timings = { gen: 0, mesh: 0, clouds: 0 };
 
-// Parameters live in the URL hash, so a world can be shared as a link.
+// --- Worker: generation and meshing happen off the main thread. At most one request is in
+// flight; changes made meanwhile collapse into a single follow-up, and only the latest result
+// is drawn. So dragging a slider never queues up a backlog of stale worlds. ---
+const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+let nextId = 0, inFlight = false, queued = false, cloudSeed = -1;
+let waiters: (() => void)[] = [];
+
+function request(): Promise<void> {
+  queued = true;
+  pump();
+  return new Promise((resolve) => waiters.push(resolve));
+}
+
+function pump() {
+  if (inFlight || !queued) return;
+  queued = false;
+  inFlight = true;
+  const clouds = params.seed !== cloudSeed;
+  cloudSeed = params.seed;
+  const { mode, style, relief, blend, trees } = viewOpts;
+  const msg: BuildRequest = { id: ++nextId, params: { ...params }, opts: { mode, style, relief, blend, trees }, clouds };
+  worker.postMessage(msg);
+  $('panel').classList.add('busy');
+}
+
+worker.onmessage = (e: MessageEvent<BuildResult>) => {
+  const r = e.data;
+  inFlight = false;
+  if (r.world) world = r.world;
+  if (r.clouds) view.setClouds(r.clouds);
+  if (!queued) {
+    view.setData(world, r.surface);
+    timings = r.timings;
+    showStats();
+    writeHash();
+    $('panel').classList.remove('busy');
+    const done = waiters;
+    waiters = [];
+    for (const f of done) f();
+  }
+  pump();
+};
+worker.onerror = (e) => {
+  console.error('worker failed:', e.message);
+  inFlight = false;
+  $('panel').classList.remove('busy');
+};
+
+function showStats() {
+  let ocean = 0, lakes = 0, rivers = 0;
+  for (let c = 0; c < world.grid.count; c++) {
+    if (world.water[c] === WATER_OCEAN) ocean++;
+    else if (world.water[c] === WATER_LAKE) lakes++;
+    if (world.river[c]) rivers++;
+  }
+  $('stats').textContent =
+    `${world.grid.count.toLocaleString()} cells · ${Math.round((1 - ocean / world.grid.count) * 100)}% land · ` +
+    `${lakes} lake · ${rivers} river cells · gen ${timings.gen} ms, mesh ${timings.mesh} ms`;
+}
+
+/** View options: visibility toggles apply at once; mesh options go through the worker. */
+function setView(o: Partial<ViewOptions>): Promise<void> | void {
+  const rebuild = REBUILD_KEYS.some((k) => o[k] !== undefined && o[k] !== viewOpts[k]);
+  viewOpts = { ...viewOpts, ...o };
+  view.setOptions(viewOpts);
+  if (rebuild) return request();
+}
+
+// --- Parameters live in the URL hash, so a world can be shared as a link. ---
 function readHash() {
   const h = new URLSearchParams(location.hash.slice(1));
   for (const k of Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[]) {
     const v = h.get(k);
     if (v !== null && v !== '' && !Number.isNaN(Number(v))) params[k] = Number(v);
   }
-  if (h.get('relief')) relief = Number(h.get('relief'));
+  const r = h.get('relief');
+  if (r) viewOpts.relief = Number(r);
 }
 function writeHash() {
   const h = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) h.set(k, String(v));
-  h.set('relief', String(relief));
+  h.set('relief', String(viewOpts.relief));
   history.replaceState(null, '', '#' + h.toString());
 }
 
@@ -42,35 +112,15 @@ const sliders: [keyof WorldParams | 'relief', (v: number) => string][] = [
 function syncInputs() {
   $<HTMLInputElement>('seed').value = String(params.seed);
   for (const [k, fmt] of sliders) {
-    const v = k === 'relief' ? relief : params[k];
+    const v = k === 'relief' ? viewOpts.relief : params[k];
     $<HTMLInputElement>(k).value = String(v);
     $<HTMLOutputElement>(`${k}-out`).textContent = fmt(v);
   }
-}
-
-function regenerate() {
-  const t0 = performance.now();
-  world = generateWorld({ ...params });
-  const t1 = performance.now();
-  view.setWorld(world);
-  const t2 = performance.now();
-  timings = { gen: Math.round(t1 - t0), mesh: Math.round(t2 - t1) };
-  let ocean = 0, lakes = 0, rivers = 0;
-  for (let c = 0; c < world.grid.count; c++) {
-    if (world.water[c] === WATER_OCEAN) ocean++;
-    else if (world.water[c] === WATER_LAKE) lakes++;
-    if (world.river[c]) rivers++;
+  $<HTMLSelectElement>('mode').value = viewOpts.mode;
+  $<HTMLSelectElement>('style').value = viewOpts.style;
+  for (const [id, key] of [['grid', 'grid'], ['show-rivers', 'rivers'], ['trees', 'trees'], ['clouds', 'clouds'], ['blend', 'blend']] as const) {
+    $<HTMLInputElement>(id).checked = viewOpts[key];
   }
-  $('stats').textContent =
-    `${world.grid.count.toLocaleString()} cells · ${Math.round((1 - ocean / world.grid.count) * 100)}% land · ` +
-    `${lakes} lake · ${rivers} river cells · gen ${Math.round(t1 - t0)} ms, mesh ${Math.round(t2 - t1)} ms`;
-  writeHash();
-}
-
-let pending = 0;
-function regenerateSoon() {
-  cancelAnimationFrame(pending);
-  pending = requestAnimationFrame(regenerate);
 }
 
 for (const [k, fmt] of sliders) {
@@ -78,38 +128,42 @@ for (const [k, fmt] of sliders) {
   input.addEventListener('input', () => {
     const v = Number(input.value);
     $<HTMLOutputElement>(`${k}-out`).textContent = fmt(v);
-    if (k === 'relief') { relief = v; view.setOptions({ relief: v }); writeHash(); return; }
+    if (k === 'relief') { setView({ relief: v }); return; }
     params[k] = v;
-    regenerateSoon();
+    request();
   });
 }
 $<HTMLInputElement>('seed').addEventListener('change', (e) => {
   params.seed = Math.max(0, Math.floor(Number((e.target as HTMLInputElement).value) || 0));
-  regenerate();
+  request();
 });
 $('dice').addEventListener('click', () => {
   params.seed = Math.floor(Math.random() * 1e6);
   syncInputs();
-  regenerate();
+  request();
 });
-$<HTMLSelectElement>('mode').addEventListener('change', (e) => view.setOptions({ mode: (e.target as HTMLSelectElement).value as ViewMode }));
-$<HTMLSelectElement>('style').addEventListener('change', (e) => view.setOptions({ style: (e.target as HTMLSelectElement).value as TerrainStyle }));
-$<HTMLInputElement>('trees').addEventListener('change', (e) => view.setOptions({ trees: (e.target as HTMLInputElement).checked }));
-$<HTMLInputElement>('clouds').addEventListener('change', (e) => view.setOptions({ clouds: (e.target as HTMLInputElement).checked }));
-$<HTMLInputElement>('grid').addEventListener('change', (e) => view.setOptions({ grid: (e.target as HTMLInputElement).checked }));
-$<HTMLInputElement>('show-rivers').addEventListener('change', (e) => view.setOptions({ rivers: (e.target as HTMLInputElement).checked }));
-$<HTMLInputElement>('blend').addEventListener('change', (e) => view.setOptions({ blend: (e.target as HTMLInputElement).checked }));
+const onSelect = (id: string, f: (v: string) => Partial<ViewOptions>) =>
+  $<HTMLSelectElement>(id).addEventListener('change', (e) => setView(f((e.target as HTMLSelectElement).value)));
+const onCheck = (id: string, f: (v: boolean) => Partial<ViewOptions>) =>
+  $<HTMLInputElement>(id).addEventListener('change', (e) => setView(f((e.target as HTMLInputElement).checked)));
+onSelect('mode', (v) => ({ mode: v as ViewMode }));
+onSelect('style', (v) => ({ style: v as TerrainStyle }));
+onCheck('trees', (v) => ({ trees: v }));
+onCheck('clouds', (v) => ({ clouds: v }));
+onCheck('grid', (v) => ({ grid: v }));
+onCheck('show-rivers', (v) => ({ rivers: v }));
+onCheck('blend', (v) => ({ blend: v }));
 $('collapse').addEventListener('click', () => {
   const p = $('panel');
   p.classList.toggle('collapsed');
   $('collapse').textContent = p.classList.contains('collapsed') ? '+' : '–';
 });
 
-// Hover readout.
+// --- Hover readout ---
 const info = $('info');
 let lastCell = -1;
 view.renderer.domElement.addEventListener('pointermove', (e) => {
-  if (e.buttons) { info.hidden = true; return; }
+  if (e.buttons || !world) { info.hidden = true; return; }
   const c = view.pick(e.clientX, e.clientY);
   if (c !== lastCell) { view.highlight(c); lastCell = c; }
   if (c < 0) { info.hidden = true; return; }
@@ -127,7 +181,7 @@ view.renderer.domElement.addEventListener('pointermove', (e) => {
 });
 view.renderer.domElement.addEventListener('pointerleave', () => { info.hidden = true; view.highlight(-1); lastCell = -1; });
 
-// Debug handle for the console and scripts/shot.mjs.
+// --- Debug handle for the console, scripts/shot.mjs and scripts/visual.mjs ---
 (window as unknown as Record<string, unknown>).worldgen = {
   view,
   get world() { return world; },
@@ -138,19 +192,22 @@ view.renderer.domElement.addEventListener('pointerleave', () => { info.hidden = 
   freeze: (t: number | null) => view.freeze(t),
   orbit: (lon: number, lat: number, dist: number) => orbit(view, lon, lat, dist),
   flyTo: (spot: Spot, alt: number) => flyTo(view, world, spot, alt),
-  /** Swap in a world from a hash string ("seed=7&ocean=0.5"), with view options reset to defaults. */
-  load: (hash: string, opts: Partial<ViewOptions> = {}) => {
+  /** Swap in a world from a hash string ("seed=7&ocean=0.5") with view options reset; resolves once drawn. */
+  load: (hash: string, opts: Partial<ViewOptions> = {}): Promise<void> => {
     history.replaceState(null, '', '#' + hash);
     params = { ...DEFAULT_PARAMS };
-    relief = 1;
+    viewOpts = { ...DEFAULT_VIEW };
     readHash();
+    viewOpts = { ...viewOpts, ...opts };
     syncInputs();
-    view.setOptions({ ...DEFAULT_VIEW, relief, ...opts });
-    regenerate();
+    view.setOptions(viewOpts);
+    return request();
   },
+  /** Resolves once the current request (if any) has been drawn. */
+  ready: (): Promise<void> => (inFlight || queued ? new Promise((r) => waiters.push(r)) : Promise.resolve()),
 };
 
 readHash();
 syncInputs();
-view.setOptions({ relief });
-regenerate();
+view.setOptions(viewOpts);
+request();

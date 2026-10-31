@@ -1,6 +1,6 @@
 /** Water shader, clouds (and their shadows), atmosphere and stars. */
 import * as THREE from 'three';
-import { makeSimplex, fbm } from './noise.ts';
+import type { CloudPixels } from './clouds.ts';
 import { hash01 } from './rng.ts';
 
 /** Uniforms shared by every material that receives cloud shadows. */
@@ -204,63 +204,21 @@ export function makeWaterMaterial(cloud: CloudUniforms): THREE.ShaderMaterial {
 }
 
 export interface CloudTextures { main: THREE.Texture; cirrus: THREE.Texture }
-const cloudCache = new Map<number, CloudTextures>();
 
-function canvasTexture(W: number, H: number, fill: (lat: number, x: number, y: number, z: number) => [number, number]): THREE.Texture {
-  const canvas = document.createElement('canvas');
-  canvas.width = W; canvas.height = H;
-  const ctx = canvas.getContext('2d')!;
-  const img = ctx.createImageData(W, H);
-  for (let py = 0; py < H; py++) {
-    const lat = Math.PI / 2 - ((py + 0.5) / H) * Math.PI;
-    for (let px = 0; px < W; px++) {
-      const lon = ((px + 0.5) / W) * Math.PI * 2;
-      const [shade, alpha] = fill(lat, Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon));
-      const i = (py * W + px) * 4;
-      img.data[i] = img.data[i + 1] = img.data[i + 2] = Math.round(shade * 255);
-      img.data[i + 3] = Math.round(alpha * 255);
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.anisotropy = 4;
-  return tex;
-}
-
-const smooth = (a: number, b: number, x: number) => {
-  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-};
-
-/**
- * Two equirectangular cloud layers. The main deck is domain-warped noise, banded like Earth's
- * (cloudy at the equator and 60°, clear at 30°) with grey undersides where it is thick. The
- * cirrus layer is thin streaks stretched east–west.
- */
-export function cloudTextures(seed: number): CloudTextures {
-  const hit = cloudCache.get(seed);
-  if (hit) return hit;
-  const n1 = makeSimplex(seed * 31 + 7), n2 = makeSimplex(seed * 31 + 8), n3 = makeSimplex(seed * 31 + 9);
-  const main = canvasTexture(768, 384, (lat, x, y, z) => {
-    const band = 0.5 + 0.5 * Math.cos(6 * lat);
-    const qx = fbm(n2, x, y, z, 3, 1.4), qy = fbm(n2, x + 4.7, y, z, 3, 1.4);
-    const v = fbm(n1, x + qx * 0.7, y + qy * 0.7, z, 6, 2.2);
-    const cover = v + 0.2 * band - 0.24;
-    const a = smooth(0.0, 0.42, cover);
-    const thick = smooth(0.25, 0.7, cover);
-    return [1 - 0.28 * thick, a];
-  });
-  const cirrus = canvasTexture(768, 384, (lat, x, y, z) => {
-    // Stretching the sample along y turns blobs into east–west streaks.
-    const v = fbm(n3, x * 1.2, y * 6, z * 1.2, 5, 1.8);
-    const band = 0.6 + 0.4 * Math.cos(4 * lat);
-    return [1, smooth(0.15, 0.6, v * band) * 0.55];
-  });
-  const out = { main, cirrus };
-  cloudCache.set(seed, out);
-  return out;
+/** Uploads worker-painted cloud pixels as textures, mipmapped (the shadow lookup samples a blurred level). */
+export function cloudTexturesFromPixels(px: CloudPixels): CloudTextures {
+  const tex = (data: Uint8Array) => {
+    const t = new THREE.DataTexture(data, px.width, px.height, THREE.RGBAFormat);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = THREE.RepeatWrapping;
+    t.magFilter = THREE.LinearFilter;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.generateMipmaps = true;
+    t.anisotropy = 4;
+    t.needsUpdate = true;
+    return t;
+  };
+  return { main: tex(px.main), cirrus: tex(px.cirrus) };
 }
 
 export function makeClouds(): THREE.Group {

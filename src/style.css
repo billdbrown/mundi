@@ -41,6 +41,8 @@ legend { color: var(--muted); padding: 0 4px; }
 #info span { color: var(--muted); }
 
 body.capture #panel, body.capture #info { display: none; }
+#panel.busy #stats { opacity: 0.45; }
+#panel.busy h1::after { content: ' · generating…'; color: var(--muted); font-weight: normal; }
 
 @media (max-width: 600px) {
   #panel { left: 8px; right: 8px; width: auto; top: 8px; max-height: 55vh; overflow: auto; }

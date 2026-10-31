@@ -62,7 +62,7 @@ try {
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('404')) errors.push(m.text()); });
   for (let attempt = 1; ; attempt++) {
-    try { await page.goto(url); await page.waitForFunction(() => window.worldgen?.world, null, { timeout: 30000 }); break; }
+    try { await page.goto(url); await page.waitForFunction(() => window.worldgen?.world, null, { timeout: 30000 }); await page.evaluate(() => window.worldgen.ready()); break; }
     catch (e) { if (attempt >= 3) throw e; console.log(`load failed (${e.message.split(/\r?\n/)[0]}), retrying`); }
   }
   for (const tc of cases) {
@@ -71,7 +71,7 @@ try {
       const wg = window.worldgen;
       wg.capture(true);
       wg.freeze(10);
-      wg.load(tc.hash, tc.opts ?? {});
+      await wg.load(tc.hash, tc.opts ?? {});
       if (tc.view.orbit) wg.orbit(...tc.view.orbit);
       else wg.flyTo(tc.view.spot, tc.view.alt);
       // Two frames: one to apply the camera, one to draw with it.
@@ -101,7 +101,7 @@ try {
     if (update) fs.copyFileSync(path.join(CUR, file), basePath);
     results.push(r);
     const pct = r.ratio === null ? '   —  ' : `${(r.ratio * 100).toFixed(2).padStart(5)}%`;
-    console.log(`${r.status.padEnd(8)} ${pct}  gen ${String(timings.gen).padStart(4)} ms  mesh ${String(timings.mesh).padStart(4)} ms  ${tc.name}`);
+    console.log(`${r.status.padEnd(8)} ${pct}  gen ${String(timings.gen).padStart(4)} ms  mesh ${String(timings.mesh).padStart(4)} ms  clouds ${String(timings.clouds ?? 0).padStart(4)} ms  ${tc.name}`);
     for (const e of errors) console.log(`         ! ${e}`);
   }
 } finally {

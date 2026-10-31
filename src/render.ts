@@ -1,15 +1,15 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { BIOMES } from './biomes.ts';
-import { WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
+import type { World } from './world.ts';
 import { hash01 } from './rng.ts';
 import { makeSimplex } from './noise.ts';
-import { buildSmooth, buildTiles, SEA, type Surface } from './surface.ts';
+import { SEA, surfaceQueries, type MeshData, type SurfaceData, type SurfaceQueries } from './surface.ts';
 import { buildForest, treeMaterial } from './flora.ts';
-import { makeWaterMaterial, makeClouds, cloudTextures, makeAtmosphere, makeStars, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
+import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere, makeStars, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
+import type { CloudPixels } from './clouds.ts';
+import type { ViewMode, TerrainStyle } from './colors.ts';
 
-export type ViewMode = 'biome' | 'elevation' | 'temperature' | 'moisture' | 'plates';
-export type TerrainStyle = 'smooth' | 'tiles';
+export type { ViewMode, TerrainStyle };
 
 export interface ViewOptions {
   mode: ViewMode;
@@ -24,7 +24,8 @@ export interface ViewOptions {
 
 export const DEFAULT_VIEW: ViewOptions = { mode: 'biome', style: 'smooth', grid: true, rivers: true, trees: true, clouds: true, blend: true, relief: 1 };
 
-const REBUILD_KEYS: (keyof ViewOptions)[] = ['mode', 'style', 'blend', 'relief'];
+/** Options that change the meshes, so need a trip to the worker; the rest only toggle visibility. */
+export const REBUILD_KEYS: (keyof ViewOptions)[] = ['mode', 'style', 'blend', 'relief', 'trees'];
 
 export class PlanetView {
   readonly renderer: THREE.WebGLRenderer;
@@ -41,10 +42,9 @@ export class PlanetView {
   private rivers?: THREE.Mesh;
   private forest: THREE.InstancedMesh[] = [];
   private clouds: THREE.Group = makeClouds();
-  private cloudSeed = -1;
   private hover: THREE.LineLoop;
   private sun: THREE.DirectionalLight;
-  private surface?: Surface;
+  private surface?: SurfaceQueries;
   private faceCell: Int32Array = new Int32Array(0);
   private world?: World;
   private opts: ViewOptions = { ...DEFAULT_VIEW };
@@ -105,26 +105,26 @@ export class PlanetView {
     this.clock.getDelta();
   }
 
-  setWorld(world: World) {
+  /** Draws a world from worker-built data. */
+  setData(world: World, data: SurfaceData) {
     this.world = world;
-    if (this.cloudSeed !== world.params.seed) {
-      const tex = cloudTextures(world.params.seed);
-      [tex.main, tex.cirrus].forEach((t, i) => {
-        const m = (this.clouds.children[i] as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        m.map = t;
-        m.needsUpdate = true;
-      });
-      this.cloudU.uCloudMap.value = tex.main;
-      this.cloudSeed = world.params.seed;
-    }
-    this.rebuild();
+    this.rebuild(data);
   }
 
+  setClouds(px: CloudPixels) {
+    const tex = cloudTexturesFromPixels(px);
+    [tex.main, tex.cirrus].forEach((t, i) => {
+      const m = (this.clouds.children[i] as THREE.Mesh).material as THREE.MeshStandardMaterial;
+      m.map?.dispose();
+      m.map = t;
+      m.needsUpdate = true;
+    });
+    this.cloudU.uCloudMap.value = tex.main;
+  }
+
+  /** Visibility-only options apply at once; mesh options take effect with the next setData. */
   setOptions(o: Partial<ViewOptions>) {
-    const rebuild = REBUILD_KEYS.some((k) => o[k] !== undefined && o[k] !== this.opts[k])
-      || (o.trees === true && !this.opts.trees);
     this.opts = { ...this.opts, ...o };
-    if (rebuild) this.rebuild();
     this.applyVisibility();
   }
 
@@ -213,39 +213,26 @@ export class PlanetView {
     this.forest = [];
   }
 
-  private rebuild() {
+  private rebuild(data: SurfaceData) {
     const w = this.world;
     if (!w) return;
     this.dispose();
     const g = w.grid, N = g.count, P = g.centers, C = g.cornerPos;
     const o = this.opts;
-
-    const cellColor = new Float32Array(N * 3);
-    const tmp = new THREE.Color();
-    for (let c = 0; c < N; c++) {
-      colorFor(w, c, o.mode, tmp);
-      cellColor[c * 3] = tmp.r; cellColor[c * 3 + 1] = tmp.g; cellColor[c * 3 + 2] = tmp.b;
-    }
-    const seed = w.params.seed;
-    const input = {
-      world: w, cellColor, relief: o.relief, blend: o.blend, flora: o.trees, natural: o.mode === 'biome',
-      tint: makeSimplex(seed * 5 + 11), rough: makeSimplex(seed * 5 + 12),
-    };
-    const s = o.style === 'smooth' ? buildSmooth(input) : buildTiles(input);
+    const s = surfaceQueries(data, g);
     this.surface = s;
 
-    const terrainMat = makeTerrainMaterial(this.cloudU);
-    this.terrain = new THREE.Mesh(s.terrain, terrainMat);
-    this.faceCell = s.faces;
+    this.terrain = new THREE.Mesh(toGeometry(data.terrain), makeTerrainMaterial(this.cloudU));
+    this.faceCell = data.faces;
     this.planet.add(this.terrain);
 
-    if (s.water) {
-      this.water = new THREE.Mesh(s.water, this.waterMat);
+    if (data.water) {
+      this.water = new THREE.Mesh(toGeometry(data.water), this.waterMat);
       this.water.renderOrder = 1;
       this.planet.add(this.water);
     }
 
-    this.forest = buildForest(s.trees);
+    this.forest = buildForest(data.trees);
     for (const f of this.forest) this.planet.add(f);
 
     // Grid outlines, each edge once.
@@ -256,7 +243,7 @@ export class PlanetView {
         const nb = g.neighbors[c][i];
         if (nb < c) continue;
         let h0 = s.outlineH(c, i), h1 = s.outlineH(c, (i + 1) % m);
-        if (o.style === 'tiles') h0 = h1 = Math.max(h0, s.outlineH(nb, 0));
+        if (data.style === 'tiles') h0 = h1 = Math.max(h0, s.outlineH(nb, 0));
         const k0 = ks[i], k1 = ks[(i + 1) % m];
         gl.push(C[k0 * 3] * h0, C[k0 * 3 + 1] * h0, C[k0 * 3 + 2] * h0, C[k1 * 3] * h1, C[k1 * 3 + 1] * h1, C[k1 * 3 + 2] * h1);
       }
@@ -277,7 +264,7 @@ export class PlanetView {
    * with a little meander, out through the next. Width grows with flow, so a river visibly
    * gathers its tributaries, and mouths flare where they meet the sea.
    */
-  private buildRivers(w: World, s: Surface, P: Float32Array, C: Float32Array) {
+  private buildRivers(w: World, s: SurfaceQueries, P: Float32Array, C: Float32Array) {
     const g = w.grid, T = w.riverThreshold;
     const spacing = Math.sqrt((4 * Math.PI) / g.count);
     const meander = makeSimplex(w.params.seed * 5 + 13);
@@ -381,20 +368,12 @@ export class PlanetView {
   }
 }
 
-function colorFor(w: World, c: number, mode: ViewMode, out: THREE.Color) {
-  switch (mode) {
-    case 'biome':
-      return out.setHex(BIOMES[w.biome[c]].color);
-    case 'elevation': {
-      const e = w.water[c] === WATER_LAKE ? w.surface[c] : w.elevation[c];
-      if (w.water[c] === WATER_OCEAN) return out.setHSL(0.6, 0.6, 0.15 + 0.3 * (1 + e));
-      return out.setHSL(0.33 - 0.33 * e, 0.45, 0.3 + 0.45 * e);
-    }
-    case 'temperature':
-      return out.setHSL(0.66 - 0.66 * w.temperature[c], 0.75, 0.5);
-    case 'moisture':
-      return out.setHSL(0.1 + 0.5 * w.moisture[c], 0.6, 0.6 - 0.25 * w.moisture[c]);
-    case 'plates':
-      return out.setHSL(hash01(w.plate[c] + 1), 0.55, w.water[c] === WATER_OCEAN ? 0.35 : 0.6);
-  }
+function toGeometry(m: MeshData): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(m.position, 3));
+  if (m.normal) g.setAttribute('normal', new THREE.BufferAttribute(m.normal, 3));
+  if (m.color) g.setAttribute('color', new THREE.BufferAttribute(m.color, 3));
+  if (m.depth) g.setAttribute('depth', new THREE.BufferAttribute(m.depth, 1));
+  if (m.index) g.setIndex(new THREE.BufferAttribute(m.index, 1));
+  return g;
 }

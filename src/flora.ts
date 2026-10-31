@@ -17,6 +17,29 @@ export interface TreeSpot {
   shade: number;
 }
 
+/** Trees packed into typed arrays, so they cross from the worker cheaply. */
+export interface TreeData {
+  pos: Float32Array;    // xyz per tree
+  size: Float32Array;
+  spin: Float32Array;
+  shade: Float32Array;
+  kind: Uint8Array;
+  color: Uint32Array;
+}
+
+export function packTrees(spots: TreeSpot[]): TreeData {
+  const n = spots.length;
+  const d: TreeData = {
+    pos: new Float32Array(n * 3), size: new Float32Array(n), spin: new Float32Array(n),
+    shade: new Float32Array(n), kind: new Uint8Array(n), color: new Uint32Array(n),
+  };
+  spots.forEach((t, i) => {
+    d.pos[i * 3] = t.x; d.pos[i * 3 + 1] = t.y; d.pos[i * 3 + 2] = t.z;
+    d.size[i] = t.s; d.spin[i] = t.spin; d.shade[i] = t.shade; d.kind[i] = t.kind; d.color[i] = t.color;
+  });
+  return d;
+}
+
 /** Per biome: [kind, colour, expected trees per cell, size multiplier]. */
 export const FLORA: Partial<Record<number, [TreeKind, number, number, number?][]>> = {
   [B.TAIGA]: [[CONIFER, 0x2d4a30, 8, 1.1]],
@@ -61,26 +84,27 @@ function treeGeometries(): THREE.BufferGeometry[] {
 let shared: THREE.BufferGeometry[] | null = null;
 export const treeMaterial = new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.9 });
 
-export function buildForest(spots: TreeSpot[]): THREE.InstancedMesh[] {
+export function buildForest(t: TreeData): THREE.InstancedMesh[] {
   shared ??= treeGeometries();
-  const byKind: TreeSpot[][] = [[], [], [], []];
-  for (const s of spots) byKind[s.kind].push(s);
+  const byKind: number[][] = [[], [], [], []];
+  for (let i = 0; i < t.kind.length; i++) byKind[t.kind[i]].push(i);
   const up = new THREE.Vector3(0, 1, 0), n = new THREE.Vector3(), q = new THREE.Quaternion(),
     spin = new THREE.Quaternion(), m = new THREE.Matrix4(), p = new THREE.Vector3(), sc = new THREE.Vector3(),
     color = new THREE.Color();
   return byKind.map((list, kind) => {
     const mesh = new THREE.InstancedMesh(shared![kind], treeMaterial, Math.max(1, list.length));
     mesh.count = list.length;
-    list.forEach((t, i) => {
-      n.set(t.x, t.y, t.z).normalize();
+    list.forEach((j, i) => {
+      const x = t.pos[j * 3], y = t.pos[j * 3 + 1], z = t.pos[j * 3 + 2], s = t.size[j];
+      n.set(x, y, z).normalize();
       q.setFromUnitVectors(up, n);
-      spin.setFromAxisAngle(n, t.spin);
+      spin.setFromAxisAngle(n, t.spin[j]);
       q.premultiply(spin);
-      p.set(t.x, t.y, t.z).addScaledVector(n, -0.04 * t.s);
-      sc.setScalar(t.s);
+      p.set(x, y, z).addScaledVector(n, -0.04 * s);
+      sc.setScalar(s);
       m.compose(p, q, sc);
       mesh.setMatrixAt(i, m);
-      color.setHex(t.color).multiplyScalar(t.shade);
+      color.setHex(t.color[j]).multiplyScalar(t.shade[j]);
       mesh.setColorAt(i, color);
     });
     mesh.instanceMatrix.needsUpdate = true;

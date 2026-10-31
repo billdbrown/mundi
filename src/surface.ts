@@ -10,17 +10,91 @@ import * as THREE from 'three';
 import { B } from './biomes.ts';
 import { WATER_LAND, WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { makeRng } from './rng.ts';
-import type { Noise3 } from './noise.ts';
-import { FLORA, type TreeSpot } from './flora.ts';
+import { makeSimplex, type Noise3 } from './noise.ts';
+import { FLORA, packTrees, type TreeSpot, type TreeData } from './flora.ts';
+import { cellColors, type ViewMode, type TerrainStyle } from './colors.ts';
+import type { Grid } from './grid.ts';
 
 export const SEA = 1.0;
 
-export interface Surface {
+interface Surface {
   terrain: THREE.BufferGeometry;
-  /** Cell of each terrain triangle, for picking. */
   faces: Int32Array;
   water: THREE.BufferGeometry | null;
   trees: TreeSpot[];
+  /** Height of each cell's centre (smooth) or flat top (tiles). */
+  cellTop: Float32Array;
+  /** Height at each corner (smooth only). */
+  cornerH: Float32Array | null;
+}
+
+/** Raw arrays for one mesh: what crosses from the worker to the page. */
+export interface MeshData {
+  position: Float32Array;
+  normal?: Float32Array;
+  color?: Float32Array;
+  depth?: Float32Array;
+  index?: Uint32Array;
+}
+
+/** Everything the page needs to draw a world, as plain transferable data. */
+export interface SurfaceData {
+  style: TerrainStyle;
+  terrain: MeshData;
+  /** Cell of each terrain triangle, for picking. */
+  faces: Int32Array;
+  water: MeshData | null;
+  trees: TreeData;
+  cellTop: Float32Array;
+  cornerH: Float32Array | null;
+}
+
+export interface BuildOptions {
+  mode: ViewMode;
+  style: TerrainStyle;
+  relief: number;
+  blend: boolean;
+  trees: boolean;
+}
+
+function meshData(geo: THREE.BufferGeometry): MeshData {
+  const a = (name: string) => geo.getAttribute(name)?.array as Float32Array | undefined;
+  return {
+    position: a('position')!, normal: a('normal'), color: a('color'), depth: a('depth'),
+    index: geo.index ? Uint32Array.from(geo.index.array) : undefined,
+  };
+}
+
+/** Builds the meshes for a world. Pure: runs in the worker. */
+export function buildSurfaceData(world: World, o: BuildOptions): SurfaceData {
+  const seed = world.params.seed;
+  const input: SurfaceInput = {
+    world, cellColor: cellColors(world, o.mode), relief: o.relief, blend: o.blend, flora: o.trees,
+    natural: o.mode === 'biome', tint: makeSimplex(seed * 5 + 11), rough: makeSimplex(seed * 5 + 12),
+  };
+  const s = o.style === 'smooth' ? buildSmooth(input) : buildTiles(input);
+  return {
+    style: o.style, terrain: meshData(s.terrain), faces: s.faces,
+    water: s.water ? meshData(s.water) : null, trees: packTrees(s.trees),
+    cellTop: s.cellTop, cornerH: s.cornerH,
+  };
+}
+
+/** Buffers in a SurfaceData that can be handed over to the page without copying. */
+export function surfaceTransfer(d: SurfaceData): ArrayBuffer[] {
+  const out = new Set<ArrayBuffer>();
+  const add = (a?: ArrayBufferView | null) => { if (a) out.add(a.buffer as ArrayBuffer); };
+  for (const m of [d.terrain, d.water]) {
+    if (!m) continue;
+    add(m.position); add(m.normal); add(m.color); add(m.depth); add(m.index);
+  }
+  add(d.faces); add(d.cellTop); add(d.cornerH);
+  for (const v of Object.values(d.trees)) add(v as ArrayBufferView);
+  return [...out];
+}
+
+/** Height lookups the page needs for rivers, grid lines and the hover outline. */
+export interface SurfaceQueries {
   /** Height at the centre of a cell. */
   centerH: (c: number) => number;
   /** Heights of the shared edge c → neighbors[c][i], seen from c's side and from the far side. */
@@ -29,7 +103,27 @@ export interface Surface {
   outlineH: (c: number, i: number) => number;
 }
 
-export interface SurfaceInput {
+export function surfaceQueries(d: SurfaceData, g: Grid): SurfaceQueries {
+  const top = d.cellTop, cornerH = d.cornerH;
+  if (d.style === 'smooth' && cornerH) {
+    return {
+      centerH: (c) => top[c],
+      edgeH: (c, i) => {
+        const ks = g.corners[c];
+        const h = (cornerH[ks[i]] + cornerH[ks[(i + 1) % ks.length]]) / 2;
+        return [h, h];
+      },
+      outlineH: (c, i) => Math.max(cornerH[g.corners[c][i]], SEA) + 0.0015,
+    };
+  }
+  return {
+    centerH: (c) => top[c],
+    edgeH: (c, i) => [top[c], top[g.neighbors[c][i]]],
+    outlineH: (c) => Math.max(top[c], SEA) + 0.002,
+  };
+}
+
+interface SurfaceInput {
   world: World;
   /** Linear RGB per cell. */
   cellColor: Float32Array;
@@ -163,7 +257,7 @@ function treeBudget(world: World): number {
 
 // ---------------------------------------------------------------------------------------------
 
-export function buildSmooth(inp: SurfaceInput): Surface {
+function buildSmooth(inp: SurfaceInput): Surface {
   const { world: w, cellColor, tint, rough } = inp;
   const g = w.grid, N = g.count, P = g.centers, C = g.cornerPos, K = C.length / 3;
   const relief = 0.05 * inp.relief;
@@ -337,21 +431,12 @@ export function buildSmooth(inp: SurfaceInput): Surface {
     water.setIndex(windex);
   }
 
-  return {
-    terrain, faces: Int32Array.from(faces), water, trees,
-    centerH: (c) => cellH[c],
-    edgeH: (c, i) => {
-      const ks = g.corners[c];
-      const h = (cornerH[ks[i]] + cornerH[ks[(i + 1) % ks.length]]) / 2;
-      return [h, h];
-    },
-    outlineH: (c, i) => Math.max(cornerH[g.corners[c][i]], SEA) + 0.0015,
-  };
+  return { terrain, faces: Int32Array.from(faces), water, trees, cellTop: cellH, cornerH };
 }
 
 // ---------------------------------------------------------------------------------------------
 
-export function buildTiles(inp: SurfaceInput): Surface {
+function buildTiles(inp: SurfaceInput): Surface {
   const { world: w, cellColor, tint } = inp;
   const g = w.grid, N = g.count, P = g.centers, C = g.cornerPos;
   const relief = 0.04 * inp.relief;
@@ -451,11 +536,6 @@ export function buildTiles(inp: SurfaceInput): Surface {
     water.setAttribute('depth', new THREE.Float32BufferAttribute(wdepth, 1));
   }
 
-  return {
-    terrain, faces: Int32Array.from(faces), water, trees,
-    centerH: (c) => top[c],
-    edgeH: (c, i) => [top[c], top[g.neighbors[c][i]]],
-    outlineH: (c) => Math.max(top[c], SEA) + 0.002,
-  };
+  return { terrain, faces: Int32Array.from(faces), water, trees, cellTop: top, cornerH: null };
 }
 
