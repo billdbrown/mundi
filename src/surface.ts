@@ -280,7 +280,8 @@ function buildSmooth(inp: SurfaceInput): Surface {
   for (let c = 0; c < N; c++) {
     if (!w.river[c]) continue;
     const carve = Math.min(0.3, 0.07 * Math.log2(1 + w.flow[c] / w.riverThreshold));
-    cellH[c] = Math.max(SEA + 0.0009, cellH[c] - carve * relief);
+    // Floors stay above the beach-sand band (SEA + 0.0017), or every river reads as a shoreline.
+    cellH[c] = Math.max(Math.min(cellH[c], SEA + 0.0024), cellH[c] - carve * relief);
   }
   const cornerCells = cornerCellsOf(w);
   const rimH = (k: number) => {

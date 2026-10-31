@@ -1,6 +1,6 @@
 /** Cell colours for each view mode. Pure, so it runs in the worker. */
 import * as THREE from 'three';
-import { BIOMES } from './biomes.ts';
+import { B, BIOMES } from './biomes.ts';
 import { WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { hash01 } from './rng.ts';
 
@@ -26,10 +26,18 @@ export function colorFor(w: World, c: number, mode: ViewMode, out: THREE.Color):
 }
 
 /** Linear RGB per cell. */
+const DRY = new Set<number>([B.DESERT, B.SAVANNA, B.STEPPE, B.BEACH]);
+const OASIS = new THREE.Color(0x56692f);
+
 export function cellColors(w: World, mode: ViewMode): Float32Array {
   const N = w.grid.count, out = new Float32Array(N * 3), tmp = new THREE.Color();
   for (let c = 0; c < N; c++) {
     colorFor(w, c, mode, tmp);
+    // Rivers through dry country show from space as green corridors (the Nile), not blue lines.
+    if (mode === 'biome' && DRY.has(w.biome[c])) {
+      const near = w.river[c] ? 0.65 : w.grid.neighbors[c].some((n) => w.river[n] >= 2) ? 0.3 : 0;
+      if (near) tmp.lerp(OASIS, near);
+    }
     out[c * 3] = tmp.r; out[c * 3 + 1] = tmp.g; out[c * 3 + 2] = tmp.b;
   }
   return out;

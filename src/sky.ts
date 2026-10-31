@@ -10,10 +10,12 @@ export interface CloudUniforms {
   uCloudShadow: { value: number };
   /** Seconds; drives how cloud shapes evolve. */
   uCloudTime: { value: number };
+  /** Sun direction, so shadows fall on the side of a cloud away from the sun. */
+  uCloudSun: { value: THREE.Vector3 };
 }
 
 export function makeCloudUniforms(): CloudUniforms {
-  return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 } };
+  return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) } };
 }
 
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
@@ -41,6 +43,7 @@ export const NOISE_GLSL = /* glsl */`
 const CLOUD_GLSL = /* glsl */`
   uniform sampler2D uCloudMap;
   uniform float uCloudRot, uCloudShadow, uCloudTime;
+  uniform vec3 uCloudSun;
   // Own noise (distinct names), so this chunk can sit beside NOISE_GLSL in one shader.
   float cnHash(vec3 p) {
     p = fract(p * 0.3183099 + 0.1);
@@ -69,7 +72,11 @@ const CLOUD_GLSL = /* glsl */`
   float cloudAlpha(float cover) { return smoothstep(0.47, 0.86, cover); }
   float cloudShade(vec3 p) {
     if (uCloudShadow <= 0.0) return 1.0;
-    vec3 d = normalize(p);
+    vec3 n = normalize(p);
+    // The cloud shading this point sits up the line toward the sun, at cloud height: offset the
+    // lookup sunward, more when the sun is low (capped near the terminator).
+    float mu = max(dot(n, uCloudSun), 0.25);
+    vec3 d = normalize(n + (uCloudSun - n * dot(n, uCloudSun)) * (0.016 / mu));
     float c = cos(uCloudRot), s = sin(uCloudRot);
     vec3 q = vec3(d.x * c - d.z * s, d.y, d.x * s + d.z * c);
     float theta = acos(clamp(q.y, -1.0, 1.0));
@@ -235,8 +242,10 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         float diff = 0.55 + 0.45 * max(dot(N, uSunDir), 0.0);
         vec3 R = reflect(-uSunDir, N);
         // Glint: broad and soft from orbit, tight and bright up close.
-        float shine = mix(110.0, 380.0, near);
-        float spec = pow(max(dot(R, V), 0.0), shine) * mix(0.45, 2.2, near);
+        // Glint: from orbit a broad, dim, silvery patch (the sea is rough at that scale), up close
+        // a tight bright highlight.
+        float shine = mix(14.0, 380.0, near);
+        float spec = pow(max(dot(R, V), 0.0), shine) * mix(0.32, 2.2, near);
         float shade = cloudShade(vWorld);
         // Night: the sea goes nearly black with a faint moonlit blue, and surf, glint and sky
         // reflection all dim with it. (Ng, not the rippled N, so the terminator stays soft.)

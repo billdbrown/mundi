@@ -296,6 +296,7 @@ export class PlanetView {
     }
     this.cloudU.uCloudRot.value = deck.rotation.y;
     this.cloudU.uCloudTime.value = this.time;
+    this.cloudU.uCloudSun.value.copy(this.sunDir);
     if (this.streams) this.streams.visible = this.opts.rivers && this.opts.mode === 'biome' && d < 1.6;
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
 
