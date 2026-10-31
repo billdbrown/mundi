@@ -88,6 +88,18 @@ function placeTrees(
   }
 }
 
+/**
+ * Keeps trees out of river channels. A river enters and leaves a cell through edges and bends
+ * through the centre, so in a river cell: nothing in the fan triangles on those edges, and
+ * nothing close to the centre (a = barycentric weight of the centre).
+ */
+function inRiver(w: World, c: number, i: number, a: number): boolean {
+  const g = w.grid, nb = g.neighbors[c][i];
+  const onEdge = (w.river[c] && w.downstream[c] === nb) || (w.river[nb] && w.downstream[nb] === c);
+  if (onEdge) return true;
+  return w.river[c] > 0 && a > 0.55;
+}
+
 function treeBudget(world: World): number {
   let land = 0;
   for (let c = 0; c < world.grid.count; c++) if (world.water[c] === WATER_LAND) land++;
@@ -114,6 +126,13 @@ export function buildSmooth(inp: SurfaceInput): Surface {
     } else {
       cellH[c] = landH(w.elevation[c]);
     }
+  }
+  // Rivers carve valleys, deeper for bigger rivers. Corners average their cells, so carving the
+  // river cells alone is enough to lower the edges between them too.
+  for (let c = 0; c < N; c++) {
+    if (!w.river[c]) continue;
+    const carve = Math.min(0.3, 0.07 * Math.log2(1 + w.flow[c] / w.riverThreshold));
+    cellH[c] = Math.max(SEA + 0.0009, cellH[c] - carve * relief);
   }
   const cornerCells = cornerCellsOf(w);
   const rimH = (k: number) => {
@@ -229,6 +248,7 @@ export function buildSmooth(inp: SurfaceInput): Surface {
 
       if (inp.flora && w.water[c] === WATER_LAND) {
         placeTrees(w, c, m, rng, mul, spacing, (a, bb, cc) => {
+          if (inRiver(w, c, i, a)) return null;
           const [vs, ws] = subTri(a, bb, cc, iA, iB, iC, iAB, iBC, iCA);
           let x = 0, y = 0, z = 0;
           for (let j = 0; j < 3; j++) { x += pos[vs[j] * 3] * ws[j]; y += pos[vs[j] * 3 + 1] * ws[j]; z += pos[vs[j] * 3 + 2] * ws[j]; }
@@ -333,7 +353,7 @@ export function buildTiles(inp: SurfaceInput): Surface {
         wdepth.push(SEA - h, cornerDepth(k0), cornerDepth(k1));
       }
       if (inp.flora && w.water[c] === WATER_LAND) {
-        placeTrees(w, c, m, rng, mul, spacing, (a, bb, c2) => [
+        placeTrees(w, c, m, rng, mul, spacing, (a, bb, c2) => inRiver(w, c, i, a) ? null : [
           (a * px + bb * C[k0 * 3] + c2 * C[k1 * 3]) * h,
           (a * py + bb * C[k0 * 3 + 1] + c2 * C[k1 * 3 + 1]) * h,
           (a * pz + bb * C[k0 * 3 + 2] + c2 * C[k1 * 3 + 2]) * h,

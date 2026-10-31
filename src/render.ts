@@ -1,8 +1,5 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
-import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { BIOMES } from './biomes.ts';
 import { WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { hash01 } from './rng.ts';
@@ -39,8 +36,7 @@ export class PlanetView {
   private cloudU = makeCloudUniforms();
   private waterMat = makeWaterMaterial(this.cloudU);
   private gridLines?: THREE.LineSegments;
-  private riverLines: LineSegments2[] = [];
-  private riverMats: LineMaterial[] = [];
+  private rivers?: THREE.Mesh;
   private forest: THREE.InstancedMesh[] = [];
   private clouds: THREE.Group = makeClouds();
   private cloudSeed = -1;
@@ -126,7 +122,7 @@ export class PlanetView {
   private applyVisibility() {
     const real = this.opts.mode === 'biome';
     if (this.gridLines) this.gridLines.visible = this.opts.grid;
-    for (const r of this.riverLines) r.visible = this.opts.rivers && real;
+    if (this.rivers) this.rivers.visible = this.opts.rivers && real;
     for (const f of this.forest) f.visible = this.opts.trees && real;
     if (this.water) this.water.visible = real;
     this.clouds.visible = this.opts.clouds && real;
@@ -161,7 +157,6 @@ export class PlanetView {
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    for (const m of this.riverMats) m.resolution.set(w, h);
   }
 
   private frame() {
@@ -189,22 +184,18 @@ export class PlanetView {
     this.cloudU.uCloudRot.value = deck.rotation.y;
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
 
-    const px = THREE.MathUtils.clamp(4 / d, 1, 5);
-    [0.5, 0.85, 1.4].forEach((k, i) => { if (this.riverMats[i]) this.riverMats[i].linewidth = px * k; });
     this.renderer.render(this.scene, this.camera);
   }
 
   private dispose() {
-    for (const o of [this.terrain, this.water, this.gridLines, ...this.riverLines]) {
+    for (const o of [this.terrain, this.water, this.gridLines, this.rivers]) {
       if (!o) continue;
       this.planet.remove(o);
       o.geometry.dispose();
-      if (o !== this.water) (o.material as THREE.Material).dispose();
+      if (o !== this.water && o !== this.rivers) (o.material as THREE.Material).dispose();
     }
     for (const f of this.forest) { this.planet.remove(f); f.dispose(); }
-    this.terrain = this.water = this.gridLines = undefined;
-    this.riverLines = [];
-    this.riverMats = [];
+    this.terrain = this.water = this.gridLines = this.rivers = undefined;
     this.forest = [];
   }
 
@@ -268,11 +259,18 @@ export class PlanetView {
     this.highlight(-1);
   }
 
-  /** Rivers as curves: in through one edge, bending through the cell centre, out the other. */
+  /**
+   * Rivers as ribbons of the water surface: in through one edge, bending through the cell centre
+   * with a little meander, out through the next. Width grows with flow, so a river visibly
+   * gathers its tributaries, and mouths flare where they meet the sea.
+   */
   private buildRivers(w: World, s: Surface, P: Float32Array, C: Float32Array) {
     const g = w.grid, T = w.riverThreshold;
-    const tiers: number[][] = [[], [], []];
-    const edgePoint = (c: number, i: number): [number, number, number] => {
+    const spacing = Math.sqrt((4 * Math.PI) / g.count);
+    const meander = makeSimplex(w.params.seed * 5 + 13);
+    const mf = 1.6 / spacing;
+    const widthOf = (f: number) => spacing * Math.min(0.26, 0.035 + 0.045 * Math.log2(1 + f / T));
+    const edgePoint = (c: number, i: number): number[] => {
       const ks = g.corners[c];
       let k0 = ks[i], k1 = ks[(i + 1) % ks.length];
       if (k0 > k1) [k0, k1] = [k1, k0]; // same point from both sides
@@ -283,55 +281,90 @@ export class PlanetView {
       const l = Math.hypot(x, y, z);
       return [x / l, y / l, z / l];
     };
-    const LIFT = 0.0016;
+
+    const pos: number[] = [], depth: number[] = [], index: number[] = [];
+    const LIFT = 0.0012, RIVER_DEPTH = 0.0045;
+    const strip = (pts: number[][], widths: number[], side?: number[]) => {
+      const base = pos.length / 3;
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        let sx: number, sy: number, sz: number;
+        if (side) [sx, sy, sz] = side;
+        else {
+          const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+          const tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2];
+          const l = Math.hypot(p[0], p[1], p[2]);
+          const ux = p[0] / l, uy = p[1] / l, uz = p[2] / l;
+          sx = ty * uz - tz * uy; sy = tz * ux - tx * uz; sz = tx * uy - ty * ux;
+          const sl = Math.hypot(sx, sy, sz) || 1; sx /= sl; sy /= sl; sz /= sl;
+        }
+        const hw = widths[i] / 2;
+        pos.push(p[0] + sx * hw, p[1] + sy * hw, p[2] + sz * hw, p[0] - sx * hw, p[1] - sy * hw, p[2] - sz * hw);
+        depth.push(RIVER_DEPTH, RIVER_DEPTH);
+      }
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = base + i * 2;
+        index.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+        if (side) index.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); // waterfalls: both faces
+      }
+    };
+
     for (let c = 0; c < g.count; c++) {
       if (!w.river[c]) continue;
       const d = w.downstream[c];
       const iOut = g.neighbors[c].indexOf(d);
       if (iOut < 0) continue;
-      const f = w.flow[c];
-      const seg = tiers[f > 10 * T ? 2 : f > 3 * T ? 1 : 0];
       const out = edgePoint(c, iOut);
       const [hOut, hOutFar] = s.edgeH(c, iOut);
-      const ctr: [number, number, number] = [P[c * 3], P[c * 3 + 1], P[c * 3 + 2]];
+      const ctr = [P[c * 3], P[c * 3 + 1], P[c * 3 + 2]];
       const hC = s.centerH(c);
+      let wOut = widthOf(w.flow[c]);
+      if (w.water[d] !== 0) wOut *= 1.35; // mouth
 
-      const starts: { p: [number, number, number]; h: number }[] = [];
+      const starts: { p: number[]; h: number; w: number }[] = [];
       g.neighbors[c].forEach((u, j) => {
-        if (w.river[u] && w.downstream[u] === c) starts.push({ p: edgePoint(c, j), h: s.edgeH(c, j)[0] });
+        if (w.river[u] && w.downstream[u] === c) starts.push({ p: edgePoint(c, j), h: s.edgeH(c, j)[0], w: widthOf(w.flow[u]) });
       });
-      if (!starts.length) starts.push({ p: ctr, h: hC });
+      if (!starts.length) starts.push({ p: ctr, h: hC, w: wOut * 0.4 });
 
       for (const st of starts) {
-        let prev: number[] | null = null;
-        for (let k = 0; k <= 8; k++) {
-          const t = k / 8, a = (1 - t) * (1 - t), b = 2 * t * (1 - t), cc = t * t;
+        // Meander sideways, perpendicular to the chord, tapering to zero at both ends so
+        // neighbouring cells still join up.
+        const chx = out[0] - st.p[0], chy = out[1] - st.p[1], chz = out[2] - st.p[2];
+        let px = chy * ctr[2] - chz * ctr[1], py = chz * ctr[0] - chx * ctr[2], pz = chx * ctr[1] - chy * ctr[0];
+        const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
+        const pts: number[][] = [], widths: number[] = [];
+        const STEPS = 10;
+        for (let k = 0; k <= STEPS; k++) {
+          const t = k / STEPS, a = (1 - t) * (1 - t), b = 2 * t * (1 - t), cc = t * t;
           let x = a * st.p[0] + b * ctr[0] + cc * out[0];
           let y = a * st.p[1] + b * ctr[1] + cc * out[1];
           let z = a * st.p[2] + b * ctr[2] + cc * out[2];
+          const off = Math.sin(Math.PI * t) * spacing * 0.22 * meander(x * mf, y * mf, z * mf);
+          x += px * off; y += py * off; z += pz * off;
           const l = Math.hypot(x, y, z);
           const h = Math.max(a * st.h + b * hC + cc * hOut, SEA) + LIFT;
-          x = (x / l) * h; y = (y / l) * h; z = (z / l) * h;
-          if (prev) seg.push(prev[0], prev[1], prev[2], x, y, z);
-          prev = [x, y, z];
+          pts.push([(x / l) * h, (y / l) * h, (z / l) * h]);
+          widths.push(st.w + (wOut - st.w) * t);
         }
+        strip(pts, widths);
       }
-      if (hOutFar < hOut) { // a waterfall down a terrace wall
+      if (hOutFar < hOut - 1e-5) { // a waterfall down a terrace wall
         const h0 = hOut + LIFT, h1 = Math.max(hOutFar, SEA) + LIFT;
-        seg.push(out[0] * h0, out[1] * h0, out[2] * h0, out[0] * h1, out[1] * h1, out[2] * h1);
+        const fx = P[d * 3] - ctr[0], fy = P[d * 3 + 1] - ctr[1], fz = P[d * 3 + 2] - ctr[2];
+        let sx = out[1] * fz - out[2] * fy, sy = out[2] * fx - out[0] * fz, sz = out[0] * fy - out[1] * fx;
+        const sl = Math.hypot(sx, sy, sz) || 1; sx /= sl; sy /= sl; sz /= sl;
+        strip([[out[0] * h0, out[1] * h0, out[2] * h0], [out[0] * h1, out[1] * h1, out[2] * h1]], [wOut, wOut], [sx, sy, sz]);
       }
     }
-    for (const seg of tiers) {
-      const lg = new LineSegmentsGeometry();
-      lg.setPositions(seg.length ? seg : [0, 0, 0, 0, 0, 0]);
-      const lm = new LineMaterial({ color: 0x3f8dcc, linewidth: 2, worldUnits: false });
-      lm.resolution.set(this.container.clientWidth, this.container.clientHeight);
-      const line = new LineSegments2(lg, lm);
-      line.renderOrder = 3;
-      this.riverLines.push(line);
-      this.riverMats.push(lm);
-      this.planet.add(line);
-    }
+    if (!index.length) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('depth', new THREE.Float32BufferAttribute(depth, 1));
+    geo.setIndex(index);
+    this.rivers = new THREE.Mesh(geo, this.waterMat);
+    this.rivers.renderOrder = 3;
+    this.planet.add(this.rivers);
   }
 }
 

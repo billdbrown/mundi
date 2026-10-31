@@ -25,11 +25,18 @@ for (let i = 0; i < Number(process.env.ZOOM ?? 8); i++) { await page.mouse.wheel
 await page.waitForTimeout(1200);
 await page.screenshot({ path: `${out}/close.png` });
 // Fly to a coastline and look along it at an angle, for judging water and shores.
-const coast = await page.evaluate((alt) => {
+const coast = await page.evaluate(([alt, spot]) => {
   const { view, world: w } = window.worldgen;
   const g = w.grid, P = g.centers;
   let best = -1, bestScore = -1;
-  for (let c = 0; c < g.count; c++) {
+  if (spot === 'river') {
+    // The biggest river cell away from the poles.
+    for (let c = 0; c < g.count; c++) {
+      if (!w.river[c] || Math.abs(P[c * 3 + 1]) > 0.6) continue;
+      if (w.flow[c] > bestScore) { bestScore = w.flow[c]; best = c; }
+    }
+  }
+  for (let c = 0; c < g.count && spot !== 'river'; c++) {
     if (w.water[c] !== 1) continue;
     const land = g.neighbors[c].filter((n) => w.water[n] === 0).length;
     const lat = Math.abs(P[c * 3 + 1]);
@@ -41,7 +48,7 @@ const coast = await page.evaluate((alt) => {
   let tx = -z, ty = 0, tz = x; const tl = Math.hypot(tx, ty, tz) || 1; tx /= tl; tz /= tl;
   view.camera.position.set(x * alt + tx * 0.06, y * alt, z * alt + tz * 0.06);
   return best;
-}, Number(process.env.ALT ?? 1.06));
+}, [Number(process.env.ALT ?? 1.06), process.env.SPOT ?? 'coast']);
 await page.waitForTimeout(1500);
 await page.screenshot({ path: `${out}/coast.png` });
 console.log('coast cell', coast);
