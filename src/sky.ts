@@ -63,9 +63,10 @@ const CLOUD_GLSL = /* glsl */`
   float cloudCover(float raw, vec3 d, float t) {
     float a = cnNoise(d * 7.0 + vec3(0.030, 0.020, -0.025) * t) - 0.5;
     float b = cnNoise(d * 19.0 - vec3(0.050, 0.035, 0.045) * t) - 0.5;
-    return raw + a * 0.26 + b * 0.10;
+    return raw + a * 0.15 + b * 0.06;   // gentle, so the painted cell and streak patterns survive
   }
-  float cloudAlpha(float cover) { return smoothstep(0.5, 0.72, cover); }
+  // Wide ramp: thin cloud is translucent, only the cores are opaque.
+  float cloudAlpha(float cover) { return smoothstep(0.47, 0.86, cover); }
   float cloudShade(vec3 p) {
     if (uCloudShadow <= 0.0) return 1.0;
     vec3 d = normalize(p);
@@ -308,7 +309,10 @@ export function makeClouds(u: CloudUniforms): THREE.Group {
       .replace('#include <map_fragment>', `#include <map_fragment>
         #ifdef USE_MAP
           float cover = cloudCover(texture2D(map, vMapUv).a, normalize(vCloudLocal), uCloudTime);
-          diffuseColor.rgb = vec3(1.0 - 0.3 * smoothstep(0.66, 0.9, cover));   // grey where thick
+          // Texture inside the cloud: lumpy tops catch more or less light; thick cores grey.
+          vec3 cd = normalize(vCloudLocal);
+          float lumps = cnNoise(cd * 90.0) * 0.6 + cnNoise(cd * 260.0) * 0.4;
+          diffuseColor.rgb = vec3((0.78 + 0.3 * lumps) * (1.0 - 0.22 * smoothstep(0.72, 0.92, cover)));
           diffuseColor.a = opacity * cloudAlpha(cover);
         #else
           diffuseColor.a = 0.0;   // compiled before the worker's texture arrives

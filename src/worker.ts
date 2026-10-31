@@ -28,7 +28,7 @@ self.onmessage = (e: MessageEvent<BuildRequest>) => {
   const t1 = performance.now();
   const surface = buildSurfaceData(last, opts);
   const t2 = performance.now();
-  const clouds = e.data.clouds ? cloudPixels(params.seed) : null;
+  const clouds = e.data.clouds ? cloudPixels(params.seed, last) : null;
   const t3 = performance.now();
   const msg: BuildResult = {
     id, world: fresh ? last : null, surface, clouds,
