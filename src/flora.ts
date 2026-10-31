@@ -53,7 +53,7 @@ function treeGeometries(): THREE.BufferGeometry[] {
 }
 
 let shared: THREE.BufferGeometry[] | null = null;
-const material = new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.9 });
+export const treeMaterial = new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.9 });
 
 export function buildForest(spots: TreeSpot[]): THREE.InstancedMesh[] {
   shared ??= treeGeometries();
@@ -63,7 +63,7 @@ export function buildForest(spots: TreeSpot[]): THREE.InstancedMesh[] {
     spin = new THREE.Quaternion(), m = new THREE.Matrix4(), p = new THREE.Vector3(), sc = new THREE.Vector3(),
     color = new THREE.Color();
   return byKind.map((list, kind) => {
-    const mesh = new THREE.InstancedMesh(shared![kind], material, Math.max(1, list.length));
+    const mesh = new THREE.InstancedMesh(shared![kind], treeMaterial, Math.max(1, list.length));
     mesh.count = list.length;
     list.forEach((t, i) => {
       n.set(t.x, t.y, t.z).normalize();

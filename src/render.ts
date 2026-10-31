@@ -8,8 +8,8 @@ import { WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { hash01 } from './rng.ts';
 import { makeSimplex } from './noise.ts';
 import { buildSmooth, buildTiles, SEA, type Surface } from './surface.ts';
-import { buildForest } from './flora.ts';
-import { makeWaterMaterial, makeClouds, cloudTexture, makeAtmosphere, makeStars } from './sky.ts';
+import { buildForest, treeMaterial } from './flora.ts';
+import { makeWaterMaterial, makeClouds, cloudTextures, makeAtmosphere, makeStars, makeCloudUniforms, applyCloudShadow } from './sky.ts';
 
 export type ViewMode = 'biome' | 'elevation' | 'temperature' | 'moisture' | 'plates';
 export type TerrainStyle = 'smooth' | 'tiles';
@@ -36,12 +36,13 @@ export class PlanetView {
   private planet = new THREE.Group();
   private terrain?: THREE.Mesh;
   private water?: THREE.Mesh;
-  private waterMat = makeWaterMaterial();
+  private cloudU = makeCloudUniforms();
+  private waterMat = makeWaterMaterial(this.cloudU);
   private gridLines?: THREE.LineSegments;
   private riverLines: LineSegments2[] = [];
   private riverMats: LineMaterial[] = [];
   private forest: THREE.InstancedMesh[] = [];
-  private clouds = makeClouds();
+  private clouds: THREE.Group = makeClouds();
   private cloudSeed = -1;
   private hover: THREE.LineLoop;
   private sun: THREE.DirectionalLight;
@@ -88,6 +89,7 @@ export class PlanetView {
     this.hover.visible = false;
     this.planet.add(this.hover);
     this.planet.add(this.clouds);
+    applyCloudShadow(treeMaterial, this.cloudU);
 
     this.scene.add(this.planet);
     this.scene.add(makeAtmosphere());
@@ -101,9 +103,13 @@ export class PlanetView {
   setWorld(world: World) {
     this.world = world;
     if (this.cloudSeed !== world.params.seed) {
-      const m = this.clouds.material as THREE.MeshStandardMaterial;
-      m.map = cloudTexture(world.params.seed);
-      m.needsUpdate = true;
+      const tex = cloudTextures(world.params.seed);
+      [tex.main, tex.cirrus].forEach((t, i) => {
+        const m = (this.clouds.children[i] as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        m.map = t;
+        m.needsUpdate = true;
+      });
+      this.cloudU.uCloudMap.value = tex.main;
       this.cloudSeed = world.params.seed;
     }
     this.rebuild();
@@ -173,9 +179,15 @@ export class PlanetView {
       const top = this.opts.style === 'smooth' ? 0.13 : 0.3;
       (this.gridLines.material as THREE.LineBasicMaterial).opacity = THREE.MathUtils.clamp(0.04 + (d - 1.1) * 0.08, 0.04, top);
     }
-    const cm = this.clouds.material as THREE.MeshStandardMaterial;
-    cm.opacity = THREE.MathUtils.clamp((d - 1.35) / 1.1, 0, 0.88);
-    this.clouds.rotation.y += dt * 0.006;
+    // Clouds thin out as you descend; their shadows stay, a little softer, so the ground keeps
+    // its dappled light.
+    const fade = THREE.MathUtils.clamp((d - 1.3) / 1.0, 0, 1);
+    const [deck, cirrus] = this.clouds.children as THREE.Mesh[];
+    for (const m of [deck, cirrus]) (m.material as THREE.MeshStandardMaterial).opacity = m.userData.baseOpacity * fade;
+    deck.rotation.y += dt * 0.006;
+    cirrus.rotation.y += dt * 0.011;
+    this.cloudU.uCloudRot.value = deck.rotation.y;
+    this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
 
     const px = THREE.MathUtils.clamp(4 / d, 1, 5);
     [0.5, 0.85, 1.4].forEach((k, i) => { if (this.riverMats[i]) this.riverMats[i].linewidth = px * k; });
@@ -217,7 +229,9 @@ export class PlanetView {
     const s = o.style === 'smooth' ? buildSmooth(input) : buildTiles(input);
     this.surface = s;
 
-    this.terrain = new THREE.Mesh(s.terrain, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 }));
+    const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+    applyCloudShadow(terrainMat, this.cloudU);
+    this.terrain = new THREE.Mesh(s.terrain, terrainMat);
     this.faceCell = s.faces;
     this.planet.add(this.terrain);
 

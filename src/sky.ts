@@ -1,19 +1,71 @@
-/** Water shader, clouds, atmosphere and stars. */
+/** Water shader, clouds (and their shadows), atmosphere and stars. */
 import * as THREE from 'three';
 import { makeSimplex, fbm } from './noise.ts';
 import { hash01 } from './rng.ts';
 
-export function makeWaterMaterial(): THREE.ShaderMaterial {
+/** Uniforms shared by every material that receives cloud shadows. */
+export interface CloudUniforms {
+  uCloudMap: { value: THREE.Texture | null };
+  uCloudRot: { value: number };
+  uCloudShadow: { value: number };
+}
+
+export function makeCloudUniforms(): CloudUniforms {
+  return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 } };
+}
+
+/**
+ * Looks up cloud cover straight above a world point. The UV maths mirrors THREE.SphereGeometry
+ * (u = φ/2π with x = −cos φ, v = 1 − θ/π) and undoes the cloud sphere's Y rotation.
+ * textureLod avoids the mip seam where φ wraps.
+ */
+const CLOUD_GLSL = /* glsl */`
+  uniform sampler2D uCloudMap;
+  uniform float uCloudRot, uCloudShadow;
+  float cloudShade(vec3 p) {
+    if (uCloudShadow <= 0.0) return 1.0;
+    vec3 d = normalize(p);
+    float c = cos(uCloudRot), s = sin(uCloudRot);
+    vec3 q = vec3(d.x * c - d.z * s, d.y, d.x * s + d.z * c);
+    float theta = acos(clamp(q.y, -1.0, 1.0));
+    float phi = atan(q.z, -q.x);
+    if (phi < 0.0) phi += 6.2831853;
+    float a = textureLod(uCloudMap, vec2(phi / 6.2831853, 1.0 - theta / 3.14159265), 1.5).a;
+    return 1.0 - uCloudShadow * a;
+  }
+`;
+
+/** Patches a built-in lit material so clouds darken what is under them. Handles instancing. */
+export function applyCloudShadow(mat: THREE.Material, u: CloudUniforms) {
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vec4 cloudP = vec4(transformed, 1.0);
+        #ifdef USE_INSTANCING
+          cloudP = instanceMatrix * cloudP;
+        #endif
+        vCloudP = (modelMatrix * cloudP).xyz;`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;\n' + CLOUD_GLSL)
+      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= cloudShade(vCloudP);');
+  };
+  mat.needsUpdate = true;
+}
+
+export function makeWaterMaterial(cloud: CloudUniforms): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
     uniforms: {
+      ...cloud,
       uTime: { value: 0 },
       uSunDir: { value: new THREE.Vector3(0, 0, 1) },
-      uShallow: { value: new THREE.Color(0x3fb6bd) },
-      uMid: { value: new THREE.Color(0x1d6f9e) },
-      uDeep: { value: new THREE.Color(0x0b2f57) },
-      uSky: { value: new THREE.Color(0x9cc7ef) },
+      uShallow: { value: new THREE.Color(0x45c0c0) },
+      uMid: { value: new THREE.Color(0x1a6a9a) },
+      uDeep: { value: new THREE.Color(0x082a50) },
+      uSky: { value: new THREE.Color(0xa8cff2) },
       uDepthScale: { value: 0.014 },
       uFoam: { value: 0.0013 },
     },
@@ -32,82 +84,153 @@ export function makeWaterMaterial(): THREE.ShaderMaterial {
       uniform vec3 uSunDir, uShallow, uMid, uDeep, uSky;
       varying float vDepth;
       varying vec3 vWorld;
+      ${CLOUD_GLSL}
+
+      float hash(vec3 p) {
+        p = fract(p * 0.3183099 + 0.1);
+        p *= 17.0;
+        return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+      }
+      float vnoise(vec3 x) {
+        vec3 i = floor(x), f = fract(x);
+        f = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(mix(hash(i), hash(i + vec3(1, 0, 0)), f.x), mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
+          mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x), mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y),
+          f.z);
+      }
+      // Three octaves of drifting noise; each drifts its own way so the surface never repeats.
+      float waves(vec3 p, float t) {
+        return vnoise(p * 520.0 + vec3(t * 0.55, 0.0, t * 0.35)) * 0.55
+             + vnoise(p * 1300.0 - vec3(0.0, t * 0.8, t * 0.45)) * 0.3
+             + vnoise(p * 3300.0 + vec3(t * 1.1)) * 0.15;
+      }
+
       void main() {
-        vec3 N = normalize(vWorld);
-        // Cheap animated ripples: a few crossing sine fields nudge the normal.
-        vec3 p = vWorld * 900.0;
+        vec3 Ng = normalize(vWorld);
+        vec3 V = normalize(cameraPosition - vWorld);
+        float dist = length(cameraPosition - vWorld);
+        // Ripples fade with distance: at orbit they would alias into stripes.
+        float near = 1.0 - smoothstep(0.12, 1.1, dist);
         float t = uTime;
-        vec3 g = vec3(
-          sin(p.y * 0.71 + t * 1.3) + sin(p.z * 1.13 - t * 0.9),
-          sin(p.z * 0.83 + t * 1.1) + sin(p.x * 1.29 + t * 0.7),
-          sin(p.x * 0.77 - t * 1.2) + sin(p.y * 1.21 + t * 0.95));
-        // Fade ripples with distance: at orbit they alias into stripes.
-        float near = 1.0 - smoothstep(0.15, 1.2, length(cameraPosition - vWorld));
-        N = normalize(N + g * 0.018 * near);
+
+        vec3 T = normalize(cross(Ng, abs(Ng.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
+        vec3 Bt = cross(Ng, T);
+        float e = 0.00035;
+        float h0 = waves(vWorld, t);
+        vec3 N = Ng;
+        if (near > 0.0) {
+          float hT = waves(vWorld + T * e, t), hB = waves(vWorld + Bt * e, t);
+          N = normalize(Ng - (T * (hT - h0) + Bt * (hB - h0)) * (0.9 * near));
+        }
 
         float d = clamp(vDepth / uDepthScale, 0.0, 1.0);
         vec3 col = d < 0.25 ? mix(uShallow, uMid, d / 0.25) : mix(uMid, uDeep, (d - 0.25) / 0.75);
+        // Light passing through wave crests in shallow water.
+        col += uShallow * (h0 - 0.5) * 0.25 * near * (1.0 - d);
 
-        vec3 V = normalize(cameraPosition - vWorld);
         float fres = pow(1.0 - max(dot(N, V), 0.0), 5.0);
-        col = mix(col, uSky, fres * 0.55);
-        float diff = 0.5 + 0.5 * max(dot(N, uSunDir), 0.0);
+        col = mix(col, uSky, 0.04 + fres * 0.55);
+        float diff = 0.55 + 0.45 * max(dot(N, uSunDir), 0.0);
         vec3 R = reflect(-uSunDir, N);
-        float spec = pow(max(dot(R, V), 0.0), 140.0) * 1.6;
-        col = col * diff + vec3(spec);
+        // Glint: broad and soft from orbit, tight and bright up close.
+        float shine = mix(110.0, 380.0, near);
+        float spec = pow(max(dot(R, V), 0.0), shine) * mix(0.45, 2.2, near);
+        float shade = cloudShade(vWorld);
+        col = col * diff * shade + vec3(spec) * shade;
 
-        float edge = 1.0 - smoothstep(0.0, uFoam, vDepth);
-        float lap = 0.65 + 0.35 * sin(t * 1.8 + (vWorld.x + vWorld.y + vWorld.z) * 500.0);
-        col = mix(col, vec3(0.93, 0.96, 0.97), clamp(edge * lap, 0.0, 1.0) * 0.75);
+        // Foam: a steady line at the shore, plus swells rolling in toward it.
+        // Depth is interpolated linearly across big triangles, so shore lines come out straight;
+        // wobbling it with noise makes the foam follow a ragged, natural-looking shore.
+        float fd = vDepth + (vnoise(vWorld * 900.0) - 0.5) * uFoam * 1.6 + (vnoise(vWorld * 2400.0) - 0.5) * uFoam * 0.7;
+        float edge = 1.0 - smoothstep(0.0, uFoam, fd);
+        float zone = 1.0 - smoothstep(0.0, uFoam * 2.5, fd);
+        float swell = smoothstep(0.8, 1.0, sin(fd / uFoam * 4.0 + t * 1.6)) * zone * 0.6;
+        float breakup = smoothstep(0.35, 0.75, vnoise(vWorld * 2600.0 + vec3(t * 0.3)));
+        float foam = clamp(edge * (0.6 + 0.4 * breakup) + swell * breakup * near, 0.0, 1.0);
+        col = mix(col, vec3(0.94, 0.97, 0.98) * shade, foam * 0.8);
 
-        float a = mix(0.5, 0.94, smoothstep(0.0, 0.35, d));
-        gl_FragColor = vec4(col, a);
+        float a = mix(0.5, 0.95, smoothstep(0.0, 0.35, d));
+        gl_FragColor = vec4(col, max(a, foam * 0.9));
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
   });
 }
 
-const cloudCache = new Map<number, THREE.Texture>();
+export interface CloudTextures { main: THREE.Texture; cirrus: THREE.Texture }
+const cloudCache = new Map<number, CloudTextures>();
 
-/** Equirectangular cloud cover from domain-warped noise, banded like Earth's (cloudy equator and 60°). */
-export function cloudTexture(seed: number): THREE.Texture {
-  const hit = cloudCache.get(seed);
-  if (hit) return hit;
-  const W = 512, H = 256;
-  const n1 = makeSimplex(seed * 31 + 7), n2 = makeSimplex(seed * 31 + 8);
+function canvasTexture(W: number, H: number, fill: (lat: number, x: number, y: number, z: number) => [number, number]): THREE.Texture {
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d')!;
   const img = ctx.createImageData(W, H);
-  for (let y = 0; y < H; y++) {
-    const lat = Math.PI / 2 - ((y + 0.5) / H) * Math.PI;
-    const band = 0.5 + 0.5 * Math.cos(6 * lat);
-    for (let x = 0; x < W; x++) {
-      const lon = ((x + 0.5) / W) * Math.PI * 2;
-      const dx = Math.cos(lat) * Math.cos(lon), dy = Math.sin(lat), dz = Math.cos(lat) * Math.sin(lon);
-      const q = fbm(n2, dx, dy, dz, 3, 1.6);
-      const v = fbm(n1, dx + q * 0.6, dy + q * 0.6, dz, 5, 2.4);
-      const cover = v + 0.2 * band - 0.24;
-      const a = Math.max(0, Math.min(1, (cover - 0.02) / 0.4));
-      const i = (y * W + x) * 4;
-      img.data[i] = img.data[i + 1] = img.data[i + 2] = 255;
-      img.data[i + 3] = Math.round(a * a * (3 - 2 * a) * 255);
+  for (let py = 0; py < H; py++) {
+    const lat = Math.PI / 2 - ((py + 0.5) / H) * Math.PI;
+    for (let px = 0; px < W; px++) {
+      const lon = ((px + 0.5) / W) * Math.PI * 2;
+      const [shade, alpha] = fill(lat, Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon));
+      const i = (py * W + px) * 4;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = Math.round(shade * 255);
+      img.data[i + 3] = Math.round(alpha * 255);
     }
   }
   ctx.putImageData(img, 0, 0);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = THREE.RepeatWrapping;
-  cloudCache.set(seed, tex);
+  tex.anisotropy = 4;
   return tex;
 }
 
-export function makeClouds(): THREE.Mesh {
-  const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, depthWrite: false, roughness: 1, opacity: 0.7 });
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1.03, 128, 64), mat);
-  mesh.renderOrder = 5;
-  return mesh;
+const smooth = (a: number, b: number, x: number) => {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * Two equirectangular cloud layers. The main deck is domain-warped noise, banded like Earth's
+ * (cloudy at the equator and 60°, clear at 30°) with grey undersides where it is thick. The
+ * cirrus layer is thin streaks stretched east–west.
+ */
+export function cloudTextures(seed: number): CloudTextures {
+  const hit = cloudCache.get(seed);
+  if (hit) return hit;
+  const n1 = makeSimplex(seed * 31 + 7), n2 = makeSimplex(seed * 31 + 8), n3 = makeSimplex(seed * 31 + 9);
+  const main = canvasTexture(768, 384, (lat, x, y, z) => {
+    const band = 0.5 + 0.5 * Math.cos(6 * lat);
+    const qx = fbm(n2, x, y, z, 3, 1.4), qy = fbm(n2, x + 4.7, y, z, 3, 1.4);
+    const v = fbm(n1, x + qx * 0.7, y + qy * 0.7, z, 6, 2.2);
+    const cover = v + 0.2 * band - 0.24;
+    const a = smooth(0.0, 0.42, cover);
+    const thick = smooth(0.25, 0.7, cover);
+    return [1 - 0.28 * thick, a];
+  });
+  const cirrus = canvasTexture(768, 384, (lat, x, y, z) => {
+    // Stretching the sample along y turns blobs into east–west streaks.
+    const v = fbm(n3, x * 1.2, y * 6, z * 1.2, 5, 1.8);
+    const band = 0.6 + 0.4 * Math.cos(4 * lat);
+    return [1, smooth(0.15, 0.6, v * band) * 0.55];
+  });
+  const out = { main, cirrus };
+  cloudCache.set(seed, out);
+  return out;
+}
+
+export function makeClouds(): THREE.Group {
+  const g = new THREE.Group();
+  const layer = (r: number, opacity: number) => {
+    const m = new THREE.Mesh(
+      new THREE.SphereGeometry(r, 160, 80),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, depthWrite: false, roughness: 1, opacity }),
+    );
+    m.renderOrder = 5;
+    m.userData.baseOpacity = opacity;
+    return m;
+  };
+  g.add(layer(1.028, 0.8), layer(1.042, 0.5));
+  return g;
 }
 
 function fresnelShell(radius: number, side: THREE.Side, power: number, strength: number, color: number): THREE.Mesh {
@@ -143,7 +266,7 @@ function fresnelShell(radius: number, side: THREE.Side, power: number, strength:
 export function makeAtmosphere(): THREE.Group {
   const g = new THREE.Group();
   g.add(fresnelShell(1.05, THREE.BackSide, 1.8, 0.7, 0x6aaeff));
-  const haze = fresnelShell(1.04, THREE.FrontSide, 3.0, 0.45, 0x8fc4ff);
+  const haze = fresnelShell(1.045, THREE.FrontSide, 3.0, 0.45, 0x8fc4ff);
   haze.renderOrder = 6;
   g.add(haze);
   return g;

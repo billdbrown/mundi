@@ -124,6 +124,9 @@ view.renderer.domElement.addEventListener('pointermove', (e) => {
 });
 view.renderer.domElement.addEventListener('pointerleave', () => { info.hidden = true; view.highlight(-1); lastCell = -1; });
 
+// Debug handle for the console and scripts/shot.mjs.
+(window as unknown as Record<string, unknown>).worldgen = { view, get world() { return world; } };
+
 readHash();
 syncInputs();
 view.setOptions({ relief });
