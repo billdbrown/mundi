@@ -11,7 +11,7 @@ import { B } from './biomes.ts';
 import { WATER_LAND, WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { makeRng } from './rng.ts';
 import { makeSimplex, type Noise3 } from './noise.ts';
-import { FLORA, packTrees, type TreeSpot, type TreeData } from './flora.ts';
+import { FLORA, ICEBERG, packTrees, type TreeSpot, type TreeData } from './flora.ts';
 import { cellColors, type ViewMode, type TerrainStyle } from './colors.ts';
 import type { Grid } from './grid.ts';
 
@@ -396,6 +396,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
   const index: number[] = [], windex: number[] = [], faces: number[] = [];
   const trees: TreeSpot[] = [];
   const rng = makeRng(w.params.seed * 13 + 5);
+  const iceRng = makeRng(w.params.seed * 13 + 9);
   const mul = treeBudget(w);
 
   for (let c = 0; c < N; c++) {
@@ -457,6 +458,16 @@ function buildSmooth(inp: SurfaceInput): Surface {
         }
       }
 
+      // Icebergs drift on cold open sea near the ice.
+      if (inp.flora && w.water[c] === WATER_OCEAN && w.biome[c] !== B.SEA_ICE && w.temperature[c] < 0.2 && iceRng() < 0.25) {
+        let wb = iceRng(), wc = iceRng();
+        if (wb + wc > 1) { wb = 1 - wb; wc = 1 - wc; }
+        const wa = 1 - wb - wc;
+        const x = wa * px + wb * C[k0 * 3] + wc * C[k1 * 3], y = wa * py + wb * C[k0 * 3 + 1] + wc * C[k1 * 3 + 1], z = wa * pz + wb * C[k0 * 3 + 2] + wc * C[k1 * 3 + 2];
+        const l = Math.hypot(x, y, z);
+        const r2 = iceRng();
+        trees.push({ x: (x / l) * SEA, y: (y / l) * SEA, z: (z / l) * SEA, kind: ICEBERG, color: 0xeef5fa, s: spacing * (0.12 + 0.25 * r2 * r2), spin: iceRng() * Math.PI * 2, shade: 0.92 + 0.08 * iceRng() });
+      }
       if (inp.flora && w.water[c] === WATER_LAND) {
         placeTrees(w, c, m, rng, mul, spacing, (wA, wB, wC) => {
           if (inRiver(w, c, i, wA)) return null;
@@ -485,7 +496,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
     // No trees on snow.
     for (let i = trees.length - 1; i >= 0; i--) {
       const t = trees[i], l = Math.hypot(t.x, t.y, t.z);
-      if (vertexTemp(t.y / l, (l - SEA) / relief, w.params.heat) < 0.2) trees.splice(i, 1);
+      if (t.kind !== ICEBERG && vertexTemp(t.y / l, (l - SEA) / relief, w.params.heat) < 0.2) trees.splice(i, 1);
     }
   }
 

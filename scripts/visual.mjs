@@ -32,6 +32,7 @@ const CASES = [
   { name: 'earth-77-coast', hash: 'seed=77', view: { spot: 'coast', alt: 1.09 } },
   { name: 'earth-77-river', hash: 'seed=77', view: { spot: 'river', alt: 1.16 } },
   { name: 'earth-77-lake', hash: 'seed=77', view: { spot: 'lake', alt: 1.14 } },
+  { name: 'earth-77-desert', hash: 'seed=77', view: { spot: 'desert', alt: 1.08 } },
   { name: 'earth-77-mountain', hash: 'seed=77', view: { spot: 'mountain', alt: 1.28 } },
   { name: 'tiles-77', hash: 'seed=77', opts: { style: 'tiles' }, view: { orbit: [180, 15, ORBIT] } },
   { name: 'tiles-77-coast', hash: 'seed=77', opts: { style: 'tiles' }, view: { spot: 'coast', alt: 1.12 } },

@@ -7,7 +7,7 @@ import type { PlanetView } from './render.ts';
 import { WATER_LAND, WATER_LAKE, WATER_OCEAN } from './world.ts';
 import { B } from './biomes.ts';
 
-export type Spot = 'coast' | 'river' | 'mountain' | 'lake';
+export type Spot = 'coast' | 'river' | 'mountain' | 'lake' | 'desert';
 
 /** A cell that shows off the named feature, chosen deterministically. */
 export function findSpot(w: World, spot: Spot): number {
@@ -23,6 +23,11 @@ export function findSpot(w: World, spot: Spot): number {
       // The middle of the biggest open (unfrozen) lake.
       if (w.water[c] === WATER_LAKE && w.biome[c] !== B.ICE && lat < 0.75) {
         score = g.neighbors[c].filter((n) => w.water[n] === WATER_LAKE).length;
+      }
+    } else if (spot === 'desert') {
+      // Deep in the biggest desert: the desert cell with the most desert around it.
+      if (w.biome[c] === B.DESERT && lat < 0.6) {
+        score = g.neighbors[c].filter((n) => w.biome[n] === B.DESERT).length + c * 1e-9;
       }
     } else if (spot === 'mountain') {
       if (w.water[c] === WATER_LAND && lat < 0.7) score = w.elevation[c];

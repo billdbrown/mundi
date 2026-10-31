@@ -3,8 +3,9 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { B } from './biomes.ts';
 
-export const CONIFER = 0, BROADLEAF = 1, SCRUB = 2, PALM = 3;
-export type TreeKind = typeof CONIFER | typeof BROADLEAF | typeof SCRUB | typeof PALM;
+export const CONIFER = 0, BROADLEAF = 1, SCRUB = 2, PALM = 3, ROCK = 4, CACTUS = 5, ICEBERG = 6;
+export type TreeKind = typeof CONIFER | typeof BROADLEAF | typeof SCRUB | typeof PALM | typeof ROCK | typeof CACTUS | typeof ICEBERG;
+const KINDS = 7;
 
 export interface TreeSpot {
   x: number; y: number; z: number;
@@ -48,11 +49,12 @@ export const FLORA: Partial<Record<number, [TreeKind, number, number, number?][]
   [B.RAINFOREST]: [[BROADLEAF, 0x2a5c24, 9, 1.2], [BROADLEAF, 0x3b6e22, 2, 1.4], [PALM, 0x3d7a2a, 1.5]],
   [B.BEACH]: [[PALM, 0x4a8a30, 0.5]],
   [B.DRY_FOREST]: [[BROADLEAF, 0x687a35, 4], [SCRUB, 0x7b8440, 1]],
-  [B.SAVANNA]: [[SCRUB, 0x7c873d, 1.3]],
+  [B.SAVANNA]: [[SCRUB, 0x7c873d, 1.3], [ROCK, 0x9a8466, 0.2, 0.5]],
+  [B.DESERT]: [[CACTUS, 0x5d7d3c, 0.7, 0.75], [ROCK, 0xa58462, 0.7, 0.6]],
   [B.GRASSLAND]: [[BROADLEAF, 0x4b7834, 0.4]],
-  [B.TUNDRA]: [[CONIFER, 0x485b43, 0.35]],
-  [B.STEPPE]: [[SCRUB, 0x86884e, 0.2]],
-  [B.MOUNTAIN]: [[CONIFER, 0x385036, 0.6]],
+  [B.TUNDRA]: [[CONIFER, 0x485b43, 0.35], [ROCK, 0x77776f, 1, 0.55]],
+  [B.STEPPE]: [[SCRUB, 0x86884e, 0.2], [ROCK, 0x8d8670, 0.4, 0.5]],
+  [B.MOUNTAIN]: [[CONIFER, 0x385036, 0.6], [ROCK, 0x6d645a, 2.2, 0.7]],
 };
 
 function trunk(): THREE.BufferGeometry {
@@ -78,7 +80,17 @@ function treeGeometries(): THREE.BufferGeometry[] {
     new THREE.CylinderGeometry(0.035, 0.06, 1.0, 4).translate(0, 0.5, 0).toNonIndexed(),
     new THREE.ConeGeometry(0.42, 0.22, 7).rotateX(Math.PI).translate(0, 1.0, 0).toNonIndexed(),
   ]);
-  return [conifer, broadleaf, scrub, palm];
+  // Props: a squat boulder, a saguaro-ish cactus, an iceberg that sits low in the water.
+  const rock = new THREE.IcosahedronGeometry(0.5, 0).scale(1, 0.55, 0.8).translate(0, 0.12, 0);
+  const cactus = mergeGeometries([
+    new THREE.CylinderGeometry(0.08, 0.09, 0.9, 6).translate(0, 0.45, 0).toNonIndexed(),
+    new THREE.CylinderGeometry(0.05, 0.05, 0.3, 5).translate(0.17, 0.6, 0).toNonIndexed(),
+    new THREE.CylinderGeometry(0.04, 0.04, 0.18, 4).rotateZ(Math.PI / 2).translate(0.09, 0.45, 0).toNonIndexed(),
+    new THREE.CylinderGeometry(0.05, 0.05, 0.22, 5).translate(-0.16, 0.48, 0).toNonIndexed(),
+    new THREE.CylinderGeometry(0.04, 0.04, 0.16, 4).rotateZ(Math.PI / 2).translate(-0.08, 0.38, 0).toNonIndexed(),
+  ]);
+  const iceberg = new THREE.IcosahedronGeometry(0.5, 0).scale(1.4, 0.75, 1.1).translate(0, 0.02, 0);
+  return [conifer, broadleaf, scrub, palm, rock, cactus, iceberg];
 }
 
 let shared: THREE.BufferGeometry[] | null = null;
@@ -86,7 +98,7 @@ export const treeMaterial = new THREE.MeshStandardMaterial({ flatShading: true, 
 
 export function buildForest(t: TreeData): THREE.InstancedMesh[] {
   shared ??= treeGeometries();
-  const byKind: number[][] = [[], [], [], []];
+  const byKind: number[][] = Array.from({ length: KINDS }, () => []);
   for (let i = 0; i < t.kind.length; i++) byKind[t.kind[i]].push(i);
   const up = new THREE.Vector3(0, 1, 0), n = new THREE.Vector3(), q = new THREE.Quaternion(),
     spin = new THREE.Quaternion(), m = new THREE.Matrix4(), p = new THREE.Vector3(), sc = new THREE.Vector3(),
