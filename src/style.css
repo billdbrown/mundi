@@ -40,6 +40,8 @@ legend { color: var(--muted); padding: 0 4px; }
 #info b { color: #fff; }
 #info span { color: var(--muted); }
 
+body.capture #panel, body.capture #info { display: none; }
+
 @media (max-width: 600px) {
   #panel { left: 8px; right: 8px; width: auto; top: 8px; max-height: 55vh; overflow: auto; }
 }

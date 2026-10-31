@@ -1,6 +1,7 @@
-import { PlanetView, type ViewMode, type TerrainStyle } from './render.ts';
+import { PlanetView, DEFAULT_VIEW, type ViewMode, type TerrainStyle, type ViewOptions } from './render.ts';
 import { generateWorld, DEFAULT_PARAMS, WATER_OCEAN, WATER_LAKE, type World, type WorldParams } from './world.ts';
 import { BIOMES } from './biomes.ts';
+import { flyTo, orbit, type Spot } from './debug.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -8,6 +9,7 @@ const view = new PlanetView($('view'));
 let params: WorldParams = { ...DEFAULT_PARAMS, seed: Math.floor(Math.random() * 1e6) };
 let relief = 1;
 let world: World;
+let timings = { gen: 0, mesh: 0 };
 
 // Parameters live in the URL hash, so a world can be shared as a link.
 function readHash() {
@@ -52,6 +54,7 @@ function regenerate() {
   const t1 = performance.now();
   view.setWorld(world);
   const t2 = performance.now();
+  timings = { gen: Math.round(t1 - t0), mesh: Math.round(t2 - t1) };
   let ocean = 0, lakes = 0, rivers = 0;
   for (let c = 0; c < world.grid.count; c++) {
     if (world.water[c] === WATER_OCEAN) ocean++;
@@ -125,7 +128,27 @@ view.renderer.domElement.addEventListener('pointermove', (e) => {
 view.renderer.domElement.addEventListener('pointerleave', () => { info.hidden = true; view.highlight(-1); lastCell = -1; });
 
 // Debug handle for the console and scripts/shot.mjs.
-(window as unknown as Record<string, unknown>).worldgen = { view, get world() { return world; } };
+(window as unknown as Record<string, unknown>).worldgen = {
+  view,
+  get world() { return world; },
+  get timings() { return timings; },
+  /** Hide the UI for clean screenshots. */
+  capture: (on: boolean) => document.body.classList.toggle('capture', on),
+  /** Stop animation at time t (null resumes), so renders repeat exactly. */
+  freeze: (t: number | null) => view.freeze(t),
+  orbit: (lon: number, lat: number, dist: number) => orbit(view, lon, lat, dist),
+  flyTo: (spot: Spot, alt: number) => flyTo(view, world, spot, alt),
+  /** Swap in a world from a hash string ("seed=7&ocean=0.5"), with view options reset to defaults. */
+  load: (hash: string, opts: Partial<ViewOptions> = {}) => {
+    history.replaceState(null, '', '#' + hash);
+    params = { ...DEFAULT_PARAMS };
+    relief = 1;
+    readHash();
+    syncInputs();
+    view.setOptions({ ...DEFAULT_VIEW, relief, ...opts });
+    regenerate();
+  },
+};
 
 readHash();
 syncInputs();

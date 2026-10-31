@@ -22,6 +22,8 @@ export interface ViewOptions {
   relief: number;
 }
 
+export const DEFAULT_VIEW: ViewOptions = { mode: 'biome', style: 'smooth', grid: true, rivers: true, trees: true, clouds: true, blend: true, relief: 1 };
+
 const REBUILD_KEYS: (keyof ViewOptions)[] = ['mode', 'style', 'blend', 'relief'];
 
 export class PlanetView {
@@ -45,10 +47,12 @@ export class PlanetView {
   private surface?: Surface;
   private faceCell: Int32Array = new Int32Array(0);
   private world?: World;
-  private opts: ViewOptions = { mode: 'biome', style: 'smooth', grid: true, rivers: true, trees: true, clouds: true, blend: true, relief: 1 };
+  private opts: ViewOptions = { ...DEFAULT_VIEW };
   private raycaster = new THREE.Raycaster();
   private clock = new THREE.Clock();
   private sunDir = new THREE.Vector3();
+  /** When set, animation stops at this time, so renders are repeatable (visual tests). */
+  private frozen: number | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -94,6 +98,11 @@ export class PlanetView {
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
     this.renderer.setAnimationLoop(() => this.frame());
+  }
+
+  freeze(t: number | null) {
+    this.frozen = t;
+    this.clock.getDelta();
   }
 
   setWorld(world: World) {
@@ -160,7 +169,7 @@ export class PlanetView {
   }
 
   private frame() {
-    const dt = this.clock.getDelta();
+    const dt = this.frozen === null ? this.clock.getDelta() : 0;
     const d = this.camera.position.length();
     // Slow the orbit as you close in, so ground-level views stay controllable.
     this.controls.rotateSpeed = Math.min(1, (d - 1) * 0.55);
@@ -181,6 +190,11 @@ export class PlanetView {
     for (const m of [deck, cirrus]) (m.material as THREE.MeshStandardMaterial).opacity = m.userData.baseOpacity * fade;
     deck.rotation.y += dt * 0.006;
     cirrus.rotation.y += dt * 0.011;
+    if (this.frozen !== null) {
+      this.waterMat.uniforms.uTime.value = this.frozen;
+      deck.rotation.y = this.frozen * 0.006;
+      cirrus.rotation.y = this.frozen * 0.011;
+    }
     this.cloudU.uCloudRot.value = deck.rotation.y;
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
 

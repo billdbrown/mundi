@@ -7,12 +7,16 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test \"test/**/*.test.ts\""
+    "test": "node --test \"test/**/*.test.ts\"",
+    "visual": "node scripts/visual.mjs",
+    "visual:update": "node scripts/visual.mjs --update"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
     "@types/three": "^0.186.0",
+    "pixelmatch": "^7.2.0",
     "playwright-core": "^1.64.1",
+    "pngjs": "^7.0.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
   },

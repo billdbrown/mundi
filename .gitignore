@@ -2,3 +2,7 @@ node_modules/
 dist/
 *.log
 .DS_Store
+test/visual/current/
+test/visual/diff/
+test/visual/report.html
+test/visual/baseline/

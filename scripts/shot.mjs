@@ -1,6 +1,7 @@
 /**
- * Screenshots of the running dev server in a local Edge, for checking the look without a person.
- * Usage: node scripts/shot.mjs <url> <outdir>
+ * Ad-hoc screenshots of a running dev server in a local Edge: orbit, far side, a zoomed view,
+ * and a close-up of a named spot. For repeatable comparisons use scripts/visual.mjs instead.
+ * Usage: [ZOOM=n] [SPOT=coast|river|mountain] [ALT=1.1] node scripts/shot.mjs <url> <outdir>
  */
 import { chromium } from 'playwright-core';
 const [url = 'http://localhost:5173/', out = '.'] = process.argv.slice(2);
@@ -25,36 +26,8 @@ for (let i = 0; i < Number(process.env.ZOOM ?? 8); i++) { await page.mouse.wheel
 await page.waitForTimeout(1200);
 await page.screenshot({ path: `${out}/close.png` });
 // Fly to a coastline and look along it at an angle, for judging water and shores.
-const coast = await page.evaluate(([alt, spot]) => {
-  const { view, world: w } = window.worldgen;
-  const g = w.grid, P = g.centers;
-  let best = -1, bestScore = -1;
-  if (spot === 'river') {
-    // The biggest river cell away from the poles.
-    for (let c = 0; c < g.count; c++) {
-      if (!w.river[c] || Math.abs(P[c * 3 + 1]) > 0.6) continue;
-      if (w.flow[c] > bestScore) { bestScore = w.flow[c]; best = c; }
-    }
-  }
-  if (spot === 'mountain') {
-    for (let c = 0; c < g.count; c++) {
-      if (w.water[c] !== 0 || Math.abs(P[c * 3 + 1]) > 0.7) continue;
-      if (w.elevation[c] > bestScore) { bestScore = w.elevation[c]; best = c; }
-    }
-  }
-  for (let c = 0; c < g.count && spot === 'coast'; c++) {
-    if (w.water[c] !== 1) continue;
-    const land = g.neighbors[c].filter((n) => w.water[n] === 0).length;
-    const lat = Math.abs(P[c * 3 + 1]);
-    const score = land * (lat < 0.5 ? 1 : 0.2) + (w.river[g.neighbors[c].find((n) => w.water[n] === 0) ?? 0] ? 3 : 0);
-    if (score > bestScore) { bestScore = score; best = c; }
-  }
-  const x = P[best * 3], y = P[best * 3 + 1], z = P[best * 3 + 2];
-  // Back off along a tangent so the view is oblique, not straight down.
-  let tx = -z, ty = 0, tz = x; const tl = Math.hypot(tx, ty, tz) || 1; tx /= tl; tz /= tl;
-  view.camera.position.set(x * alt + tx * 0.06, y * alt, z * alt + tz * 0.06);
-  return best;
-}, [Number(process.env.ALT ?? 1.06), process.env.SPOT ?? 'coast']);
+const coast = await page.evaluate(([alt, spot]) => window.worldgen.flyTo(spot, alt),
+  [Number(process.env.ALT ?? 1.06), process.env.SPOT ?? 'coast']);
 await page.waitForTimeout(1500);
 await page.screenshot({ path: `${out}/coast.png` });
 console.log('coast cell', coast);

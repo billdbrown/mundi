@@ -40,6 +40,24 @@ cells and splits each triangle with a little noise, so coasts and ridges don't t
 - a cloud layer banded like Earth's, fading as you zoom in, and an atmosphere glow
 - rivers that curve through cells and widen downstream
 
+## Checking changes
+
+```
+npm test                 # generator: grid invariants, determinism, ocean share, drainage, ice caps
+npm run visual           # renders 12 fixed views and compares them with baselines
+npm run visual:update    # accept the current renders as the new baselines
+npm run visual -- --only coast
+```
+
+`visual` freezes animation, renders each case in a headless Edge, and writes
+`test/visual/report.html` with baseline, current and diff side by side plus generation and mesh
+timings. It exits non-zero if any view changed by more than 0.1% of pixels. Renders repeat
+exactly on one machine, so the comparison can be strict.
+
+Baselines are **not committed**: they depend on the GPU that drew them, and at about 6 MB a set
+they would bloat the history. Run `npm run visual:update` once on a fresh clone, before changing
+anything.
+
 ## Not yet
 
 Rain shadows behind mountains, cloud shadows, a day/night side, and more tree variety.
