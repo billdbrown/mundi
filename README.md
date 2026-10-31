@@ -30,15 +30,31 @@ The URL hash holds every parameter, so a world you like is just a link.
 
 ## Rendering
 
-Two terrain styles. **Realistic** (default, [src/surface.ts](src/surface.ts)) blends heights across
-cells and splits each triangle with a little noise, so coasts and ridges don't trace hex edges.
-**Hex tiles** draws flat terraces with cliff walls. Both get:
+Everything heavy (generation, meshing, cloud painting) runs in a Web Worker
+([src/worker.ts](src/worker.ts)), so the page never freezes; dragging a slider only ever builds
+the latest settings.
 
-- a water mesh that knows its depth: turquoise shallows to deep blue, ripples, sun glint, foam
-  where it meets land ([src/sky.ts](src/sky.ts))
-- instanced low-poly trees chosen by biome ([src/flora.ts](src/flora.ts))
-- a cloud layer banded like Earth's, fading as you zoom in, and an atmosphere glow
-- rivers that curve through cells and widen downstream
+Two terrain styles. **Realistic** (default, [src/surface.ts](src/surface.ts)) splits each cell
+into a fine triangle grid with heights blended across cells, gentle noise in lowlands and ridged
+crags on high ground. **Hex tiles** draws flat terraces with cliff walls. On top:
+
+- water that knows its depth: turquoise shallows to deep blue, drifting ripples, sun glint, surf
+  ([src/sky.ts](src/sky.ts)); lakes as calm open water
+- rivers as ribbons of the water surface that widen downstream, meander, carve valleys, split
+  into deltas, and gain thin streams as you zoom in
+- rain shadows and ocean-current effects on climate; snow, rock and sand shaded per vertex; a
+  detail shader for rocky ground
+- instanced trees by biome in groves and clearings, plus rocks, cacti and icebergs
+  ([src/flora.ts](src/flora.ts))
+- two cloud layers with cyclones, cloud shadows on the ground, an atmosphere glow
+- optional day and night: a fixed, orbiting sun with an orange terminator
+
+## For games
+
+[src/gamedata.ts](src/gamedata.ts) names the continents, marks resources per cell (ore, timber,
+fish, fertile land) and suggests settlement sites, spread apart, near water and good land.
+**Export JSON** downloads every cell (lat/lon, neighbours, biome, climate, rivers, plate,
+continent, resources) with the continents and sites. **Settlement sites** shows them on the globe.
 
 ## Checking changes
 
@@ -60,7 +76,7 @@ anything.
 
 ## Not yet
 
-Rain shadows behind mountains, cloud shadows, a day/night side, and more tree variety.
+Seasons, region borders, and roads between sites.
 
 ## License
 

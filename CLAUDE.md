@@ -7,9 +7,14 @@ The README explains the generator and renderer; this file is how to work on it.
 
 - `src/grid.ts` Goldberg sphere grid. `src/world.ts` the generator (plates, climate, water,
   biomes). Both are pure and run under Node, so they are unit-tested.
-- `src/surface.ts` World → meshes (smooth and tile styles, water mesh, tree spots).
-- `src/sky.ts` shaders: water, terrain detail, cloud shadows, atmosphere. `src/flora.ts` trees.
-- `src/render.ts` the view. `src/debug.ts` camera spots for tests. `src/main.ts` UI.
+- `src/surface.ts` World → mesh data (smooth and tile styles, water, tree spots), as plain
+  transferable arrays. `src/colors.ts` cell colours per view mode. `src/clouds.ts` cloud pixels.
+- `src/worker.ts` runs generation, meshing and clouds off the main thread; `src/main.ts` sends
+  it requests (one in flight, later changes collapse into one follow-up).
+- `src/sky.ts` shaders: water, terrain detail, cloud shadows, atmosphere. `src/flora.ts` trees
+  and props. `src/gamedata.ts` continents, resources, sites, JSON export (tested).
+- `src/render.ts` the view. `src/debug.ts` camera spots for tests (coast, river, lake,
+  desert, mountain).
 
 ## Before and after every visual change
 
