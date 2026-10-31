@@ -11,8 +11,8 @@ const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 await page.goto(url);
-await page.waitForFunction(() => window.worldgen?.world);
-await page.evaluate(() => window.worldgen.ready());
+await page.waitForFunction(() => window.mundi?.world);
+await page.evaluate(() => window.mundi.ready());
 await page.waitForTimeout(800);
 await page.screenshot({ path: `${out}/orbit.png` });
 // Drag to spin the globe round and shoot the far side.
@@ -27,7 +27,7 @@ for (let i = 0; i < Number(process.env.ZOOM ?? 8); i++) { await page.mouse.wheel
 await page.waitForTimeout(1200);
 await page.screenshot({ path: `${out}/close.png` });
 // Fly to a coastline and look along it at an angle, for judging water and shores.
-const coast = await page.evaluate(([alt, spot]) => window.worldgen.flyTo(spot, alt),
+const coast = await page.evaluate(([alt, spot]) => window.mundi.flyTo(spot, alt),
   [Number(process.env.ALT ?? 1.06), process.env.SPOT ?? 'coast']);
 await page.waitForTimeout(1500);
 await page.screenshot({ path: `${out}/coast.png` });

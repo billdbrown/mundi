@@ -1,4 +1,4 @@
-# worldgen
+# Mundi
 
 Procedural planets on a hex grid, in the browser. Three.js, TypeScript, no engine.
 

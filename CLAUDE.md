@@ -1,4 +1,4 @@
-# worldgen
+# Mundi
 
 Procedural hex-grid planets in the browser. Vite + TypeScript + Three.js, no engine.
 The README explains the generator and renderer; this file is how to work on it.
@@ -35,4 +35,4 @@ running dev server (`SPOT=coast|river|mountain`, `ALT=`, `ZOOM=`).
 - Keep `erasableSyntaxOnly` happy: no enums, no parameter properties. Node runs the `.ts`
   sources directly for tests.
 - Generator changes must stay deterministic for a given seed (a test checks this).
-- Remotes: `origin` is the NAS (`git@git.lan:worldgen.git`), `github` is public. Push both.
+- Remotes: `origin` is the NAS (`git@git.lan:mundi.git`), `github` is public. Push both.

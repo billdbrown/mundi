@@ -66,7 +66,7 @@ const browser = await chromium.launch({ channel: process.env.BROWSER ?? 'msedge'
 
 const results = [];
 try {
-  // One page for every case: worlds are swapped in place with worldgen.load(), so the app's
+  // One page for every case: worlds are swapped in place with mundi.load(), so the app's
   // modules are fetched once. (Reloading per case was slower and flaky when ports were scarce.)
   const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
   let errors = [];
@@ -74,7 +74,7 @@ try {
   page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('404')) errors.push(m.text()); });
   const openPage = async () => {
     for (let attempt = 1; ; attempt++) {
-      try { await page.goto(url); await page.waitForFunction(() => window.worldgen?.world, null, { timeout: 30000 }); await page.evaluate(() => window.worldgen.ready()); return; }
+      try { await page.goto(url); await page.waitForFunction(() => window.mundi?.world, null, { timeout: 30000 }); await page.evaluate(() => window.mundi.ready()); return; }
       catch (e) { if (attempt >= 3) throw e; console.log(`load failed (${e.message.split(/\r?\n/)[0]}), retrying`); }
     }
   };
@@ -100,7 +100,7 @@ try {
   }
   async function runCase(tc) {
     return page.evaluate(async (tc) => {
-      const wg = window.worldgen;
+      const wg = window.mundi;
       wg.capture(true);
       wg.freeze(10);
       await wg.load(tc.hash, tc.opts ?? {});
@@ -156,7 +156,7 @@ const rows = results.map((r) => `
       <figure><img src="diff/${r.file}" onerror="this.replaceWith('—')"><figcaption>diff</figcaption></figure>
     </div>
   </section>`).join('');
-fs.writeFileSync(path.join(DIR, 'report.html'), `<!doctype html><meta charset="utf-8"><title>worldgen visual report</title>
+fs.writeFileSync(path.join(DIR, 'report.html'), `<!doctype html><meta charset="utf-8"><title>mundi visual report</title>
 <style>
   body { background: #0b0e14; color: #dfe6f0; font: 14px system-ui, sans-serif; margin: 16px; }
   h1 { font-size: 18px; } h2 { font-size: 15px; margin: 18px 0 6px; } h2 span { color: #8a96a8; font-weight: normal; }
@@ -164,7 +164,7 @@ fs.writeFileSync(path.join(DIR, 'report.html'), `<!doctype html><meta charset="u
   .imgs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   figure { margin: 0; } img { width: 100%; display: block; border: 1px solid #222; } figcaption { color: #8a96a8; font-size: 12px; }
 </style>
-<h1>worldgen visual report ${update ? '(baselines updated)' : ''} — ${new Date().toISOString().slice(0, 16).replace('T', ' ')}</h1>
+<h1>mundi visual report ${update ? '(baselines updated)' : ''} — ${new Date().toISOString().slice(0, 16).replace('T', ' ')}</h1>
 ${rows}`);
 
 const changed = results.filter((r) => r.status === 'changed' || r.status === 'error');

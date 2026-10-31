@@ -1,6 +1,6 @@
 /**
  * Camera placement for screenshots and visual tests: named spots worth looking at, and plain
- * orbit positions. Exposed on window.worldgen by main.ts.
+ * orbit positions. Exposed on window.mundi by main.ts.
  */
 import type { World } from './world.ts';
 import type { PlanetView } from './render.ts';

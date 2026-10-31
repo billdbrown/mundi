@@ -180,7 +180,7 @@ $('export').addEventListener('click', () => {
   const blob = new Blob([exportJSON(world, game)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `worldgen-${params.seed}.json`;
+  a.download = `mundi-${params.seed}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
@@ -245,7 +245,7 @@ view.renderer.domElement.addEventListener('pointermove', (e) => {
 view.renderer.domElement.addEventListener('pointerleave', () => { info.hidden = true; view.highlight(-1); lastCell = -1; });
 
 // --- Debug handle for the console, scripts/shot.mjs and scripts/visual.mjs ---
-(window as unknown as Record<string, unknown>).worldgen = {
+(window as unknown as Record<string, unknown>).mundi = {
   view,
   get world() { return world; },
   get timings() { return timings; },

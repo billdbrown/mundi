@@ -152,7 +152,7 @@ export function exportJSON(w: World, gd: GameData): string {
     });
   }
   return JSON.stringify({
-    generator: 'worldgen',
+    generator: 'mundi',
     params: w.params,
     cellCount: g.count,
     continents: gd.continents,
