@@ -7,7 +7,7 @@ import type { PlanetView } from './render.ts';
 import { WATER_LAND, WATER_LAKE, WATER_OCEAN } from './world.ts';
 import { B } from './biomes.ts';
 
-export type Spot = 'coast' | 'river' | 'mountain' | 'lake' | 'desert';
+export type Spot = 'coast' | 'river' | 'mountain' | 'lake' | 'desert' | 'mouth';
 
 /** A cell that shows off the named feature, chosen deterministically. */
 export function findSpot(w: World, spot: Spot): number {
@@ -16,7 +16,10 @@ export function findSpot(w: World, spot: Spot): number {
   for (let c = 0; c < g.count; c++) {
     const lat = Math.abs(P[c * 3 + 1]);
     let score = -Infinity;
-    if (spot === 'river') {
+    if (spot === 'mouth') {
+      // Where the biggest river meets the sea.
+      if (w.river[c] && w.water[w.downstream[c]] === WATER_OCEAN && lat < 0.7) score = w.flow[c];
+    } else if (spot === 'river') {
       // The biggest river away from the poles.
       if (w.river[c] && lat < 0.6) score = w.flow[c];
     } else if (spot === 'lake') {

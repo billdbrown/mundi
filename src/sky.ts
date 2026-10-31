@@ -144,8 +144,9 @@ export function applyCloudShadow(mat: THREE.Material, u: CloudUniforms, sun?: { 
   mat.needsUpdate = true;
 }
 
-export function makeWaterMaterial(cloud: CloudUniforms): THREE.ShaderMaterial {
+export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
+    defines: fade ? { USE_FADE: '' } : {},
     transparent: true,
     depthWrite: false,
     uniforms: {
@@ -163,8 +164,15 @@ export function makeWaterMaterial(cloud: CloudUniforms): THREE.ShaderMaterial {
       attribute float depth;
       varying float vDepth;
       varying vec3 vWorld;
+      #ifdef USE_FADE
+        attribute float fade;
+        varying float vFade;
+      #endif
       void main() {
         vDepth = depth;
+        #ifdef USE_FADE
+          vFade = fade;
+        #endif
         vec4 w = modelMatrix * vec4(position, 1.0);
         vWorld = w.xyz;
         gl_Position = projectionMatrix * viewMatrix * w;
@@ -174,6 +182,9 @@ export function makeWaterMaterial(cloud: CloudUniforms): THREE.ShaderMaterial {
       uniform vec3 uSunDir, uShallow, uMid, uDeep, uSky;
       varying float vDepth;
       varying vec3 vWorld;
+      #ifdef USE_FADE
+        varying float vFade;
+      #endif
       ${CLOUD_GLSL}
       ${NOISE_GLSL}
       // Three octaves of drifting noise; each drifts its own way so the surface never repeats.
@@ -229,6 +240,9 @@ export function makeWaterMaterial(cloud: CloudUniforms): THREE.ShaderMaterial {
 
         float a = mix(0.5, 0.95, smoothstep(0.0, 0.35, d));
         gl_FragColor = vec4(col, max(a, foam * 0.9));
+        #ifdef USE_FADE
+          gl_FragColor.a *= vFade;
+        #endif
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,

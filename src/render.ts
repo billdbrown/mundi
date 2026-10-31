@@ -45,6 +45,13 @@ export class PlanetView {
   private water?: THREE.Mesh;
   private cloudU = makeCloudUniforms();
   private waterMat = makeWaterMaterial(this.cloudU);
+  /** Rivers: the same water, plus a fade so mouths dissolve into the sea. Shares time and sun. */
+  private riverMat = (() => {
+    const m = makeWaterMaterial(this.cloudU, true);
+    m.uniforms.uTime = this.waterMat.uniforms.uTime;
+    m.uniforms.uSunDir = this.waterMat.uniforms.uSunDir;
+    return m;
+  })();
   private gridLines?: THREE.LineSegments;
   private rivers?: THREE.Mesh;
   private streams?: THREE.Mesh;
@@ -280,7 +287,7 @@ export class PlanetView {
       if (!o) continue;
       this.planet.remove(o);
       o.geometry.dispose();
-      if (o.material !== this.waterMat) (o.material as THREE.Material).dispose();
+      if (o.material !== this.waterMat && o.material !== this.riverMat) (o.material as THREE.Material).dispose();
     }
     for (const f of this.forest) { this.planet.remove(f); f.dispose(); }
     this.terrain = this.water = this.gridLines = this.rivers = this.streams = undefined;
@@ -364,11 +371,12 @@ export class PlanetView {
         C[k0 * 3 + 2] + (C[k1 * 3 + 2] - C[k0 * 3 + 2]) * t);
     };
 
-    type Buf = { pos: number[]; depth: number[]; index: number[] };
-    const riverBuf: Buf = { pos: [], depth: [], index: [] }, streamBuf: Buf = { pos: [], depth: [], index: [] };
+    type Buf = { pos: number[]; depth: number[]; fade: number[]; index: number[] };
+    const riverBuf: Buf = { pos: [], depth: [], fade: [], index: [] }, streamBuf: Buf = { pos: [], depth: [], fade: [], index: [] };
     /** A control point: direction, surface height, width, water depth (colour), and whether it is river or stream. */
-    interface CP { p: number[]; h: number; w: number; d: number; river: boolean; cell: number }
-    interface Sample { x: number; y: number; z: number; w: number; d: number; river: boolean }
+    /** f is opacity: 1 along the river, falling to 0 past the shore. */
+    interface CP { p: number[]; h: number; w: number; d: number; river: boolean; cell: number; f?: number }
+    interface Sample { x: number; y: number; z: number; w: number; d: number; river: boolean; f: number }
     /** Drawn centreline points per cell, so branches can find the channel they join. */
     const cellSamples = new Map<number, { p: number[]; h: number }[]>();
 
@@ -389,6 +397,7 @@ export class PlanetView {
         const hw = p.w / 2;
         buf.pos.push(p.x + sx * hw, p.y + sy * hw, p.z + sz * hw, p.x - sx * hw, p.y - sy * hw, p.z - sz * hw);
         buf.depth.push(p.d, p.d);
+        buf.fade.push(p.f, p.f);
       }
       for (let i = 0; i < pts.length - 1; i++) {
         const a = base + i * 2;
@@ -416,6 +425,7 @@ export class PlanetView {
           out.push({
             dir, h, cell, x: 0, y: 0, z: 0, river: cps[k + 1].river,
             w: cps[k].w + (cps[k + 1].w - cps[k].w) * t, d: cps[k].d + (cps[k + 1].d - cps[k].d) * t,
+            f: (cps[k].f ?? 1) + ((cps[k + 1].f ?? 1) - (cps[k].f ?? 1)) * t,
           });
         }
       }
@@ -465,6 +475,8 @@ export class PlanetView {
 
     const drawPath = (cells: number[], junction: number) => {
       const first = cells[0], last = cells[cells.length - 1], down = w.downstream[last];
+      // A river born a cell or two from the coast is a stub, not a river: skip it unless big.
+      if (junction < 0 && cells.length < 3 && w.flow[last] < 4 * T) return;
       const cps: CP[] = [];
       const lakeIn = g.neighbors[first].findIndex((u) => w.downstream[u] === first && w.water[u] === WATER_LAKE);
       if (lakeIn >= 0) {
@@ -482,12 +494,13 @@ export class PlanetView {
           cps.push({ p: e, h: h0, w: wid, d: RIVER_DEPTH, river, cell: next });
           if (h1 < h0 - 1e-5) cps.push({ p: e, h: h1, w: wid, d: RIVER_DEPTH, river, cell: next }); // terrace waterfall
         } else if (w.water[next] !== WATER_LAND) {
-          // Mouth: on through the shore a little way into the water, widening and taking its colour.
+          // Mouth: a short way past the shore, widening a little and fading out, so the river
+          // dissolves into the water instead of ending in a painted-on block.
           const sea = w.water[next] === WATER_OCEAN;
           const ctr = center(c);
-          const outP = unit(e[0] + (e[0] - ctr[0]) * 0.5, e[1] + (e[1] - ctr[1]) * 0.5, e[2] + (e[2] - ctr[2]) * 0.5);
-          cps.push({ p: e, h: h0, w: wid * 1.15, d: RIVER_DEPTH * 0.75, river, cell: -1 });
-          cps.push({ p: outP, h: sea ? SEA - LIFT + 0.0002 : h0, w: wid * (sea ? 1.8 : 1.2), d: sea ? MOUTH_DEPTH : RIVER_DEPTH, river, cell: -1 });
+          const outP = unit(e[0] + (e[0] - ctr[0]) * 0.25, e[1] + (e[1] - ctr[1]) * 0.25, e[2] + (e[2] - ctr[2]) * 0.25);
+          cps.push({ p: e, h: h0, w: wid * 1.1, d: RIVER_DEPTH * 0.8, river, cell: -1, f: 0.9 });
+          cps.push({ p: outP, h: sea ? SEA - LIFT + 0.0002 : h0, w: wid * 1.4, d: sea ? MOUTH_DEPTH : RIVER_DEPTH, river, cell: -1, f: 0 });
         } else if (junction >= 0) {
           cps.push({ p: e, h: h0, w: wid, d: RIVER_DEPTH, river, cell: junction });
           const join = nearest(junction, e) ?? { p: center(junction), h: s.centerH(junction) };
@@ -497,24 +510,6 @@ export class PlanetView {
         }
       }
       emit(cps);
-
-      // Delta: a big river also spills toward the mouth cell's other sea edges.
-      if (junction < 0 && w.river[last] && w.water[down] === WATER_OCEAN && w.flow[last] > 6 * T) {
-        const wid = widthOf(w.flow[last]), ctr = center(last);
-        const from = nearest(last, ctr) ?? { p: ctr, h: s.centerH(last) };
-        let extra = 0;
-        g.neighbors[last].forEach((n, j) => {
-          if (n === down || extra >= 2 || w.water[n] !== WATER_OCEAN) return;
-          extra++;
-          const e = edgePoint(last, j);
-          const outP = unit(e[0] + (e[0] - ctr[0]) * 0.5, e[1] + (e[1] - ctr[1]) * 0.5, e[2] + (e[2] - ctr[2]) * 0.5);
-          emit([
-            { p: from.p, h: from.h, w: wid * 0.4, d: RIVER_DEPTH, river: true, cell: last },
-            { p: e, h: s.edgeH(last, j)[0], w: wid * 0.7, d: RIVER_DEPTH * 0.75, river: true, cell: -1 },
-            { p: outP, h: SEA - LIFT + 0.0002, w: wid * 1.1, d: MOUTH_DEPTH, river: true, cell: -1 },
-          ]);
-        });
-      }
     };
 
     // Trace: mouths first (biggest first), each up its biggest branch; side branches queue up
@@ -543,8 +538,9 @@ export class PlanetView {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
       geo.setAttribute('depth', new THREE.Float32BufferAttribute(b.depth, 1));
+      geo.setAttribute('fade', new THREE.Float32BufferAttribute(b.fade, 1));
       geo.setIndex(b.index);
-      const m = new THREE.Mesh(geo, this.waterMat);
+      const m = new THREE.Mesh(geo, this.riverMat);
       m.renderOrder = 3;
       this.planet.add(m);
       return m;
