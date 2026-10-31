@@ -196,6 +196,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
       uSky: { value: new THREE.Color(0x8fb4d8) },
       uDepthScale: { value: 0.014 },
       uFoam: { value: 0.0013 },
+      uVis: { value: 1 },
     },
     vertexShader: /* glsl */`
       attribute float depth;
@@ -221,6 +222,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
       varying vec3 vWorld;
       #ifdef USE_FADE
         varying float vFade;
+        uniform float uVis;
       #endif
       ${CLOUD_GLSL}
       ${NOISE_GLSL}
@@ -263,6 +265,9 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         // a tight bright highlight.
         float shine = mix(14.0, 380.0, near);
         float spec = pow(max(dot(R, V), 0.0), shine) * mix(0.32, 2.2, near);
+        #ifdef USE_FADE
+          spec *= 0.12;   // rivers: sparkle on a thin channel reads as whitewater
+        #endif
         float shade = cloudShade(vWorld);
         // Night: the sea goes nearly black with a faint moonlit blue, and surf, glint and sky
         // reflection all dim with it. (Ng, not the rippled N, so the terminator stays soft.)
@@ -279,6 +284,9 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         float swell = smoothstep(0.8, 1.0, sin(fd / uFoam * 4.0 + t * 1.6)) * zone * 0.6;
         float breakup = smoothstep(0.35, 0.75, vnoise(vWorld * 2600.0 + vec3(t * 0.3)));
         float foam = clamp(edge * (0.6 + 0.4 * breakup) + swell * breakup * near, 0.0, 1.0);
+        #ifdef USE_FADE
+          foam = 0.0;   // rivers have no breakers
+        #endif
         col = mix(col, vec3(0.94, 0.97, 0.98) * shade * mix(0.06, 1.0, day), foam * 0.8);
 
         float a = mix(0.5, 0.95, smoothstep(0.0, 0.35, d));
@@ -290,7 +298,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         foam *= coast;
         gl_FragColor = vec4(col, max(a, foam * 0.9));
         #ifdef USE_FADE
-          gl_FragColor.a *= vFade;
+          gl_FragColor.a *= vFade * uVis;
         #endif
         #include <tonemapping_fragment>
         #include <colorspace_fragment>

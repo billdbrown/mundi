@@ -301,6 +301,9 @@ function buildSmooth(inp: SurfaceInput): Surface {
   const vLevel = new Float32Array(N).fill(-1);
   for (let c = 0; c < N; c++) {
     if (level[c] > 0) { vLevel[c] = level[c]; continue; }
+    // River cells keep their own (dry) level: their carved valleys would otherwise fill with a
+    // thin, foamy channel of the neighbouring sea or lake.
+    if (w.river[c]) continue;
     for (const nb of g.neighbors[c]) vLevel[c] = Math.max(vLevel[c], level[nb]);
   }
 
