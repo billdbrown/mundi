@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { World } from './world.ts';
+import { WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { hash01 } from './rng.ts';
 import { makeSimplex } from './noise.ts';
 import { SEA, surfaceQueries, type MeshData, type SurfaceData, type SurfaceQueries } from './surface.ts';
@@ -45,6 +45,7 @@ export class PlanetView {
   private waterMat = makeWaterMaterial(this.cloudU);
   private gridLines?: THREE.LineSegments;
   private rivers?: THREE.Mesh;
+  private streams?: THREE.Mesh;
   private forest: THREE.InstancedMesh[] = [];
   private clouds: THREE.Group = makeClouds();
   private hover: THREE.LineLoop;
@@ -160,6 +161,7 @@ export class PlanetView {
     const real = this.opts.mode === 'biome';
     if (this.gridLines) this.gridLines.visible = this.opts.grid;
     if (this.rivers) this.rivers.visible = this.opts.rivers && real;
+    if (this.streams) this.streams.visible = this.opts.rivers && real && this.camera.position.length() < 1.6;
     for (const f of this.forest) f.visible = this.opts.trees && real;
     if (this.water) this.water.visible = real;
     this.clouds.visible = this.opts.clouds && real;
@@ -231,20 +233,21 @@ export class PlanetView {
       cirrus.rotation.y = this.frozen * 0.011;
     }
     this.cloudU.uCloudRot.value = deck.rotation.y;
+    if (this.streams) this.streams.visible = this.opts.rivers && this.opts.mode === 'biome' && d < 1.6;
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
 
     this.renderer.render(this.scene, this.camera);
   }
 
   private dispose() {
-    for (const o of [this.terrain, this.water, this.gridLines, this.rivers]) {
+    for (const o of [this.terrain, this.water, this.gridLines, this.rivers, this.streams]) {
       if (!o) continue;
       this.planet.remove(o);
       o.geometry.dispose();
-      if (o !== this.water && o !== this.rivers) (o.material as THREE.Material).dispose();
+      if (o.material !== this.waterMat) (o.material as THREE.Material).dispose();
     }
     for (const f of this.forest) { this.planet.remove(f); f.dispose(); }
-    this.terrain = this.water = this.gridLines = this.rivers = undefined;
+    this.terrain = this.water = this.gridLines = this.rivers = this.streams = undefined;
     this.forest = [];
   }
 
@@ -317,10 +320,12 @@ export class PlanetView {
       return [x / l, y / l, z / l];
     };
 
-    const pos: number[] = [], depth: number[] = [], index: number[] = [];
+    type Buf = { pos: number[]; depth: number[]; index: number[] };
+    const riverBuf: Buf = { pos: [], depth: [], index: [] }, streamBuf: Buf = { pos: [], depth: [], index: [] };
+    let buf = riverBuf;
     const LIFT = 0.0012, RIVER_DEPTH = 0.0045;
     const strip = (pts: number[][], widths: number[], side?: number[]) => {
-      const base = pos.length / 3;
+      const base = buf.pos.length / 3;
       for (let i = 0; i < pts.length; i++) {
         const p = pts[i];
         let sx: number, sy: number, sz: number;
@@ -334,18 +339,45 @@ export class PlanetView {
           const sl = Math.hypot(sx, sy, sz) || 1; sx /= sl; sy /= sl; sz /= sl;
         }
         const hw = widths[i] / 2;
-        pos.push(p[0] + sx * hw, p[1] + sy * hw, p[2] + sz * hw, p[0] - sx * hw, p[1] - sy * hw, p[2] - sz * hw);
-        depth.push(RIVER_DEPTH, RIVER_DEPTH);
+        buf.pos.push(p[0] + sx * hw, p[1] + sy * hw, p[2] + sz * hw, p[0] - sx * hw, p[1] - sy * hw, p[2] - sz * hw);
+        buf.depth.push(RIVER_DEPTH, RIVER_DEPTH);
       }
       for (let i = 0; i < pts.length - 1; i++) {
         const a = base + i * 2;
-        index.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
-        if (side) index.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); // waterfalls: both faces
+        buf.index.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+        if (side) buf.index.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); // waterfalls: both faces
       }
     };
 
+    // Streams: flow too small to count as a river, drawn thin and only when zoomed in.
+    const STREAM = 0.35 * T;
+    const flows = (c: number) => w.water[c] === 0 && w.temperature[c] > 0.12 && w.flow[c] >= STREAM;
+    const curve = (from: number[], hFrom: number, wFrom: number, ctr: number[], hC: number, to: number[], hTo: number, wTo: number) => {
+      // Meander sideways, perpendicular to the chord, tapering to zero at both ends so
+      // neighbouring cells still join up.
+      const chx = to[0] - from[0], chy = to[1] - from[1], chz = to[2] - from[2];
+      let px = chy * ctr[2] - chz * ctr[1], py = chz * ctr[0] - chx * ctr[2], pz = chx * ctr[1] - chy * ctr[0];
+      const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
+      const pts: number[][] = [], widths: number[] = [];
+      const STEPS = 10;
+      for (let k = 0; k <= STEPS; k++) {
+        const t = k / STEPS, a = (1 - t) * (1 - t), b = 2 * t * (1 - t), cc = t * t;
+        let x = a * from[0] + b * ctr[0] + cc * to[0];
+        let y = a * from[1] + b * ctr[1] + cc * to[1];
+        let z = a * from[2] + b * ctr[2] + cc * to[2];
+        const off = Math.sin(Math.PI * t) * spacing * 0.22 * meander(x * mf, y * mf, z * mf);
+        x += px * off; y += py * off; z += pz * off;
+        const l = Math.hypot(x, y, z);
+        const h = Math.max(a * hFrom + b * hC + cc * hTo, SEA) + LIFT;
+        pts.push([(x / l) * h, (y / l) * h, (z / l) * h]);
+        widths.push(wFrom + (wTo - wFrom) * t);
+      }
+      strip(pts, widths);
+    };
+
     for (let c = 0; c < g.count; c++) {
-      if (!w.river[c]) continue;
+      if (!flows(c)) continue;
+      buf = w.river[c] ? riverBuf : streamBuf;
       const d = w.downstream[c];
       const iOut = g.neighbors[c].indexOf(d);
       if (iOut < 0) continue;
@@ -353,36 +385,30 @@ export class PlanetView {
       const [hOut, hOutFar] = s.edgeH(c, iOut);
       const ctr = [P[c * 3], P[c * 3 + 1], P[c * 3 + 2]];
       const hC = s.centerH(c);
+      const toSea = w.water[d] === WATER_OCEAN;
       let wOut = widthOf(w.flow[c]);
       if (w.water[d] !== 0) wOut *= 1.35; // mouth
 
+      // Inflows: tributaries and streams from upstream, and the outflow of a lake.
       const starts: { p: number[]; h: number; w: number }[] = [];
       g.neighbors[c].forEach((u, j) => {
-        if (w.river[u] && w.downstream[u] === c) starts.push({ p: edgePoint(c, j), h: s.edgeH(c, j)[0], w: widthOf(w.flow[u]) });
+        if (w.downstream[u] !== c) return;
+        if (flows(u)) starts.push({ p: edgePoint(c, j), h: s.edgeH(c, j)[0], w: widthOf(w.flow[u]) });
+        else if (w.water[u] === WATER_LAKE) starts.push({ p: edgePoint(c, j), h: s.edgeH(c, j)[0], w: wOut });
       });
       if (!starts.length) starts.push({ p: ctr, h: hC, w: wOut * 0.4 });
+      for (const st of starts) curve(st.p, st.h, st.w, ctr, hC, out, hOut, wOut);
 
-      for (const st of starts) {
-        // Meander sideways, perpendicular to the chord, tapering to zero at both ends so
-        // neighbouring cells still join up.
-        const chx = out[0] - st.p[0], chy = out[1] - st.p[1], chz = out[2] - st.p[2];
-        let px = chy * ctr[2] - chz * ctr[1], py = chz * ctr[0] - chx * ctr[2], pz = chx * ctr[1] - chy * ctr[0];
-        const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
-        const pts: number[][] = [], widths: number[] = [];
-        const STEPS = 10;
-        for (let k = 0; k <= STEPS; k++) {
-          const t = k / STEPS, a = (1 - t) * (1 - t), b = 2 * t * (1 - t), cc = t * t;
-          let x = a * st.p[0] + b * ctr[0] + cc * out[0];
-          let y = a * st.p[1] + b * ctr[1] + cc * out[1];
-          let z = a * st.p[2] + b * ctr[2] + cc * out[2];
-          const off = Math.sin(Math.PI * t) * spacing * 0.22 * meander(x * mf, y * mf, z * mf);
-          x += px * off; y += py * off; z += pz * off;
-          const l = Math.hypot(x, y, z);
-          const h = Math.max(a * st.h + b * hC + cc * hOut, SEA) + LIFT;
-          pts.push([(x / l) * h, (y / l) * h, (z / l) * h]);
-          widths.push(st.w + (wOut - st.w) * t);
-        }
-        strip(pts, widths);
+      // Delta: a big river splits into distributaries toward the other sea edges of its mouth cell.
+      if (toSea && w.river[c] && w.flow[c] > 6 * T) {
+        let extra = 0;
+        g.neighbors[c].forEach((n, j) => {
+          if (j === iOut || extra >= 2 || w.water[n] !== WATER_OCEAN) return;
+          extra++;
+          const e = edgePoint(c, j);
+          const mid = [(ctr[0] + e[0]) / 2, (ctr[1] + e[1]) / 2, (ctr[2] + e[2]) / 2];
+          curve(ctr, hC, wOut * 0.45, mid, hC, e, s.edgeH(c, j)[0], wOut * 0.7);
+        });
       }
       if (hOutFar < hOut - 1e-5) { // a waterfall down a terrace wall
         const h0 = hOut + LIFT, h1 = Math.max(hOutFar, SEA) + LIFT;
@@ -392,14 +418,19 @@ export class PlanetView {
         strip([[out[0] * h0, out[1] * h0, out[2] * h0], [out[0] * h1, out[1] * h1, out[2] * h1]], [wOut, wOut], [sx, sy, sz]);
       }
     }
-    if (!index.length) return;
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('depth', new THREE.Float32BufferAttribute(depth, 1));
-    geo.setIndex(index);
-    this.rivers = new THREE.Mesh(geo, this.waterMat);
-    this.rivers.renderOrder = 3;
-    this.planet.add(this.rivers);
+    const mesh = (b: Buf) => {
+      if (!b.index.length) return undefined;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
+      geo.setAttribute('depth', new THREE.Float32BufferAttribute(b.depth, 1));
+      geo.setIndex(b.index);
+      const m = new THREE.Mesh(geo, this.waterMat);
+      m.renderOrder = 3;
+      this.planet.add(m);
+      return m;
+    };
+    this.rivers = mesh(riverBuf);
+    this.streams = mesh(streamBuf);
   }
 }
 

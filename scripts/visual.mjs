@@ -63,13 +63,34 @@ try {
   let errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('404')) errors.push(m.text()); });
-  for (let attempt = 1; ; attempt++) {
-    try { await page.goto(url); await page.waitForFunction(() => window.worldgen?.world, null, { timeout: 30000 }); await page.evaluate(() => window.worldgen.ready()); break; }
-    catch (e) { if (attempt >= 3) throw e; console.log(`load failed (${e.message.split(/\r?\n/)[0]}), retrying`); }
-  }
+  const openPage = async () => {
+    for (let attempt = 1; ; attempt++) {
+      try { await page.goto(url); await page.waitForFunction(() => window.worldgen?.world, null, { timeout: 30000 }); await page.evaluate(() => window.worldgen.ready()); return; }
+      catch (e) { if (attempt >= 3) throw e; console.log(`load failed (${e.message.split(/\r?\n/)[0]}), retrying`); }
+    }
+  };
+  await openPage();
+  // A case that never finishes (say, the page threw while drawing) fails after this long
+  // instead of hanging the whole run.
+  const CASE_TIMEOUT = 60000;
+  const withTimeout = (p) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timed out after ${CASE_TIMEOUT / 1000} s`)), CASE_TIMEOUT))]);
   for (const tc of cases) {
     errors = [];
-    const timings = await page.evaluate(async (tc) => {
+    let timings;
+    try {
+      timings = await withTimeout(runCase(tc));
+    } catch (e) {
+      errors.push(e.message.split(/\r?\n/)[0]);
+      results.push({ name: tc.name, file: `${tc.name}.png`, timings: { gen: 0, mesh: 0 }, errors: [...errors], status: 'error', ratio: null });
+      console.log(`error    ${tc.name}`);
+      for (const m of errors) console.log(`         ! ${m}`);
+      await openPage();                       // the page may be wedged; start fresh for the next case
+      continue;
+    }
+    await finishCase(tc, timings);
+  }
+  async function runCase(tc) {
+    return page.evaluate(async (tc) => {
       const wg = window.worldgen;
       wg.capture(true);
       wg.freeze(10);
@@ -80,6 +101,8 @@ try {
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       return wg.timings;
     }, tc);
+  }
+  async function finishCase(tc, timings) {
     await page.waitForTimeout(250);
     const file = `${tc.name}.png`;
     await page.screenshot({ path: path.join(CUR, file) });
