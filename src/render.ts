@@ -125,7 +125,9 @@ export class PlanetView {
     [tex.main, tex.cirrus].forEach((t, i) => {
       const m = (this.clouds.children[i] as THREE.Mesh).material as THREE.MeshStandardMaterial;
       m.map?.dispose();
+      m.bumpMap?.dispose();
       m.map = t;
+      if (i === 0) { m.bumpMap = tex.bump; m.bumpScale = 6; }
       m.needsUpdate = true;
     });
     this.cloudU.uCloudMap.value = tex.main;

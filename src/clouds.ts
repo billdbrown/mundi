@@ -4,6 +4,7 @@
  * SphereGeometry puts v = 0 at the south pole.
  */
 import { makeSimplex, fbm } from './noise.ts';
+import { makeRng } from './rng.ts';
 
 export const CLOUD_W = 768, CLOUD_H = 384;
 
@@ -31,17 +32,56 @@ function paint(fill: (lat: number, x: number, y: number, z: number) => [number, 
   return data;
 }
 
+interface Storm { x: number; y: number; z: number; r: number; spin: number }
+
+/**
+ * A few cyclones between 12° and 55° latitude. They turn counterclockwise in the north and
+ * clockwise in the south, as on Earth.
+ */
+function makeStorms(seed: number): Storm[] {
+  const rng = makeRng(seed * 31 + 11);
+  const n = 2 + Math.floor(rng() * 3);
+  const out: Storm[] = [];
+  for (let i = 0; i < n; i++) {
+    const north = rng() < 0.5;
+    const lat = (12 + rng() * 43) * (Math.PI / 180) * (north ? 1 : -1);
+    const lon = rng() * Math.PI * 2;
+    out.push({
+      x: -Math.cos(lon) * Math.cos(lat), y: Math.sin(lat), z: Math.sin(lon) * Math.cos(lat),
+      r: 0.16 + rng() * 0.12,
+      spin: (north ? 1 : -1) * (2.5 + rng() * 2),
+    });
+  }
+  return out;
+}
+
 /**
  * Main deck: domain-warped noise, banded like Earth's (cloudy at the equator and 60°, clear at
  * 30°), grey underneath where it is thick. Cirrus: thin streaks stretched east–west.
  */
 export function cloudPixels(seed: number): CloudPixels {
   const n1 = makeSimplex(seed * 31 + 7), n2 = makeSimplex(seed * 31 + 8), n3 = makeSimplex(seed * 31 + 9);
+  const storms = makeStorms(seed);
   const main = paint((lat, x, y, z) => {
     const band = 0.5 + 0.5 * Math.cos(6 * lat);
-    const qx = fbm(n2, x, y, z, 3, 1.4), qy = fbm(n2, x + 4.7, y, z, 3, 1.4);
-    const v = fbm(n1, x + qx * 0.7, y + qy * 0.7, z, 6, 2.2);
-    const cover = v + 0.2 * band - 0.24;
+    // Storms twist the noise around their centre, so its streaks become spiral arms.
+    let px = x, py = y, pz = z, boost = 0;
+    for (const s of storms) {
+      const dot = px * s.x + py * s.y + pz * s.z;
+      if (dot < 0.7) continue;
+      const d = Math.acos(Math.min(1, dot)) / s.r;          // 0 at the eye, 1 at the edge
+      const fall = Math.exp(-d * d * 2.2);
+      const a = s.spin * fall;
+      // Rodrigues rotation of p about the storm axis by angle a.
+      const c = Math.cos(a), sn = Math.sin(a), k = (1 - c) * dot;
+      const cx = s.y * pz - s.z * py, cy = s.z * px - s.x * pz, cz = s.x * py - s.y * px;
+      px = px * c + cx * sn + s.x * k; py = py * c + cy * sn + s.y * k; pz = pz * c + cz * sn + s.z * k;
+      boost += 0.45 * fall * smooth(0.1, 0.28, d);         // dense ring, clear eye
+      boost -= 0.5 * (1 - smooth(0.0, 0.1, d));
+    }
+    const qx = fbm(n2, px, py, pz, 3, 1.4), qy = fbm(n2, px + 4.7, py, pz, 3, 1.4);
+    const v = fbm(n1, px + qx * 0.7, py + qy * 0.7, pz, 6, 2.2);
+    const cover = v + 0.2 * band - 0.24 + boost;
     return [1 - 0.28 * smooth(0.25, 0.7, cover), smooth(0.0, 0.42, cover)];
   });
   const cirrus = paint((lat, x, y, z) => {

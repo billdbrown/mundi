@@ -208,7 +208,7 @@ export function makeWaterMaterial(cloud: CloudUniforms): THREE.ShaderMaterial {
   });
 }
 
-export interface CloudTextures { main: THREE.Texture; cirrus: THREE.Texture }
+export interface CloudTextures { main: THREE.Texture; cirrus: THREE.Texture; bump: THREE.Texture }
 
 /** Uploads worker-painted cloud pixels as textures, mipmapped (the shadow lookup samples a blurred level). */
 export function cloudTexturesFromPixels(px: CloudPixels): CloudTextures {
@@ -223,7 +223,13 @@ export function cloudTexturesFromPixels(px: CloudPixels): CloudTextures {
     t.needsUpdate = true;
     return t;
   };
-  return { main: tex(px.main), cirrus: tex(px.cirrus) };
+  // Thickness (alpha) as a bump map: the sun then lights the tops of thick cloud and shades its
+  // flanks, which reads as puffy rather than painted on.
+  const bump = new Uint8Array(px.width * px.height * 4);
+  for (let i = 0; i < bump.length; i += 4) bump[i] = bump[i + 1] = bump[i + 2] = px.main[i + 3];
+  const bumpTex = tex(bump);
+  bumpTex.colorSpace = THREE.NoColorSpace;
+  return { main: tex(px.main), cirrus: tex(px.cirrus), bump: bumpTex };
 }
 
 export function makeClouds(): THREE.Group {
