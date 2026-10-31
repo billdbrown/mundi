@@ -36,7 +36,13 @@ const coast = await page.evaluate(([alt, spot]) => {
       if (w.flow[c] > bestScore) { bestScore = w.flow[c]; best = c; }
     }
   }
-  for (let c = 0; c < g.count && spot !== 'river'; c++) {
+  if (spot === 'mountain') {
+    for (let c = 0; c < g.count; c++) {
+      if (w.water[c] !== 0 || Math.abs(P[c * 3 + 1]) > 0.7) continue;
+      if (w.elevation[c] > bestScore) { bestScore = w.elevation[c]; best = c; }
+    }
+  }
+  for (let c = 0; c < g.count && spot === 'coast'; c++) {
     if (w.water[c] !== 1) continue;
     const land = g.neighbors[c].filter((n) => w.water[n] === 0).length;
     const lat = Math.abs(P[c * 3 + 1]);

@@ -6,7 +6,7 @@ import { hash01 } from './rng.ts';
 import { makeSimplex } from './noise.ts';
 import { buildSmooth, buildTiles, SEA, type Surface } from './surface.ts';
 import { buildForest, treeMaterial } from './flora.ts';
-import { makeWaterMaterial, makeClouds, cloudTextures, makeAtmosphere, makeStars, makeCloudUniforms, applyCloudShadow } from './sky.ts';
+import { makeWaterMaterial, makeClouds, cloudTextures, makeAtmosphere, makeStars, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
 
 export type ViewMode = 'biome' | 'elevation' | 'temperature' | 'moisture' | 'plates';
 export type TerrainStyle = 'smooth' | 'tiles';
@@ -220,8 +220,7 @@ export class PlanetView {
     const s = o.style === 'smooth' ? buildSmooth(input) : buildTiles(input);
     this.surface = s;
 
-    const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
-    applyCloudShadow(terrainMat, this.cloudU);
+    const terrainMat = makeTerrainMaterial(this.cloudU);
     this.terrain = new THREE.Mesh(s.terrain, terrainMat);
     this.faceCell = s.faces;
     this.planet.add(this.terrain);

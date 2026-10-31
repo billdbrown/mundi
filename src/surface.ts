@@ -135,7 +135,9 @@ function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number)
     mix(i, SAND, sm(0.0017, 0.0007, above) * sm(0.25, 0.4, vertexTemp(y / l, e, heat)));
     mix(i, ROCK, sm(0.025, 0.09, slope) * 0.75);
     // Snow settles on gentler slopes first.
-    mix(i, SNOW, sm(0.24, 0.12, vertexTemp(y / l, e, heat)) * (1 - 0.6 * sm(0.06, 0.16, slope)));
+    const tv = vertexTemp(y / l, e, heat);
+    const snow = Math.max(sm(0.24, 0.12, tv), sm(0.6, 0.8, e) * sm(0.55, 0.4, tv));
+    mix(i, SNOW, snow * (1 - 0.6 * sm(0.06, 0.16, slope)));
   }
   col.needsUpdate = true;
 }

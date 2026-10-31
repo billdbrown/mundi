@@ -14,6 +14,23 @@ export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 } };
 }
 
+/** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
+export const NOISE_GLSL = /* glsl */`
+  float hash(vec3 p) {
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+  }
+  float vnoise(vec3 x) {
+    vec3 i = floor(x), f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(hash(i), hash(i + vec3(1, 0, 0)), f.x), mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
+      mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x), mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y),
+      f.z);
+  }
+`;
+
 /**
  * Looks up cloud cover straight above a world point. The UV maths mirrors THREE.SphereGeometry
  * (u = φ/2π with x = −cos φ, v = 1 − θ/π) and undoes the cloud sphere's Y rotation.
@@ -34,6 +51,47 @@ const CLOUD_GLSL = /* glsl */`
     return 1.0 - uCloudShadow * a;
   }
 `;
+
+/**
+ * Terrain material: cloud shadows, plus detail the mesh is too coarse for. A noise gradient
+ * bends the normal so slopes catch light like rock and scree, stronger on high ground, and
+ * the same noise breaks up colour. Both fade out with distance, where they would only shimmer.
+ */
+export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMaterial {
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCloudP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;\n' + CLOUD_GLSL + NOISE_GLSL + /* glsl */`
+        // Ridged octaves (1 - |2n - 1|) give crest lines and gullies rather than uniform grain.
+        float ridge(float n) { return 1.0 - abs(2.0 * n - 1.0); }
+        float rockNoise(vec3 p) {
+          return ridge(vnoise(p * 320.0)) * 0.5 + ridge(vnoise(p * 900.0)) * 0.3 + vnoise(p * 2600.0) * 0.2;
+        }`)
+      .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
+        float hAbove = length(vCloudP) - 1.0;
+        float camDist = length(cameraPosition - vCloudP);
+        float detailFade = 1.0 - smoothstep(0.25, 1.4, camDist);
+        float highland = smoothstep(0.004, 0.03, hAbove);
+        float rn = rockNoise(vCloudP);
+        diffuseColor.rgb *= mix(1.0, 0.82 + 0.36 * rn, (0.35 + 0.65 * highland) * detailFade);
+        diffuseColor.rgb *= cloudShade(vCloudP);`)
+      .replace('#include <normal_fragment_maps>', /* glsl */`#include <normal_fragment_maps>
+        if (detailFade > 0.0 && hAbove > 0.0) {
+          vec3 up = normalize(vCloudP);
+          vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
+          vec3 t2 = cross(up, t1);
+          float e = 0.0003;
+          vec3 grad = t1 * (rockNoise(vCloudP + t1 * e) - rn) + t2 * (rockNoise(vCloudP + t2 * e) - rn);
+          float amp = (0.2 + 1.6 * highland) * detailFade;
+          normal = normalize(normal - (viewMatrix * vec4(grad * amp, 0.0)).xyz);
+        }`);
+  };
+  return mat;
+}
 
 /** Patches a built-in lit material so clouds darken what is under them. Handles instancing. */
 export function applyCloudShadow(mat: THREE.Material, u: CloudUniforms) {
@@ -85,20 +143,7 @@ export function makeWaterMaterial(cloud: CloudUniforms): THREE.ShaderMaterial {
       varying float vDepth;
       varying vec3 vWorld;
       ${CLOUD_GLSL}
-
-      float hash(vec3 p) {
-        p = fract(p * 0.3183099 + 0.1);
-        p *= 17.0;
-        return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
-      }
-      float vnoise(vec3 x) {
-        vec3 i = floor(x), f = fract(x);
-        f = f * f * (3.0 - 2.0 * f);
-        return mix(
-          mix(mix(hash(i), hash(i + vec3(1, 0, 0)), f.x), mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
-          mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x), mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y),
-          f.z);
-      }
+      ${NOISE_GLSL}
       // Three octaves of drifting noise; each drifts its own way so the surface never repeats.
       float waves(vec3 p, float t) {
         return vnoise(p * 520.0 + vec3(t * 0.55, 0.0, t * 0.35)) * 0.55
