@@ -306,6 +306,37 @@ export function generateWorld(params: WorldParams): World {
     moisture[c] = Math.max(0, Math.min(1, m));
   }
 
+  // --- Ocean currents, roughly. Subtropical gyres send cold currents along the west coasts of
+  // continents, which makes coastal deserts (Atacama, Namib). At mid-latitudes the westerlies
+  // blow in off a warm ocean drift and keep west coasts mild (Western Europe). Both only touch
+  // land with the sea close by to its west. ---
+  const sstep = (a: number, b: number, x: number) => {
+    const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  };
+  const reachWest = Math.max(2, Math.round(detail / 8));
+  for (let c = 0; c < N; c++) {
+    if (water[c] === WATER_OCEAN) continue;
+    const deg = Math.abs(lat[c]) * 180 / Math.PI;
+    const cold = sstep(12, 18, deg) * (1 - sstep(32, 40, deg));
+    const mild = sstep(38, 45, deg) * (1 - sstep(60, 66, deg));
+    if (cold + mild === 0) continue;
+    let cur = c, westSea = 0;
+    for (let k = 1; k <= reachWest; k++) {
+      const x = P[cur * 3], z = P[cur * 3 + 2];
+      let best = nbrs[cur][0], bd = -Infinity;
+      for (const nb of nbrs[cur]) {
+        const d = (P[nb * 3] - x) * -z + (P[nb * 3 + 2] - z) * x;   // along west = (−z, 0, x)
+        if (d > bd) { bd = d; best = nb; }
+      }
+      cur = best;
+      if (water[cur] === WATER_OCEAN) { westSea = 1 - (k - 1) / reachWest; break; }
+    }
+    if (!westSea) continue;
+    moisture[c] = Math.max(0, moisture[c] - 0.28 * cold * westSea);
+    temperature[c] = Math.max(0, Math.min(1, temperature[c] - 0.05 * cold * westSea + 0.07 * mild * westSea));
+  }
+
   // --- Drainage: priority-flood from the sea gives every land cell a downhill route out.
   // Cells the flood has to raise noticeably are basins, and become lakes. ---
   const filled = Float32Array.from(elev);
