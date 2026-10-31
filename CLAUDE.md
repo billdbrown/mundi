@@ -36,3 +36,6 @@ running dev server (`SPOT=coast|river|mountain`, `ALT=`, `ZOOM=`).
   sources directly for tests.
 - Generator changes must stay deterministic for a given seed (a test checks this).
 - Remotes: `origin` is the NAS (`git@git.lan:mundi.git`), `github` is public. Push both.
+- Live at **https://mundi.bill.computer** (public). Deploy by hand: `./deploy.sh` builds and runs
+  `wrangler deploy` (assets-only Worker, token from `~/.config/cloudflare/api-token`). Run the
+  visual check before deploying.

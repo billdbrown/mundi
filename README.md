@@ -1,5 +1,7 @@
 # Mundi
 
+**Live: https://mundi.bill.computer**
+
 Procedural planets on a hex grid, in the browser. Three.js, TypeScript, no engine.
 
 ```

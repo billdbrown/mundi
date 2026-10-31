@@ -1,0 +1,15 @@
+# mundi.bill.computer: the built app, served as static files. No server: generation, meshing
+# and clouds all run in the browser (a Web Worker).
+name = "mundi"
+compatibility_date = "2026-10-31"
+# Pinned because the API token has no account-level enumerate. Not a credential.
+account_id = "af045bb950d46af2b6aee70965d97f0a"
+
+# Assets-only Worker: Cloudflare serves dist/ directly.
+[assets]
+directory = "./dist"
+
+# custom_domain provisions the DNS record and TLS cert on deploy.
+[[routes]]
+pattern = "mundi.bill.computer"
+custom_domain = true
