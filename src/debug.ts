@@ -4,9 +4,10 @@
  */
 import type { World } from './world.ts';
 import type { PlanetView } from './render.ts';
-import { WATER_LAND, WATER_OCEAN } from './world.ts';
+import { WATER_LAND, WATER_LAKE, WATER_OCEAN } from './world.ts';
+import { B } from './biomes.ts';
 
-export type Spot = 'coast' | 'river' | 'mountain';
+export type Spot = 'coast' | 'river' | 'mountain' | 'lake';
 
 /** A cell that shows off the named feature, chosen deterministically. */
 export function findSpot(w: World, spot: Spot): number {
@@ -18,6 +19,11 @@ export function findSpot(w: World, spot: Spot): number {
     if (spot === 'river') {
       // The biggest river away from the poles.
       if (w.river[c] && lat < 0.6) score = w.flow[c];
+    } else if (spot === 'lake') {
+      // The middle of the biggest open (unfrozen) lake.
+      if (w.water[c] === WATER_LAKE && w.biome[c] !== B.ICE && lat < 0.75) {
+        score = g.neighbors[c].filter((n) => w.water[n] === WATER_LAKE).length;
+      }
     } else if (spot === 'mountain') {
       if (w.water[c] === WATER_LAND && lat < 0.7) score = w.elevation[c];
     } else if (w.water[c] === WATER_OCEAN) {

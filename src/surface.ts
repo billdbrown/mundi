@@ -298,6 +298,15 @@ function buildSmooth(inp: SurfaceInput): Surface {
     for (const nb of g.neighbors[c]) vLevel[c] = Math.max(vLevel[c], level[nb]);
   }
 
+  // Which water is lake water: lake cells, and land cells whose drawn water comes from a lake.
+  const vLake = new Uint8Array(N);
+  for (let c = 0; c < N; c++) {
+    if (w.water[c] === WATER_LAKE) { vLake[c] = level[c] > 0 ? 1 : 0; continue; }
+    if (level[c] > 0) continue;
+    for (const nb of g.neighbors[c]) if (w.water[nb] === WATER_LAKE && level[nb] > 0 && level[nb] === vLevel[c]) vLake[c] = 1;
+  }
+  const cornerLake = new Uint8Array(K);
+  for (let kk = 0; kk < K; kk++) for (const o of cornerCells[kk]) if (vLake[o] && w.water[o] === WATER_LAKE) cornerLake[kk] = 1;
   const cornerH = new Float32Array(K), cornerLevel = new Float32Array(K), cornerCol = new Float32Array(K * 3);
   for (let k = 0; k < K; k++) {
     const cells = cornerCells[k];
@@ -318,15 +327,16 @@ function buildSmooth(inp: SurfaceInput): Surface {
 
   const pos: number[] = [], col: number[] = [], wpos: number[] = [], depth: number[] = [];
   const rgb: number[] = [];
-  const add = (dx: number, dy: number, dz: number, h: number, r: number, gg: number, b: number, lvl: number) => {
+  const add = (dx: number, dy: number, dz: number, h: number, r: number, gg: number, b: number, lvl: number, lake = false) => {
     const i = pos.length / 3;
     pos.push(dx * h, dy * h, dz * h);
     rgb.length = 0;
     tinted(tint, dx, dy, dz, r, gg, b, rgb);
     col.push(rgb[0], rgb[1], rgb[2]);
     wpos.push(dx * lvl, dy * lvl, dz * lvl);
-    // Lakes are shallow by sea standards; bias them so they read as water, not lagoon.
-    depth.push(lvl - h + (lvl > SEA + 1e-4 ? 0.006 : 0));
+    // Lakes are shallow by sea standards (lowland ones barely below their rims); bias their
+    // depth so they read as open water, not lagoon or surf.
+    depth.push(lvl - h + (lake ? 0.006 : 0));
     return i;
   };
   // Each fan triangle (cell centre + two corners) becomes a k×k triangular grid. k is picked so
@@ -359,7 +369,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
   const corner = (kk: number) => {
     if (cornerIdx[kk] < 0) {
       cornerIdx[kk] = add(C[kk * 3], C[kk * 3 + 1], C[kk * 3 + 2], cornerH[kk],
-        cornerCol[kk * 3], cornerCol[kk * 3 + 1], cornerCol[kk * 3 + 2], cornerLevel[kk]);
+        cornerCol[kk * 3], cornerCol[kk * 3 + 1], cornerCol[kk * 3 + 2], cornerLevel[kk], cornerLake[kk] === 1);
     }
     return cornerIdx[kk];
   };
@@ -376,7 +386,8 @@ function buildSmooth(inp: SurfaceInput): Surface {
       const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
       i = add(dx, dy, dz, bump(dx, dy, dz, cornerH[lo] * (1 - t) + cornerH[hi] * t),
         cornerCol[lo * 3] * (1 - t) + cornerCol[hi * 3] * t, cornerCol[lo * 3 + 1] * (1 - t) + cornerCol[hi * 3 + 1] * t,
-        cornerCol[lo * 3 + 2] * (1 - t) + cornerCol[hi * 3 + 2] * t, Math.max(cornerLevel[lo], cornerLevel[hi]));
+        cornerCol[lo * 3 + 2] * (1 - t) + cornerCol[hi * 3 + 2] * t, Math.max(cornerLevel[lo], cornerLevel[hi]),
+        cornerLake[lo] === 1 || cornerLake[hi] === 1);
       edgePts.set(key, i);
     }
     return i;
@@ -392,7 +403,8 @@ function buildSmooth(inp: SurfaceInput): Surface {
     const r = cellColor[c * 3], gg = cellColor[c * 3 + 1], b = cellColor[c * 3 + 2];
     const lvl = vLevel[c] > 0 ? vLevel[c] : SEA;
     const px = P[c * 3], py = P[c * 3 + 1], pz = P[c * 3 + 2];
-    const iA = add(px, py, pz, cellH[c], r, gg, b, lvl);
+    const lake = vLake[c] === 1;
+    const iA = add(px, py, pz, cellH[c], r, gg, b, lvl, lake);
     // Spokes: points from the centre toward each corner, shared by the two fan triangles there.
     const spoke: number[][] = Array.from(ks, (kk) => {
       const out: number[] = [];
@@ -401,7 +413,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
         let dx = px * (1 - t) + C[kk * 3] * t, dy = py * (1 - t) + C[kk * 3 + 1] * t, dz = pz * (1 - t) + C[kk * 3 + 2] * t;
         const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
         out[st] = add(dx, dy, dz, bump(dx, dy, dz, cellH[c] * (1 - t) + cornerH[kk] * t),
-          r * (1 - t) + cornerCol[kk * 3] * t, gg * (1 - t) + cornerCol[kk * 3 + 1] * t, b * (1 - t) + cornerCol[kk * 3 + 2] * t, lvl);
+          r * (1 - t) + cornerCol[kk * 3] * t, gg * (1 - t) + cornerCol[kk * 3 + 1] * t, b * (1 - t) + cornerCol[kk * 3 + 2] * t, lvl, lake);
       }
       return out;
     });
@@ -427,7 +439,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
             v = add(dx, dy, dz, bump(dx, dy, dz, wa * cellH[c] + wb * cornerH[k0] + wc * cornerH[k1]),
               wa * r + wb * cornerCol[k0 * 3] + wc * cornerCol[k1 * 3],
               wa * gg + wb * cornerCol[k0 * 3 + 1] + wc * cornerCol[k1 * 3 + 1],
-              wa * b + wb * cornerCol[k0 * 3 + 2] + wc * cornerCol[k1 * 3 + 2], lvl);
+              wa * b + wb * cornerCol[k0 * 3 + 2] + wc * cornerCol[k1 * 3 + 2], lvl, lake);
           }
           idx[a][bb] = v;
         }
