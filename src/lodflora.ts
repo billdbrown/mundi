@@ -16,8 +16,10 @@ import { makeRng } from './rng.ts';
 import { makeSimplex, type Noise3 } from './noise.ts';
 
 const SEA = 1.0;
-/** Camera distance (planet radius 1) below which plants appear. */
-export const LOD_DIST = 1.24;
+/** Plants are full size within FADE_NEAR of the camera and shrink to nothing at FADE_FAR. */
+export const FADE_NEAR = 0.15, FADE_FAR = 0.26;
+/** Camera distance (planet radius 1) below which plants are generated at all. */
+export const LOD_DIST = 1 + FADE_FAR + 0.005;
 /** Plants per cell relative to the FLORA table's numbers. */
 const DENSITY = 36;
 const KINDS = 7;
@@ -77,7 +79,10 @@ export class LodFlora {
       cur = best;
     }
     this.lastCenter = cur;
-    const radius = (d - 1) * 1.5 + 0.02;
+    // Cover every cell that could hold a visible plant, plus a margin, so cells join the set
+    // while their plants are still at zero size.
+    const alt = Math.max(0, d - 1);
+    const radius = Math.sqrt(Math.max(0, FADE_FAR * FADE_FAR - alt * alt)) + 0.03;
     const key = `${cur}:${Math.round(radius * 60)}`;
     if (key === this.lastKey) return;
     this.lastKey = key;

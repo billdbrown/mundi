@@ -5,7 +5,7 @@ import { hash01 } from './rng.ts';
 import { makeSimplex } from './noise.ts';
 import { SEA, RELIEF, surfaceQueries, type MeshData, type SurfaceData, type SurfaceQueries } from './surface.ts';
 import { buildForest, treeMaterial } from './flora.ts';
-import { LodFlora } from './lodflora.ts';
+import { LodFlora, FADE_NEAR, FADE_FAR } from './lodflora.ts';
 import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere, makeStars, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
 import type { CloudPixels } from './clouds.ts';
 import type { ViewMode, TerrainStyle } from './colors.ts';
@@ -114,7 +114,7 @@ export class PlanetView {
     this.hover.visible = false;
     this.planet.add(this.hover);
     this.planet.add(this.clouds);
-    applyCloudShadow(treeMaterial, this.cloudU, this.sunU);
+    applyCloudShadow(treeMaterial, this.cloudU, this.sunU, { uFadeNear: { value: FADE_NEAR }, uFadeFar: { value: FADE_FAR } });
 
     this.scene.add(this.planet);
     this.scene.add(makeAtmosphere(this.sunU));

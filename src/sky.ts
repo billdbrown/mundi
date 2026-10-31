@@ -125,12 +125,22 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
  * With `sun`, it also darkens things past the terminator: small objects like trees have faces
  * that point at a sun below their horizon, and with no shadows those would glow at night.
  */
-export function applyCloudShadow(mat: THREE.Material, u: CloudUniforms, sun?: { uSunDir: { value: THREE.Vector3 } }) {
+export function applyCloudShadow(
+  mat: THREE.Material, u: CloudUniforms, sun?: { uSunDir: { value: THREE.Vector3 } },
+  fade?: { uFadeNear: { value: number }; uFadeFar: { value: number } },
+) {
+  // With `fade`, each instance grows from nothing at uFadeFar to full size at uFadeNear
+  // (scaled about its base, so it rises out of the ground) instead of popping in.
+  const grow = fade ? `
+        #ifdef USE_INSTANCING
+          vec4 fadeO = modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+          transformed *= 1.0 - smoothstep(uFadeNear, uFadeFar, length(cameraPosition - fadeO.xyz));
+        #endif` : '';
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, u, sun ?? {});
+    Object.assign(sh.uniforms, u, sun ?? {}, fade ?? {});
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;')
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;' + (fade ? '\nuniform float uFadeNear, uFadeFar;' : ''))
+      .replace('#include <begin_vertex>', `#include <begin_vertex>${grow}
         vec4 cloudP = vec4(transformed, 1.0);
         #ifdef USE_INSTANCING
           cloudP = instanceMatrix * cloudP;
@@ -225,7 +235,11 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         float shine = mix(110.0, 380.0, near);
         float spec = pow(max(dot(R, V), 0.0), shine) * mix(0.45, 2.2, near);
         float shade = cloudShade(vWorld);
-        col = col * diff * shade + vec3(spec) * shade;
+        // Night: the sea goes nearly black with a faint moonlit blue, and surf, glint and sky
+        // reflection all dim with it. (Ng, not the rippled N, so the terminator stays soft.)
+        float day = smoothstep(-0.12, 0.22, dot(Ng, uSunDir));
+        vec3 night = vec3(0.012, 0.022, 0.04) + col * 0.05;
+        col = mix(night, col * diff * shade + vec3(spec) * shade, day);
 
         // Foam: a steady line at the shore, plus swells rolling in toward it.
         // Depth is interpolated linearly across big triangles, so shore lines come out straight;
@@ -236,7 +250,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         float swell = smoothstep(0.8, 1.0, sin(fd / uFoam * 4.0 + t * 1.6)) * zone * 0.6;
         float breakup = smoothstep(0.35, 0.75, vnoise(vWorld * 2600.0 + vec3(t * 0.3)));
         float foam = clamp(edge * (0.6 + 0.4 * breakup) + swell * breakup * near, 0.0, 1.0);
-        col = mix(col, vec3(0.94, 0.97, 0.98) * shade, foam * 0.8);
+        col = mix(col, vec3(0.94, 0.97, 0.98) * shade * mix(0.06, 1.0, day), foam * 0.8);
 
         float a = mix(0.5, 0.95, smoothstep(0.0, 0.35, d));
         gl_FragColor = vec4(col, max(a, foam * 0.9));
