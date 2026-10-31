@@ -43,6 +43,8 @@ export interface World {
   downstream: Int32Array;
   flow: Float32Array;
   river: Uint8Array;
+  /** Flow above which a cell carries a river. */
+  riverThreshold: number;
 }
 
 const gridCache = new Map<number, Grid>();
@@ -333,7 +335,7 @@ export function generateWorld(params: WorldParams): World {
     }
   }
 
-  return { params, grid, elevation: elev, surface, plate, temperature, moisture, water, biome, downstream, flow, river };
+  return { params, grid, elevation: elev, surface, plate, temperature, moisture, water, biome, downstream, flow, river, riverThreshold: threshold };
 }
 
 class MinHeap {

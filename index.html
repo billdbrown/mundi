@@ -39,6 +39,10 @@
 
       <fieldset>
         <legend>View</legend>
+        <select id="style">
+          <option value="smooth">Realistic terrain</option>
+          <option value="tiles">Hex tiles</option>
+        </select>
         <select id="mode">
           <option value="biome">Biomes</option>
           <option value="elevation">Elevation</option>
@@ -48,6 +52,8 @@
         </select>
         <label><input id="grid" type="checkbox" checked /> Grid</label>
         <label><input id="show-rivers" type="checkbox" checked /> Rivers</label>
+        <label><input id="trees" type="checkbox" checked /> Trees</label>
+        <label><input id="clouds" type="checkbox" checked /> Clouds</label>
         <label><input id="blend" type="checkbox" checked /> Soft borders</label>
       </fieldset>
       <p id="stats"></p>

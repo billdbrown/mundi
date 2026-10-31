@@ -1,4 +1,4 @@
-import { PlanetView, type ViewMode } from './render.ts';
+import { PlanetView, type ViewMode, type TerrainStyle } from './render.ts';
 import { generateWorld, DEFAULT_PARAMS, WATER_OCEAN, WATER_LAKE, type World, type WorldParams } from './world.ts';
 import { BIOMES } from './biomes.ts';
 
@@ -90,6 +90,9 @@ $('dice').addEventListener('click', () => {
   regenerate();
 });
 $<HTMLSelectElement>('mode').addEventListener('change', (e) => view.setOptions({ mode: (e.target as HTMLSelectElement).value as ViewMode }));
+$<HTMLSelectElement>('style').addEventListener('change', (e) => view.setOptions({ style: (e.target as HTMLSelectElement).value as TerrainStyle }));
+$<HTMLInputElement>('trees').addEventListener('change', (e) => view.setOptions({ trees: (e.target as HTMLInputElement).checked }));
+$<HTMLInputElement>('clouds').addEventListener('change', (e) => view.setOptions({ clouds: (e.target as HTMLInputElement).checked }));
 $<HTMLInputElement>('grid').addEventListener('change', (e) => view.setOptions({ grid: (e.target as HTMLInputElement).checked }));
 $<HTMLInputElement>('show-rivers').addEventListener('change', (e) => view.setOptions({ rivers: (e.target as HTMLInputElement).checked }));
 $<HTMLInputElement>('blend').addEventListener('change', (e) => view.setOptions({ blend: (e.target as HTMLInputElement).checked }));
