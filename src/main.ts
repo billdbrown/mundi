@@ -3,6 +3,7 @@ import { DEFAULT_PARAMS, WATER_OCEAN, WATER_LAKE, type World, type WorldParams }
 import { BIOMES } from './biomes.ts';
 import { flyTo, orbit, type Spot } from './debug.ts';
 import type { BuildRequest, BuildResult } from './worker.ts';
+import { gameData, exportJSON, RESOURCE_NAMES, type GameData } from './gamedata.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -11,6 +12,9 @@ let params: WorldParams = { ...DEFAULT_PARAMS, seed: Math.floor(Math.random() * 
 let viewOpts: ViewOptions = { ...DEFAULT_VIEW };
 let world: World;
 let timings = { gen: 0, mesh: 0, clouds: 0 };
+let game: GameData | null = null;
+/** Site name per cell, for the hover readout. */
+let siteAt = new Map<number, string>();
 
 // --- Worker: generation and meshing happen off the main thread. At most one request is in
 // flight; changes made meanwhile collapse into a single follow-up, and only the latest result
@@ -40,10 +44,15 @@ function pump() {
 worker.onmessage = (e: MessageEvent<BuildResult>) => {
   const r = e.data;
   inFlight = false;
-  if (r.world) world = r.world;
+  if (r.world) {
+    world = r.world;
+    game = gameData(world);
+    siteAt = new Map(game.sites.map((s) => [s.cell, s.name]));
+  }
   if (r.clouds) view.setClouds(r.clouds);
   if (!queued) {
     view.setData(world, r.surface);
+    if (r.world && game) view.setSites(game.sites.map((s) => s.cell));
     timings = r.timings;
     showStats();
     writeHash();
@@ -119,7 +128,7 @@ function syncInputs() {
   $<HTMLSelectElement>('mode').value = viewOpts.mode;
   $<HTMLSelectElement>('style').value = viewOpts.style;
   $<HTMLSelectElement>('light').value = viewOpts.light;
-  for (const [id, key] of [['grid', 'grid'], ['show-rivers', 'rivers'], ['trees', 'trees'], ['clouds', 'clouds'], ['blend', 'blend']] as const) {
+  for (const [id, key] of [['grid', 'grid'], ['show-rivers', 'rivers'], ['trees', 'trees'], ['clouds', 'clouds'], ['blend', 'blend'], ['sites', 'sites']] as const) {
     $<HTMLInputElement>(id).checked = viewOpts[key];
   }
 }
@@ -155,6 +164,16 @@ onCheck('clouds', (v) => ({ clouds: v }));
 onCheck('grid', (v) => ({ grid: v }));
 onCheck('show-rivers', (v) => ({ rivers: v }));
 onCheck('blend', (v) => ({ blend: v }));
+onCheck('sites', (v) => ({ sites: v }));
+$('export').addEventListener('click', () => {
+  if (!world || !game) return;
+  const blob = new Blob([exportJSON(world, game)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `worldgen-${params.seed}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
 $('collapse').addEventListener('click', () => {
   const p = $('panel');
   p.classList.toggle('collapsed');
@@ -173,7 +192,10 @@ view.renderer.domElement.addEventListener('pointermove', (e) => {
   const y = world.grid.centers[c * 3 + 1];
   const lat = Math.asin(Math.max(-1, Math.min(1, y))) * 180 / Math.PI;
   info.innerHTML =
-    `<b>${BIOMES[world.biome[c]].name}</b>${world.river[c] ? ' · river' : ''}<br>` +
+    (siteAt.has(c) ? `<b>⌂ ${siteAt.get(c)}</b><br>` : '') +
+    `<b>${BIOMES[world.biome[c]].name}</b>${world.river[c] ? ' · river' : ''}` +
+    (game && game.continent[c] >= 0 ? ` <span>on</span> ${game.continents[game.continent[c]].name}` : '') + '<br>' +
+    (game && game.resources[c] ? `<span>resources</span> ${RESOURCE_NAMES.filter(([b]) => game!.resources[c] & b).map(([, n]) => n).join(', ')}<br>` : '') +
     `<span>elev</span> ${world.elevation[c].toFixed(2)} <span>temp</span> ${pct(world.temperature[c])} ` +
     `<span>wet</span> ${pct(world.moisture[c])}<br><span>lat</span> ${lat.toFixed(0)}° <span>cell</span> ${c} ` +
     `<span>plate</span> ${world.plate[c]}`;

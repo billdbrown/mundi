@@ -22,9 +22,11 @@ export interface ViewOptions {
   relief: number;
   /** follow: the sun rides with the camera, always lit. cycle: a fixed sun, day and night. */
   light: 'follow' | 'cycle';
+  /** Markers on suggested settlement sites. */
+  sites: boolean;
 }
 
-export const DEFAULT_VIEW: ViewOptions = { mode: 'biome', style: 'smooth', grid: true, rivers: true, trees: true, clouds: true, blend: true, relief: 1, light: 'follow' };
+export const DEFAULT_VIEW: ViewOptions = { mode: 'biome', style: 'smooth', grid: true, rivers: true, trees: true, clouds: true, blend: true, relief: 1, light: 'follow', sites: false };
 
 /** Seconds for one full day in cycle lighting. */
 const DAY_SECONDS = 120;
@@ -46,6 +48,8 @@ export class PlanetView {
   private gridLines?: THREE.LineSegments;
   private rivers?: THREE.Mesh;
   private streams?: THREE.Mesh;
+  private siteMarks?: THREE.Points;
+  private siteCells: number[] = [];
   private forest: THREE.InstancedMesh[] = [];
   private clouds: THREE.Group = makeClouds();
   private hover: THREE.LineLoop;
@@ -162,9 +166,41 @@ export class PlanetView {
     if (this.gridLines) this.gridLines.visible = this.opts.grid;
     if (this.rivers) this.rivers.visible = this.opts.rivers && real;
     if (this.streams) this.streams.visible = this.opts.rivers && real && this.camera.position.length() < 1.6;
+    if (this.siteMarks) this.siteMarks.visible = this.opts.sites;
     for (const f of this.forest) f.visible = this.opts.trees && real;
     if (this.water) this.water.visible = real;
     this.clouds.visible = this.opts.clouds && real;
+  }
+
+  /** Pins on the given cells (settlement sites); redrawn with each new surface. */
+  setSites(cells: number[]) {
+    this.siteCells = cells;
+    this.buildSites();
+    this.applyVisibility();
+  }
+
+  private buildSites() {
+    if (this.siteMarks) {
+      this.planet.remove(this.siteMarks);
+      this.siteMarks.geometry.dispose();
+      (this.siteMarks.material as THREE.Material).dispose();
+      this.siteMarks = undefined;
+    }
+    const w = this.world, s = this.surface;
+    if (!w || !s || !this.siteCells.length) return;
+    // Screen-sized markers: a fixed pixel size reads at every zoom, unlike a 3D pin, which
+    // shrinks to nothing from orbit. Depth-tested, so the planet hides the far side.
+    const P = w.grid.centers, pos: number[] = [];
+    for (const c of this.siteCells) {
+      const h = Math.max(s.centerH(c), SEA) + 0.004;
+      pos.push(P[c * 3] * h, P[c * 3 + 1] * h, P[c * 3 + 2] * h);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({ size: 13, sizeAttenuation: false, map: markerTexture(), transparent: true, alphaTest: 0.3, depthWrite: false });
+    this.siteMarks = new THREE.Points(geo, mat);
+    this.siteMarks.renderOrder = 9;
+    this.planet.add(this.siteMarks);
   }
 
   /** Cell under a screen point, or −1. */
@@ -293,6 +329,7 @@ export class PlanetView {
     this.planet.add(this.gridLines);
 
     this.buildRivers(w, s, P, C);
+    this.buildSites();
     this.applyVisibility();
     this.highlight(-1);
   }
@@ -454,6 +491,23 @@ function makeGridMaterial(sun: { uSunDir: { value: THREE.Vector3 } }): THREE.Sha
         gl_FragColor = vec4(vec3(1.0), uOpacity * day);
       }`,
   });
+}
+
+/** A gold disc with a dark rim, for settlement markers. */
+function markerTexture(): THREE.Texture {
+  const n = 32, data = new Uint8Array(n * n * 4);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const d = Math.hypot(x + 0.5 - n / 2, y + 0.5 - n / 2) / (n / 2);
+    const i = (y * n + x) * 4;
+    const rim = d > 0.62;
+    data[i] = rim ? 40 : 255; data[i + 1] = rim ? 25 : 196; data[i + 2] = rim ? 10 : 70;
+    data[i + 3] = d < 0.95 ? 255 : 0;
+  }
+  const t = new THREE.DataTexture(data, n, n, THREE.RGBAFormat);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.magFilter = THREE.LinearFilter;
+  t.needsUpdate = true;
+  return t;
 }
 
 function toGeometry(m: MeshData): THREE.BufferGeometry {
