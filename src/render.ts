@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { WATER_LAND, WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { hash01 } from './rng.ts';
 import { makeSimplex } from './noise.ts';
@@ -25,9 +29,11 @@ export interface ViewOptions {
   light: 'follow' | 'cycle';
   /** Markers on suggested settlement sites. */
   sites: boolean;
+  /** map: overlays and game colours. photo: no overlays, rivers only up close, a photographic grade. */
+  look: 'map' | 'photo';
 }
 
-export const DEFAULT_VIEW: ViewOptions = { mode: 'biome', style: 'smooth', grid: true, rivers: true, trees: true, clouds: true, blend: true, relief: 1, light: 'follow', sites: false };
+export const DEFAULT_VIEW: ViewOptions = { mode: 'biome', style: 'smooth', grid: true, rivers: true, trees: true, clouds: true, blend: true, relief: 1, light: 'follow', sites: false, look: 'map' };
 
 /** Seconds for one full day in cycle lighting. */
 const DAY_SECONDS = 120;
@@ -70,6 +76,7 @@ export class PlanetView {
   private raycaster = new THREE.Raycaster();
   private clock = new THREE.Clock();
   private sunDir = new THREE.Vector3();
+  private composer?: EffectComposer;
   private sunU = { uSunDir: { value: new THREE.Vector3(0, 0, 1) } };
   private ambient: THREE.AmbientLight;
   private time = 0;
@@ -119,6 +126,12 @@ export class PlanetView {
     this.scene.add(this.planet);
     this.scene.add(makeAtmosphere(this.sunU));
     this.scene.add(makeStars());
+
+    // Photo look: render, grade (in linear light), then tone map and encode.
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer.addPass(new ShaderPass(GRADE_SHADER));
+    this.composer.addPass(new OutputPass());
 
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
@@ -172,10 +185,13 @@ export class PlanetView {
 
   private applyVisibility() {
     const real = this.opts.mode === 'biome';
-    if (this.gridLines) this.gridLines.visible = this.opts.grid;
-    if (this.rivers) this.rivers.visible = this.opts.rivers && real;
-    if (this.streams) this.streams.visible = this.opts.rivers && real && this.camera.position.length() < 1.6;
-    if (this.siteMarks) this.siteMarks.visible = this.opts.sites;
+    const photo = this.opts.look === 'photo';
+    // Rivers are invisible from orbit in reality; in the photo look they appear only close up.
+    const d = this.camera.position.length();
+    if (this.gridLines) this.gridLines.visible = this.opts.grid && !photo;
+    if (this.rivers) this.rivers.visible = this.opts.rivers && real && (!photo || d < 1.3);
+    if (this.streams) this.streams.visible = this.opts.rivers && real && d < 1.6;
+    if (this.siteMarks) this.siteMarks.visible = this.opts.sites && !photo;
     for (const f of this.forest) f.visible = this.opts.trees && real;
     if (this.water) this.water.visible = real;
     this.clouds.visible = this.opts.clouds && real;
@@ -239,6 +255,7 @@ export class PlanetView {
   private resize() {
     const w = this.container.clientWidth, h = this.container.clientHeight;
     this.renderer.setSize(w, h);
+    this.composer?.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -283,7 +300,12 @@ export class PlanetView {
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
 
     this.flora.update(this.camera.position, this.opts.trees && this.opts.mode === 'biome');
-    this.renderer.render(this.scene, this.camera);
+    if (this.opts.look === 'photo') {
+      this.applyVisibility();
+      this.composer!.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 
   private dispose() {
@@ -593,6 +615,25 @@ function markerTexture(): THREE.Texture {
   t.needsUpdate = true;
   return t;
 }
+
+/** Photographic grade: softer saturation and contrast, a faint cool cast, deep blacks kept. */
+const GRADE_SHADER = {
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: /* glsl */`
+    uniform sampler2D tDiffuse;
+    varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+      vec3 g = mix(vec3(l), c.rgb, 0.78);                 // desaturate
+      g = mix(g, g * vec3(0.96, 0.99, 1.05), 0.6);        // cool cast
+      g = pow(max(g, 0.0), vec3(1.06));                  // a touch more depth in the darks
+      gl_FragColor = vec4(g, c.a);
+    }`,
+};
 
 function toGeometry(m: MeshData): THREE.BufferGeometry {
   const g = new THREE.BufferGeometry();

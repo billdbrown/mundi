@@ -163,10 +163,12 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
       ...cloud,
       uTime: { value: 0 },
       uSunDir: { value: new THREE.Vector3(0, 0, 1) },
-      uShallow: { value: new THREE.Color(0x45c0c0) },
-      uMid: { value: new THREE.Color(0x1a6a9a) },
-      uDeep: { value: new THREE.Color(0x082a50) },
-      uSky: { value: new THREE.Color(0xa8cff2) },
+      // Open ocean seen from space is deep navy, close to black; turquoise belongs to shallow
+      // banks only (the Bahamas, not every coast).
+      uShallow: { value: new THREE.Color(0x3aa8a6) },
+      uMid: { value: new THREE.Color(0x0f4a74) },
+      uDeep: { value: new THREE.Color(0x041a33) },
+      uSky: { value: new THREE.Color(0x8fb4d8) },
       uDepthScale: { value: 0.014 },
       uFoam: { value: 0.0013 },
     },
@@ -223,12 +225,12 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         }
 
         float d = clamp(vDepth / uDepthScale, 0.0, 1.0);
-        vec3 col = d < 0.25 ? mix(uShallow, uMid, d / 0.25) : mix(uMid, uDeep, (d - 0.25) / 0.75);
+        vec3 col = d < 0.12 ? mix(uShallow, uMid, smoothstep(0.0, 0.12, d)) : mix(uMid, uDeep, smoothstep(0.12, 0.6, d));
         // Light passing through wave crests in shallow water.
         col += uShallow * (h0 - 0.5) * 0.25 * near * (1.0 - d);
 
         float fres = pow(1.0 - max(dot(N, V), 0.0), 5.0);
-        col = mix(col, uSky, 0.04 + fres * 0.55);
+        col = mix(col, uSky, 0.02 + fres * 0.45);
         float diff = 0.55 + 0.45 * max(dot(N, uSunDir), 0.0);
         vec3 R = reflect(-uSunDir, N);
         // Glint: broad and soft from orbit, tight and bright up close.
@@ -357,12 +359,49 @@ function fresnelShell(radius: number, side: THREE.Side, power: number, strength:
   return new THREE.Mesh(new THREE.SphereGeometry(radius, 96, 48), mat);
 }
 
-/** Outer glow at the limb plus a faint blue haze over the planet's edge. */
+/**
+ * Haze over the whole disc: the planet is always seen through air. Opacity grows with the
+ * length of the line of sight through a thin shell (short straight down, long at the limb),
+ * so the centre stays clear while the edge fades, loses colour and turns blue-white, as in
+ * photographs. Normal blending, so it veils as well as brightens. Dark on the night side.
+ */
+function hazeShell(radius: number, sun: SunUniforms): THREE.Mesh {
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { ...sun, uColor: { value: new THREE.Color(0x9cc4f0) }, uDensity: { value: 0.055 } },
+    vertexShader: /* glsl */`
+      varying vec3 vN; varying vec3 vV; varying vec3 vWN;
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vN = normalize(normalMatrix * normal);
+        vWN = normalize(mat3(modelMatrix) * normal);
+        vV = normalize(-mv.xyz);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */`
+      uniform vec3 uColor, uSunDir; uniform float uDensity;
+      varying vec3 vN; varying vec3 vV; varying vec3 vWN;
+      void main() {
+        float mu = max(dot(vN, vV), 0.02);
+        float path = 1.0 / mu;                                // ~1 at the centre, large at the limb
+        float a = 1.0 - exp(-uDensity * max(0.0, path - 0.85));   // ~clear straight down
+        a *= smoothstep(0.0, 0.12, mu);                       // thin out at the shell's own edge
+        float s = dot(normalize(vWN), uSunDir);
+        float day = smoothstep(-0.25, 0.3, s);
+        float dusk = 1.0 - smoothstep(0.0, 0.3, abs(s + 0.03));
+        vec3 col = mix(uColor, vec3(1.0, 0.55, 0.3), dusk * 0.6);
+        gl_FragColor = vec4(col * (0.15 + 0.85 * day), clamp(a * (0.25 + 0.75 * day), 0.0, 0.85));
+      }`,
+    transparent: true, depthWrite: false,
+  });
+  return new THREE.Mesh(new THREE.SphereGeometry(radius, 128, 64), mat);
+}
+
+/** Outer glow at the limb plus haze over the planet. */
 export function makeAtmosphere(sun: SunUniforms): THREE.Group {
   const g = new THREE.Group();
   // Thin, as a real atmosphere is next to its planet.
   g.add(fresnelShell(1.03, THREE.BackSide, 1.8, 0.75, 0x6aaeff, sun));
-  const haze = fresnelShell(1.027, THREE.FrontSide, 3.0, 0.45, 0x8fc4ff, sun);
+  const haze = hazeShell(1.027, sun);
   haze.renderOrder = 6;
   g.add(haze);
   return g;

@@ -136,6 +136,7 @@ function syncInputs() {
   $<HTMLSelectElement>('mode').value = viewOpts.mode;
   $<HTMLSelectElement>('style').value = viewOpts.style;
   $<HTMLSelectElement>('light').value = viewOpts.light;
+  $<HTMLSelectElement>('look').value = viewOpts.look;
   for (const [id, key] of [['grid', 'grid'], ['show-rivers', 'rivers'], ['trees', 'trees'], ['clouds', 'clouds'], ['blend', 'blend'], ['sites', 'sites']] as const) {
     $<HTMLInputElement>(id).checked = viewOpts[key];
   }
@@ -167,6 +168,7 @@ const onCheck = (id: string, f: (v: boolean) => Partial<ViewOptions>) =>
 onSelect('mode', (v) => ({ mode: v as ViewMode }));
 onSelect('style', (v) => ({ style: v as TerrainStyle }));
 onSelect('light', (v) => ({ light: v as ViewOptions['light'] }));
+onSelect('look', (v) => ({ look: v as ViewOptions['look'] }));
 onCheck('trees', (v) => ({ trees: v }));
 onCheck('clouds', (v) => ({ clouds: v }));
 onCheck('grid', (v) => ({ grid: v }));

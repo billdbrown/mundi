@@ -44,6 +44,8 @@ const CASES = [
   { name: 'pangaea-1903', hash: 'seed=1903&continents=1&ocean=0.55', view: { orbit: [0, 25, ORBIT] } },
   { name: 'daynight-77', hash: 'seed=77', opts: { light: 'cycle' }, view: { orbit: [75, 15, ORBIT] } },
   { name: 'sites-4242', hash: 'seed=4242', opts: { sites: true }, view: { orbit: [60, 20, ORBIT] } },
+  { name: 'photo-77', hash: 'seed=77', opts: { look: 'photo' }, view: { orbit: [180, 15, ORBIT] } },
+  { name: 'photo-4242', hash: 'seed=4242', opts: { look: 'photo' }, view: { orbit: [60, 20, ORBIT] } },
   { name: 'iceage-1903', hash: 'seed=1903&heat=-0.3', view: { orbit: [0, 45, ORBIT] } },
 ];
 
