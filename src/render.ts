@@ -280,6 +280,10 @@ export class PlanetView {
     this.renderer.setSize(w, h);
     this.composer?.setSize(w, h);
     this.camera.aspect = w / h;
+    // Keep a 40° field of view across the narrower side, so on a portrait phone the planet
+    // fits the width instead of overflowing it.
+    const aspect = w / h;
+    this.camera.fov = aspect >= 1 ? 40 : (2 * Math.atan(Math.tan((20 * Math.PI) / 180) / aspect) * 180) / Math.PI;
     this.camera.updateProjectionMatrix();
   }
 

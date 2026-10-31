@@ -52,3 +52,102 @@ body.capture #panel, body.capture #info, body.capture #scale { display: none; }
 @media (max-width: 600px) {
   #panel { left: 8px; right: 8px; width: auto; top: 8px; max-height: 55vh; overflow: auto; }
 }
+
+/* ---------------------------------------------------------------- planet-first shell */
+body.capture .ui { display: none !important; }
+body.shell #panel.advanced { display: none; }
+body.shell #panel { top: auto; bottom: 84px; left: 16px; max-height: calc(100vh - 220px); overflow: auto; }
+
+.ui { --glass: rgba(10, 14, 22, 0.62); --edge: rgba(255, 255, 255, 0.12); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.ui button { font: inherit; color: var(--text); cursor: pointer; }
+.ui .pill { position: relative; background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge);
+  border-radius: 999px; padding: 8px 14px; font-size: 13px; transition: border-color .15s, background .15s; }
+.ui .pill:hover, .ui .pill.on { border-color: rgba(140, 190, 255, 0.6); }
+.ui .pill.primary { background: rgba(70, 120, 200, 0.35); }
+
+.brand { position: fixed; top: 22px; left: 26px; pointer-events: none; text-shadow: 0 2px 12px rgba(0,0,0,.7); }
+.wordmark { font-size: 11px; letter-spacing: 0.42em; color: rgba(255,255,255,.6); }
+.pname { font-size: 34px; font-weight: 300; letter-spacing: 0.02em; margin-top: 2px; }
+.pseed { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+.actions { position: fixed; top: 22px; right: 22px; display: flex; gap: 8px; }
+
+.lenses { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; gap: 2px;
+  background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 999px; padding: 4px; }
+.lenses button { background: none; border: none; border-radius: 999px; padding: 7px 14px; display: flex; gap: 6px; align-items: center;
+  color: var(--muted); font-size: 13px; }
+.lenses button.on { background: rgba(255,255,255,.14); color: #fff; }
+.lenses .ico { font-size: 14px; }
+.ui-a .lenses .lbl { display: none; }
+.ui-a .lenses button { padding: 7px 11px; }
+.ui-a .lenses button.on .lbl { display: inline; }
+
+.legend { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
+  font-size: 11px; color: var(--muted); text-shadow: 0 1px 4px #000; }
+.legend i { display: block; width: 160px; height: 6px; border-radius: 3px; }
+
+.shape-toggle { position: fixed; left: 22px; bottom: 22px; }
+.drawer { position: fixed; left: 22px; bottom: 72px; width: 300px; background: var(--glass); backdrop-filter: blur(14px);
+  border: 1px solid var(--edge); border-radius: 16px; padding: 14px 16px 12px; display: grid; gap: 12px; }
+.drawer-head { display: flex; justify-content: space-between; align-items: center; }
+.drawer h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.drawer .x { background: none; border: none; font-size: 20px; line-height: 1; color: var(--muted); }
+.presets, .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets button, .chips button { background: rgba(255,255,255,.06); border: 1px solid var(--edge); border-radius: 999px;
+  padding: 5px 10px; font-size: 12px; }
+.presets button.on, .chips button.on { background: rgba(110,170,255,.25); border-color: rgba(140,190,255,.6); }
+.dials { display: grid; gap: 10px; }
+.dial { display: grid; gap: 3px; }
+.dial-name { font-size: 12px; color: var(--text); }
+.dial input { width: 100%; accent-color: #8fb8ff; }
+.dial-ends { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); font-style: normal; }
+.dial-ends em { font-style: normal; }
+.toggle { font-size: 12px; color: var(--text); display: flex; gap: 6px; align-items: center; }
+.link { background: none; border: none; padding: 0; text-align: left; font-size: 12px; color: #8fb8ff !important; }
+
+.almanac { display: none; }
+.ui-b .almanac { display: block; position: fixed; top: 120px; left: 26px; width: 250px; background: var(--glass);
+  backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 14px; padding: 12px 14px; font-size: 12px; }
+.almanac h3 { margin: 0 0 8px; font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.almanac dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 5px 10px; }
+.almanac dt { color: var(--muted); }
+.almanac dd { margin: 0; }
+.chips { display: none; }
+.ui-b .chips { display: flex; position: fixed; left: 200px; bottom: 26px; max-width: calc(50vw - 420px); }
+.ui-b .shape-toggle { }
+
+.hint { position: fixed; left: 50%; bottom: 76px; transform: translateX(-50%); font-size: 12px; color: rgba(255,255,255,.55);
+  text-shadow: 0 1px 6px #000; pointer-events: none; transition: opacity 1.2s; }
+.hint.gone { opacity: 0; }
+.ui-b .hint { bottom: 96px; }
+.toast { position: fixed; top: 74px; right: 22px; background: var(--glass); border: 1px solid var(--edge); border-radius: 10px;
+  padding: 8px 12px; font-size: 12px; }
+.compare { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; background: rgba(255,200,80,.15);
+  border: 1px dashed rgba(255,200,80,.5); border-radius: 8px; padding: 2px; }
+.compare button { background: none; border: none; padding: 3px 9px; border-radius: 6px; font-size: 11px; color: rgba(255,220,150,.8); }
+.compare button.on { background: rgba(255,200,80,.3); color: #fff; }
+
+body.shell #scale { bottom: 26px; right: 26px; }
+body.shell #info { border-radius: 12px; padding: 8px 11px; background: rgba(10,14,22,.78); backdrop-filter: blur(8px); }
+
+@media (max-width: 720px) {
+  .pname { font-size: 24px; }
+  .brand { top: 14px; left: 16px; }
+  .actions { top: 14px; right: 14px; }
+  .actions #share { display: none; }
+  .lenses { bottom: 70px; }
+  .lenses .lbl { display: none; }
+  .shape-toggle { left: 50%; transform: translateX(-50%); bottom: 18px; }
+  .drawer { left: 8px; right: 8px; width: auto; bottom: 120px; }
+  .ui-b .almanac, .ui-b .chips { display: none; }
+  .hint { bottom: 122px; }
+  body.shell #scale { bottom: 18px; right: 14px; }
+}
+
+/* Fixes: [hidden] must win over display rules; pills that are also fixed-position. */
+.ui [hidden] { display: none !important; }
+.ui .shape-toggle { position: fixed; }
+.ui-b .chips { left: 22px; bottom: 68px; max-width: 330px; }
+.ui-b .ui:has(#drawer:not([hidden])) .chips, .ui:has(#drawer:not([hidden])) .chips { display: none; }
+.ui:has(#drawer:not([hidden])) .almanac { display: none; }
+@media (max-width: 720px) { .ui .shape-toggle { left: 50%; transform: translateX(-50%); } }

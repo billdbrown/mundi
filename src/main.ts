@@ -4,6 +4,7 @@ import { BIOMES } from './biomes.ts';
 import { flyTo, orbit, type Spot } from './debug.ts';
 import type { BuildRequest, BuildResult } from './worker.ts';
 import { gameData, exportJSON, RESOURCE_NAMES, type GameData } from './gamedata.ts';
+import { mountShell, type Lens } from './shell.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -17,6 +18,8 @@ let radiusKm = 6371;
 let game: GameData | null = null;
 /** Site name per cell, for the hover readout. */
 let siteAt = new Map<number, string>();
+let lens: Lens = 'earth';
+const drawnListeners: (() => void)[] = [];
 
 // --- Worker: generation and meshing happen off the main thread. At most one request is in
 // flight; changes made meanwhile collapse into a single follow-up, and only the latest result
@@ -59,6 +62,7 @@ worker.onmessage = (e: MessageEvent<BuildResult>) => {
     showStats();
     writeHash();
     $('panel').classList.remove('busy');
+    for (const f of drawnListeners) f();
     const done = waiters;
     waiters = [];
     for (const f of done) f();
@@ -103,13 +107,16 @@ function readHash() {
   if (r) viewOpts.relief = Number(r);
   const km = Number(h.get('radius'));
   if (km > 0) radiusKm = km;
+  const l = h.get('lens');
+  if (l) lens = l as Lens;
 }
 function writeHash() {
   const h = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) h.set(k, String(v));
   h.set('relief', String(viewOpts.relief));
   h.set('radius', String(radiusKm));
-  history.replaceState(null, '', '#' + h.toString());
+  h.set('lens', lens);
+  history.replaceState(null, '', location.search + '#' + h.toString());
 }
 
 const sliders: [keyof WorldParams | 'relief', (v: number) => string][] = [
@@ -272,5 +279,20 @@ view.renderer.domElement.addEventListener('pointerleave', () => { info.hidden = 
 
 readHash();
 syncInputs();
+const shell = mountShell({
+  params: () => params,
+  setParams: (p) => { params = { ...params, ...p }; syncInputs(); request(); },
+  view: () => viewOpts,
+  setView: (o) => { const r = setView(o); syncInputs(); return r; },
+  lens: () => lens,
+  setLens: (l) => { lens = l; writeHash(); },
+  world: () => world,
+  game: () => game,
+  radiusKm: () => radiusKm,
+  onDrawn: (f) => drawnListeners.push(f),
+  busy: () => inFlight || queued,
+  renderer: view,
+});
+shell.applyLens(lens, false);
 view.setOptions(viewOpts);
 request();
