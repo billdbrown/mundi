@@ -51,7 +51,7 @@ export class PlanetView {
   private siteMarks?: THREE.Points;
   private siteCells: number[] = [];
   private forest: THREE.InstancedMesh[] = [];
-  private clouds: THREE.Group = makeClouds();
+  private clouds: THREE.Group;
   private hover: THREE.LineLoop;
   private sun: THREE.DirectionalLight;
   private surface?: SurfaceQueries;
@@ -95,6 +95,7 @@ export class PlanetView {
     this.ambient = new THREE.AmbientLight(0xc8d8f0, 0.75);
     this.scene.add(this.ambient);
 
+    this.clouds = makeClouds(this.cloudU);
     this.hover = new THREE.LineLoop(
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, depthTest: false }),
@@ -130,9 +131,7 @@ export class PlanetView {
     [tex.main, tex.cirrus].forEach((t, i) => {
       const m = (this.clouds.children[i] as THREE.Mesh).material as THREE.MeshStandardMaterial;
       m.map?.dispose();
-      m.bumpMap?.dispose();
       m.map = t;
-      if (i === 0) { m.bumpMap = tex.bump; m.bumpScale = 6; }
       m.needsUpdate = true;
     });
     this.cloudU.uCloudMap.value = tex.main;
@@ -269,6 +268,7 @@ export class PlanetView {
       cirrus.rotation.y = this.frozen * 0.011;
     }
     this.cloudU.uCloudRot.value = deck.rotation.y;
+    this.cloudU.uCloudTime.value = this.time;
     if (this.streams) this.streams.visible = this.opts.rivers && this.opts.mode === 'biome' && d < 1.6;
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
 

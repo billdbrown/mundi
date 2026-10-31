@@ -82,7 +82,9 @@ export function cloudPixels(seed: number): CloudPixels {
     const qx = fbm(n2, px, py, pz, 3, 1.4), qy = fbm(n2, px + 4.7, py, pz, 3, 1.4);
     const v = fbm(n1, px + qx * 0.7, py + qy * 0.7, pz, 6, 2.2);
     const cover = v + 0.2 * band - 0.24 + boost;
-    return [1 - 0.28 * smooth(0.25, 0.7, cover), smooth(0.0, 0.42, cover)];
+    // Raw cover, not a finished cloud: 0.5 is the edge of a cloud. The shader adds drifting
+    // noise before thresholding, so shapes grow, thin and merge over time (see cloudCover).
+    return [1, Math.max(0, Math.min(1, 0.5 + cover * 0.53))];
   });
   const cirrus = paint((lat, x, y, z) => {
     // Stretching the sample along y turns blobs into east–west streaks.

@@ -8,10 +8,12 @@ export interface CloudUniforms {
   uCloudMap: { value: THREE.Texture | null };
   uCloudRot: { value: number };
   uCloudShadow: { value: number };
+  /** Seconds; drives how cloud shapes evolve. */
+  uCloudTime: { value: number };
 }
 
 export function makeCloudUniforms(): CloudUniforms {
-  return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 } };
+  return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 } };
 }
 
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
@@ -38,7 +40,32 @@ export const NOISE_GLSL = /* glsl */`
  */
 const CLOUD_GLSL = /* glsl */`
   uniform sampler2D uCloudMap;
-  uniform float uCloudRot, uCloudShadow;
+  uniform float uCloudRot, uCloudShadow, uCloudTime;
+  // Own noise (distinct names), so this chunk can sit beside NOISE_GLSL in one shader.
+  float cnHash(vec3 p) {
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+  }
+  float cnNoise(vec3 x) {
+    vec3 i = floor(x), f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(cnHash(i), cnHash(i + vec3(1, 0, 0)), f.x), mix(cnHash(i + vec3(0, 1, 0)), cnHash(i + vec3(1, 1, 0)), f.x), f.y),
+      mix(mix(cnHash(i + vec3(0, 0, 1)), cnHash(i + vec3(1, 0, 1)), f.x), mix(cnHash(i + vec3(0, 1, 1)), cnHash(i + vec3(1, 1, 1)), f.x), f.y),
+      f.z);
+  }
+  /**
+   * Live cover at direction d (in the cloud layer's own frame): the painted base plus two
+   * octaves of slowly drifting noise. 0.5 is a cloud's edge. Used by the clouds themselves and
+   * by every shadow lookup, so shadows keep the same shapes.
+   */
+  float cloudCover(float raw, vec3 d, float t) {
+    float a = cnNoise(d * 7.0 + vec3(0.030, 0.020, -0.025) * t) - 0.5;
+    float b = cnNoise(d * 19.0 - vec3(0.050, 0.035, 0.045) * t) - 0.5;
+    return raw + a * 0.26 + b * 0.10;
+  }
+  float cloudAlpha(float cover) { return smoothstep(0.5, 0.72, cover); }
   float cloudShade(vec3 p) {
     if (uCloudShadow <= 0.0) return 1.0;
     vec3 d = normalize(p);
@@ -47,8 +74,8 @@ const CLOUD_GLSL = /* glsl */`
     float theta = acos(clamp(q.y, -1.0, 1.0));
     float phi = atan(q.z, -q.x);
     if (phi < 0.0) phi += 6.2831853;
-    float a = textureLod(uCloudMap, vec2(phi / 6.2831853, 1.0 - theta / 3.14159265), 1.5).a;
-    return 1.0 - uCloudShadow * a;
+    float raw = textureLod(uCloudMap, vec2(phi / 6.2831853, 1.0 - theta / 3.14159265), 1.5).a;
+    return 1.0 - uCloudShadow * cloudAlpha(cloudCover(raw, q, uCloudTime));
   }
 `;
 
@@ -208,7 +235,7 @@ export function makeWaterMaterial(cloud: CloudUniforms): THREE.ShaderMaterial {
   });
 }
 
-export interface CloudTextures { main: THREE.Texture; cirrus: THREE.Texture; bump: THREE.Texture }
+export interface CloudTextures { main: THREE.Texture; cirrus: THREE.Texture }
 
 /** Uploads worker-painted cloud pixels as textures, mipmapped (the shadow lookup samples a blurred level). */
 export function cloudTexturesFromPixels(px: CloudPixels): CloudTextures {
@@ -223,16 +250,10 @@ export function cloudTexturesFromPixels(px: CloudPixels): CloudTextures {
     t.needsUpdate = true;
     return t;
   };
-  // Thickness (alpha) as a bump map: the sun then lights the tops of thick cloud and shades its
-  // flanks, which reads as puffy rather than painted on.
-  const bump = new Uint8Array(px.width * px.height * 4);
-  for (let i = 0; i < bump.length; i += 4) bump[i] = bump[i + 1] = bump[i + 2] = px.main[i + 3];
-  const bumpTex = tex(bump);
-  bumpTex.colorSpace = THREE.NoColorSpace;
-  return { main: tex(px.main), cirrus: tex(px.cirrus), bump: bumpTex };
+  return { main: tex(px.main), cirrus: tex(px.cirrus) };
 }
 
-export function makeClouds(): THREE.Group {
+export function makeClouds(u: CloudUniforms): THREE.Group {
   const g = new THREE.Group();
   const layer = (r: number, opacity: number) => {
     const m = new THREE.Mesh(
@@ -243,7 +264,26 @@ export function makeClouds(): THREE.Group {
     m.userData.baseOpacity = opacity;
     return m;
   };
-  g.add(layer(1.028, 0.8), layer(1.042, 0.5));
+  const deck = layer(1.028, 0.85), cirrus = layer(1.042, 0.5);
+  // The deck's texture holds raw cover; shapes are decided here, live.
+  const mat = deck.material as THREE.MeshStandardMaterial;
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudLocal;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCloudLocal = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudLocal;\n' + CLOUD_GLSL)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        #ifdef USE_MAP
+          float cover = cloudCover(texture2D(map, vMapUv).a, normalize(vCloudLocal), uCloudTime);
+          diffuseColor.rgb = vec3(1.0 - 0.3 * smoothstep(0.66, 0.9, cover));   // grey where thick
+          diffuseColor.a = opacity * cloudAlpha(cover);
+        #else
+          diffuseColor.a = 0.0;   // compiled before the worker's texture arrives
+        #endif`);
+  };
+  g.add(deck, cirrus);
   return g;
 }
 
