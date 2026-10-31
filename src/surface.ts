@@ -156,14 +156,6 @@ const spacingOf = (n: number) => Math.sqrt((4 * Math.PI) / n);
 /** Sea floor drops away quickly past the shoreline, so shelves read as sea, not lagoon. */
 const seaFloor = (e: number) => SEA - 0.0015 - Math.pow(Math.max(0, -e), 0.7) * 0.035;
 
-/** Picks a point in fan triangle (A, B, C) split into four; weights over the six vertices. */
-function subTri(a: number, b: number, c: number, iA: number, iB: number, iC: number,
-  iAB: number, iBC: number, iCA: number): [number[], number[]] {
-  if (a >= 0.5) return [[iA, iAB, iCA], [2 * a - 1, 2 * b, 2 * c]];
-  if (b >= 0.5) return [[iAB, iB, iBC], [2 * a, 2 * b - 1, 2 * c]];
-  if (c >= 0.5) return [[iCA, iBC, iC], [2 * a, 2 * b, 2 * c - 1]];
-  return [[iAB, iBC, iCA], [a + b - c, b + c - a, a + c - b]];
-}
 
 /**
  * Groves and clearings: a slow noise scales tree density from near zero to almost double, so
@@ -337,34 +329,55 @@ function buildSmooth(inp: SurfaceInput): Surface {
     depth.push(lvl - h + (lvl > SEA + 1e-4 ? 0.006 : 0));
     return i;
   };
-  const freq = 1.3 / spacing;
+  // Each fan triangle (cell centre + two corners) becomes a k×k triangular grid. k is picked so
+  // the planet stays near a fixed triangle budget: finer on small worlds, coarser on big ones.
+  const k = Math.max(2, Math.min(6, Math.round(Math.sqrt(850000 / (N * 6)))));
+  // Noise scales are tied to the vertex spacing: the finest octave spans about three vertices.
+  // Finer than that, neighbouring vertices get unrelated heights and the surface turns to spikes.
+  const freq = 0.5 / spacing;
+  const ridgeBase = 0.45 / spacing;
+  /** Ridged multi-octave noise, about 0..1: sharp crests where the noise crosses zero. */
+  const ridged = (dx: number, dy: number, dz: number) => {
+    let sum = 0, amp = 0.5, f = ridgeBase, norm = 0;
+    for (let o = 0; o < 3; o++) {
+      const n = 1 - Math.abs(rough(dx * f + 3.7 * o, dy * f, dz * f));
+      sum += n * n * amp; norm += amp; amp *= 0.5; f *= 2;
+    }
+    return sum / norm;
+  };
+  /** Displacement for a point whose interpolated height is h: gentle in lowlands, craggy up high. */
   const bump = (dx: number, dy: number, dz: number, h: number) => {
-    if (h <= SEA + 0.0005) return h + 0.0003 * rough(dx * freq, dy * freq, dz * freq);
+    const n = rough(dx * freq, dy * freq, dz * freq);
+    if (h <= SEA + 0.0005) return h + 0.0003 * n;
     const e = Math.min(1, (h - SEA) / Math.max(1e-6, relief));
-    const amp = (0.0006 + 0.0055 * e) * inp.relief;
-    return h + amp * rough(dx * freq, dy * freq, dz * freq);
+    const gentle = (0.0004 + 0.0015 * e) * n;
+    const crags = 0.006 * Math.pow(e, 1.5) * (ridged(dx, dy, dz) - 0.4);
+    return h + (gentle + crags) * inp.relief;
   };
 
   const cornerIdx = new Int32Array(K).fill(-1);
-  const corner = (k: number) => {
-    if (cornerIdx[k] < 0) {
-      cornerIdx[k] = add(C[k * 3], C[k * 3 + 1], C[k * 3 + 2], cornerH[k],
-        cornerCol[k * 3], cornerCol[k * 3 + 1], cornerCol[k * 3 + 2], cornerLevel[k]);
+  const corner = (kk: number) => {
+    if (cornerIdx[kk] < 0) {
+      cornerIdx[kk] = add(C[kk * 3], C[kk * 3 + 1], C[kk * 3 + 2], cornerH[kk],
+        cornerCol[kk * 3], cornerCol[kk * 3 + 1], cornerCol[kk * 3 + 2], cornerLevel[kk]);
     }
-    return cornerIdx[k];
+    return cornerIdx[kk];
   };
-  const edgeMid = new Map<number, number>();
-  const edge = (k0: number, k1: number) => {
-    const key = k0 < k1 ? k0 * K + k1 : k1 * K + k0;
-    let i = edgeMid.get(key);
+  // Points along a shared edge are keyed by the edge and the step from its lower-numbered corner,
+  // so the two cells on either side reuse the same vertices: no cracks.
+  const edgePts = new Map<number, number>();
+  const edgePoint = (k0: number, k1: number, j: number) => {
+    const lo = Math.min(k0, k1), hi = Math.max(k0, k1), st = k0 < k1 ? j : k - j;
+    const key = (lo * K + hi) * (k + 1) + st;
+    let i = edgePts.get(key);
     if (i === undefined) {
-      let dx = C[k0 * 3] + C[k1 * 3], dy = C[k0 * 3 + 1] + C[k1 * 3 + 1], dz = C[k0 * 3 + 2] + C[k1 * 3 + 2];
+      const t = st / k;
+      let dx = C[lo * 3] * (1 - t) + C[hi * 3] * t, dy = C[lo * 3 + 1] * (1 - t) + C[hi * 3 + 1] * t, dz = C[lo * 3 + 2] * (1 - t) + C[hi * 3 + 2] * t;
       const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
-      const h = bump(dx, dy, dz, (cornerH[k0] + cornerH[k1]) / 2);
-      i = add(dx, dy, dz, h,
-        (cornerCol[k0 * 3] + cornerCol[k1 * 3]) / 2, (cornerCol[k0 * 3 + 1] + cornerCol[k1 * 3 + 1]) / 2,
-        (cornerCol[k0 * 3 + 2] + cornerCol[k1 * 3 + 2]) / 2, Math.max(cornerLevel[k0], cornerLevel[k1]));
-      edgeMid.set(key, i);
+      i = add(dx, dy, dz, bump(dx, dy, dz, cornerH[lo] * (1 - t) + cornerH[hi] * t),
+        cornerCol[lo * 3] * (1 - t) + cornerCol[hi * 3] * t, cornerCol[lo * 3 + 1] * (1 - t) + cornerCol[hi * 3 + 1] * t,
+        cornerCol[lo * 3 + 2] * (1 - t) + cornerCol[hi * 3 + 2] * t, Math.max(cornerLevel[lo], cornerLevel[hi]));
+      edgePts.set(key, i);
     }
     return i;
   };
@@ -380,27 +393,68 @@ function buildSmooth(inp: SurfaceInput): Surface {
     const lvl = vLevel[c] > 0 ? vLevel[c] : SEA;
     const px = P[c * 3], py = P[c * 3 + 1], pz = P[c * 3 + 2];
     const iA = add(px, py, pz, cellH[c], r, gg, b, lvl);
-    const mid: number[] = [];
-    for (const k of ks) {
-      let dx = px + C[k * 3], dy = py + C[k * 3 + 1], dz = pz + C[k * 3 + 2];
-      const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
-      const h = bump(dx, dy, dz, (cellH[c] + cornerH[k]) / 2);
-      mid.push(add(dx, dy, dz, h, (r + cornerCol[k * 3]) / 2, (gg + cornerCol[k * 3 + 1]) / 2, (b + cornerCol[k * 3 + 2]) / 2, lvl));
-    }
+    // Spokes: points from the centre toward each corner, shared by the two fan triangles there.
+    const spoke: number[][] = Array.from(ks, (kk) => {
+      const out: number[] = [];
+      for (let st = 1; st < k; st++) {
+        const t = st / k;
+        let dx = px * (1 - t) + C[kk * 3] * t, dy = py * (1 - t) + C[kk * 3 + 1] * t, dz = pz * (1 - t) + C[kk * 3 + 2] * t;
+        const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
+        out[st] = add(dx, dy, dz, bump(dx, dy, dz, cellH[c] * (1 - t) + cornerH[kk] * t),
+          r * (1 - t) + cornerCol[kk * 3] * t, gg * (1 - t) + cornerCol[kk * 3 + 1] * t, b * (1 - t) + cornerCol[kk * 3 + 2] * t, lvl);
+      }
+      return out;
+    });
     const hasWater = vLevel[c] > 0;
     for (let i = 0; i < m; i++) {
       const k0 = ks[i], k1 = ks[(i + 1) % m];
-      const iB = corner(k0), iC = corner(k1);
-      const iAB = mid[i], iCA = mid[(i + 1) % m], iBC = edge(k0, k1);
-      const tris = [iA, iAB, iCA, iAB, iB, iBC, iCA, iBC, iC, iAB, iBC, iCA];
-      index.push(...tris);
-      faces.push(c, c, c, c);
-      if (hasWater) windex.push(...tris);
+      // Local grid: idx[a][bb] is a steps toward corner k0 and bb steps toward corner k1.
+      const idx: number[][] = [];
+      for (let a = 0; a <= k; a++) {
+        idx[a] = [];
+        for (let bb = 0; a + bb <= k; bb++) {
+          let v: number;
+          if (a === 0 && bb === 0) v = iA;
+          else if (bb === 0) v = a === k ? corner(k0) : spoke[i][a];
+          else if (a === 0) v = bb === k ? corner(k1) : spoke[(i + 1) % m][bb];
+          else if (a + bb === k) v = edgePoint(k0, k1, bb);
+          else {
+            const wa = 1 - (a + bb) / k, wb = a / k, wc = bb / k;
+            let dx = wa * px + wb * C[k0 * 3] + wc * C[k1 * 3];
+            let dy = wa * py + wb * C[k0 * 3 + 1] + wc * C[k1 * 3 + 1];
+            let dz = wa * pz + wb * C[k0 * 3 + 2] + wc * C[k1 * 3 + 2];
+            const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
+            v = add(dx, dy, dz, bump(dx, dy, dz, wa * cellH[c] + wb * cornerH[k0] + wc * cornerH[k1]),
+              wa * r + wb * cornerCol[k0 * 3] + wc * cornerCol[k1 * 3],
+              wa * gg + wb * cornerCol[k0 * 3 + 1] + wc * cornerCol[k1 * 3 + 1],
+              wa * b + wb * cornerCol[k0 * 3 + 2] + wc * cornerCol[k1 * 3 + 2], lvl);
+          }
+          idx[a][bb] = v;
+        }
+      }
+      for (let a = 0; a < k; a++) {
+        for (let bb = 0; a + bb < k; bb++) {
+          index.push(idx[a][bb], idx[a + 1][bb], idx[a][bb + 1]);
+          faces.push(c);
+          if (hasWater) windex.push(idx[a][bb], idx[a + 1][bb], idx[a][bb + 1]);
+          if (a + bb < k - 1) {
+            index.push(idx[a + 1][bb], idx[a + 1][bb + 1], idx[a][bb + 1]);
+            faces.push(c);
+            if (hasWater) windex.push(idx[a + 1][bb], idx[a + 1][bb + 1], idx[a][bb + 1]);
+          }
+        }
+      }
 
       if (inp.flora && w.water[c] === WATER_LAND) {
-        placeTrees(w, c, m, rng, mul, spacing, (a, bb, cc) => {
-          if (inRiver(w, c, i, a)) return null;
-          const [vs, ws] = subTri(a, bb, cc, iA, iB, iC, iAB, iBC, iCA);
+        placeTrees(w, c, m, rng, mul, spacing, (wA, wB, wC) => {
+          if (inRiver(w, c, i, wA)) return null;
+          // Find the small grid triangle holding this point and interpolate its vertices.
+          const u = wB * k, v = wC * k;
+          const ia = Math.min(Math.floor(u), k - 1), ib = Math.min(Math.floor(v), k - 1 - ia);
+          const fu = u - ia, fv = v - ib;
+          let vs: number[], ws: number[];
+          if (fu + fv > 1 && ia + ib < k - 1) { vs = [idx[ia + 1][ib + 1], idx[ia][ib + 1], idx[ia + 1][ib]]; ws = [fu + fv - 1, 1 - fu, 1 - fv]; }
+          else { vs = [idx[ia][ib], idx[ia + 1][ib], idx[ia][ib + 1]]; ws = [1 - fu - fv, fu, fv]; }
           let x = 0, y = 0, z = 0;
           for (let j = 0; j < 3; j++) { x += pos[vs[j] * 3] * ws[j]; y += pos[vs[j] * 3 + 1] * ws[j]; z += pos[vs[j] * 3 + 2] * ws[j]; }
           return Math.hypot(x, y, z) < SEA + 0.0008 ? null : [x, y, z];
