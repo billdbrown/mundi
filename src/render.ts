@@ -12,7 +12,7 @@ import { makeSimplex } from './noise.ts';
 import { SEA, RELIEF, surfaceQueries, type MeshData, type SurfaceData, type SurfaceQueries } from './surface.ts';
 import { buildForest, treeMaterial } from './flora.ts';
 import { LodFlora, FADE_NEAR, FADE_FAR } from './lodflora.ts';
-import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere, makeStars, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
+import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere, makeStars, makeSky, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
 import type { CloudPixels } from './clouds.ts';
 import { MERC_GLSL, MERC_DISCARD, MERC_MAX_Y, mercVertex, mercY, mercLat, setMercator } from './mercator.ts';
 import type { ViewMode, TerrainStyle } from './colors.ts';
@@ -92,7 +92,11 @@ export class PlanetView {
   private composer?: EffectComposer;
   private renderPass: RenderPass;
   private atmosphere: THREE.Object3D;
-  private stars: THREE.Object3D;
+  private stars: THREE.Points;
+  /** Low-altitude sky, aerial haze, and how far the camera has pitched up toward the horizon. */
+  private sky: THREE.Mesh;
+  private haze = new THREE.FogExp2(0x8fa8c8, 0);
+  private tilt = 0;
   /** Flat map: an orthographic camera over Mercator space (see mercator.ts). */
   private mapMode = false;
   readonly mapCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.5, 20);
@@ -125,7 +129,7 @@ export class PlanetView {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.enablePan = false;
-    this.controls.minDistance = 1.045;
+    this.controls.minDistance = 1.006;   // raised over high ground each frame (applyTilt)
     this.controls.maxDistance = 7;
     this.controls.zoomSpeed = 0.8;
 
@@ -153,6 +157,9 @@ export class PlanetView {
     this.atmosphere = makeAtmosphere(this.sunU);
     this.stars = makeStars();
     this.scene.add(this.atmosphere, this.stars);
+    this.sky = makeSky(this.sunU);
+    this.scene.add(this.sky);
+    this.scene.fog = this.haze;
     this.graticule = makeGraticule();
     this.planet.add(this.graticule);
     this.mapInput();
@@ -258,9 +265,54 @@ export class PlanetView {
     // The flat map is cloud-free, like the satellite composites world maps are made from:
     // flat and evenly lit, clouds hide the land (and Mercator swells the polar ones).
     this.clouds.visible = this.opts.clouds && real && !this.mapMode;
-    this.atmosphere.visible = this.stars.visible = !this.mapMode;
+    this.stars.visible = !this.mapMode;
+    if (this.mapMode) this.atmosphere.visible = false;   // on the globe, applyTilt decides
+    if (this.mapMode) { this.sky.visible = false; this.haze.density = 0; }
     this.graticule.visible = this.mapMode;
     if (this.mapMode) for (const f of this.forest) f.visible = false;
+  }
+
+  /**
+   * Low over the ground, look toward the horizon instead of straight down: the camera pitches
+   * up as it descends (OrbitControls re-aims it at the planet's centre every frame, so the
+   * pitch is reapplied each time), the sky fades in over black space, and distance fades into
+   * haze. From orbit none of this applies.
+   */
+  private groundCell = 0;
+  /** The cell under the camera, by walking from the last one toward the camera's direction. */
+  private cellBelow(): number {
+    const w = this.world;
+    if (!w) return -1;
+    const P = w.grid.centers, p = this.camera.position;
+    let c = Math.min(this.groundCell, w.grid.count - 1);
+    const score = (k: number) => P[k * 3] * p.x + P[k * 3 + 1] * p.y + P[k * 3 + 2] * p.z;
+    for (let guard = 0; guard < 400; guard++) {
+      let best = c, bs = score(c);
+      for (const nb of w.grid.neighbors[c]) { const s = score(nb); if (s > bs) { bs = s; best = nb; } }
+      if (best === c) break;
+      c = best;
+    }
+    return (this.groundCell = c);
+  }
+
+  private applyTilt(d: number) {
+    const s = (a: number, b: number) => THREE.MathUtils.smoothstep(d, a, b);
+    // Keep a little clearance over the ground below, so you can skim valleys but not enter hills.
+    const c = this.cellBelow();
+    if (c >= 0 && this.surface) this.controls.minDistance = Math.max(1.006, Math.max(this.surface.centerH(c), SEA) + 0.005);
+    this.tilt = (1 - s(1.01, 1.24)) * 1.25;              // up to ~72° above straight down
+    this.camera.rotateX(this.tilt);
+    const low = 1 - s(1.06, 1.26);
+    (this.sky.material as THREE.ShaderMaterial).uniforms.uLow.value = low;
+    this.sky.visible = low > 0.001;
+    this.sky.position.copy(this.camera.position);
+    // The space-view atmosphere shells would wrap the camera in white once it is inside them.
+    this.atmosphere.visible = low < 0.6 && !this.mapMode;
+    const day = THREE.MathUtils.smoothstep(this.camera.position.clone().normalize().dot(this.sunDir), -0.12, 0.25);
+    (this.stars.material as THREE.PointsMaterial).opacity = 0.7 * (1 - low * day);
+    // Haze colour follows the sky at the horizon (dark at night); density grows as you descend.
+    this.haze.color.setRGB(0.36, 0.48, 0.66).multiplyScalar(0.12 + 0.88 * day);
+    this.haze.density = low * 1.6;
   }
 
   // --- Flat map -------------------------------------------------------------------------------
@@ -463,6 +515,7 @@ export class PlanetView {
       // Slow the orbit as you close in, so ground-level views stay controllable.
       this.controls.rotateSpeed = Math.min(1, (d - 1) * 0.55);
       this.controls.update();
+      this.applyTilt(d);
     }
 
     this.sun.getWorldPosition(this.sunDir).normalize();

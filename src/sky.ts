@@ -252,10 +252,12 @@ export function applyCloudShadow(
 export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     defines: fade ? { USE_FADE: '' } : {},
+    fog: true,
     transparent: true,
     depthWrite: false,
     uniforms: {
       ...cloud,
+      ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
       uTime: { value: 0 },
       uSunDir: { value: new THREE.Vector3(0, 0, 1) },
       // Open ocean seen from space is deep navy, close to black; turquoise belongs to shallow
@@ -277,6 +279,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         varying float vFade;
       #endif
       ${MERC_GLSL}
+      #include <fog_pars_vertex>
       void main() {
         vDepth = depth;
         #ifdef USE_FADE
@@ -289,9 +292,12 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         #else
           gl_Position = projectionMatrix * viewMatrix * w;
         #endif
+        vec4 mvPosition = viewMatrix * w;
+        #include <fog_vertex>
       }`,
     fragmentShader: /* glsl */`
       ${MERC_GLSL}
+      #include <fog_pars_fragment>
       uniform float uTime, uDepthScale, uFoam;
       uniform vec3 uSunDir, uShallow, uMid, uDeep, uSky;
       varying float vDepth;
@@ -399,6 +405,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         #ifdef USE_FADE
           gl_FragColor.a *= vFade * uVis;
         #endif
+        #include <fog_fragment>
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
@@ -548,6 +555,49 @@ export function makeAtmosphere(sun: SunUniforms): THREE.Group {
   haze.renderOrder = 6;
   g.add(haze);
   return g;
+}
+
+/**
+ * Sky seen from low altitude: blue overhead, pale at the horizon, a glow round the sun, dark at
+ * night. Drawn first, behind everything, on a sphere that travels with the camera; uLow fades it
+ * in from the black of space as you descend.
+ */
+export function makeSky(sun: SunUniforms): THREE.Mesh {
+  const mat = new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthTest: false, depthWrite: false,
+    uniforms: { ...sun, uLow: { value: 0 } },
+    vertexShader: /* glsl */`
+      varying vec3 vDir;
+      void main() {
+        vec4 w = modelMatrix * vec4(position, 1.0);
+        vDir = w.xyz - cameraPosition;
+        gl_Position = projectionMatrix * viewMatrix * w;
+      }`,
+    fragmentShader: /* glsl */`
+      uniform vec3 uSunDir; uniform float uLow;
+      varying vec3 vDir;
+      void main() {
+        vec3 v = normalize(vDir), up = normalize(cameraPosition);
+        float h = dot(v, up);
+        float day = smoothstep(-0.12, 0.25, dot(up, uSunDir));
+        // Linear colours, deep enough to survive the grade and tone mapping as blue.
+        vec3 zenith = vec3(0.035, 0.11, 0.38), horizon = vec3(0.36, 0.48, 0.66);
+        // Low views show only the first few degrees above the horizon, so most of the gradient lives there.
+        vec3 col = mix(horizon, zenith, smoothstep(-0.06, 0.14, h) * 0.75 + smoothstep(0.14, 0.6, h) * 0.25);
+        // Sunset warmth along the horizon when the sun is low.
+        float low = 1.0 - smoothstep(0.0, 0.35, abs(dot(up, uSunDir)));
+        col = mix(col, vec3(0.95, 0.55, 0.32), low * (1.0 - smoothstep(0.0, 0.25, h)) * 0.6 * day);
+        col += vec3(1.0, 0.9, 0.7) * pow(max(dot(v, uSunDir), 0.0), 60.0) * 0.6;
+        col *= day;
+        gl_FragColor = vec4(col * uLow, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+  const m = new THREE.Mesh(new THREE.SphereGeometry(40, 48, 24), mat);
+  m.renderOrder = -10;
+  m.frustumCulled = false;
+  return m;
 }
 
 export function makeStars(): THREE.Points {
