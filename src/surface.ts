@@ -246,6 +246,7 @@ function vertexTemp(y: number, e: number, heat: number): number {
 }
 
 const ALPINE = new THREE.Color(0x6e6858);
+const LAKEBED = new THREE.Color(0x2c3a30);
 const SNOW = new THREE.Color(0xf2f5f8), ROCK = new THREE.Color(0x776b5f), SAND = new THREE.Color(0xd9c89b);
 
 /**
@@ -253,7 +254,7 @@ const SNOW = new THREE.Color(0xf2f5f8), ROCK = new THREE.Color(0x776b5f), SAND =
  * height (so snow lines follow the terrain, not cell edges), bare rock on steep slopes, and
  * sand in a thin strip at the waterline.
  */
-function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number, noise: Noise3) {
+function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number, noise: Noise3, lakeSide: number[]) {
   const pos = geo.getAttribute('position'), nor = geo.getAttribute('normal'), col = geo.getAttribute('color');
   const mix = (i: number, c: THREE.Color, t: number) => {
     if (t <= 0) return;
@@ -270,7 +271,8 @@ function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number,
     const e = above / relief;
     const up = (nor.getX(i) * x + nor.getY(i) * y + nor.getZ(i) * z) / l;
     const slope = 1 - up;                         // 0 flat, ~0.3 steep
-    mix(i, SAND, sm(0.0017, 0.0007, above) * sm(0.25, 0.4, vertexTemp(y / l, e, heat)));
+    // Beach sand at the sea's edge only (lowland lakes sit near sea level too).
+    if (!lakeSide[i]) mix(i, SAND, sm(0.0017, 0.0007, above) * sm(0.25, 0.4, vertexTemp(y / l, e, heat)));
     mix(i, ROCK, sm(0.04, 0.12, slope) * 0.6);
     // Altitude zones: vegetation thins to bare rock and alpine scrub above the tree line, so
     // mountains step through rock before snow instead of snow sitting on desert sand.
@@ -323,7 +325,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
     } else if (w.water[c] === WATER_LAKE && w.biome[c] === B.ICE) {
       cellH[c] = landH(w.surface[c]);      // frozen lake: a flat ice sheet, no open water
     } else if (w.water[c] === WATER_LAKE) {
-      cellH[c] = landH(w.elevation[c]) - 0.003;
+      cellH[c] = landH(w.elevation[c]) - 0.005;
     } else {
       cellH[c] = landH(w.elevation[c]);
     }
@@ -346,9 +348,10 @@ function buildSmooth(inp: SurfaceInput): Surface {
   // inside the cell instead of tracing the hexagon.
   for (let c = 0; c < N; c++) {
     if (w.water[c] !== WATER_LAKE || w.biome[c] === B.ICE) continue;
-    let lo = Infinity;
-    for (const k of g.corners[c]) lo = Math.min(lo, rimH(k));
-    level[c] = cellH[c] + 0.7 * Math.max(0.0005, lo - cellH[c]);
+    // One level per lake: the generator's spill height (filled surface), shared by every cell of
+    // the lake, so neighbouring cells don't hold water at different heights with land showing
+    // between. At least a little above the bed.
+    level[c] = Math.max(landH(w.surface[c]) - 0.0015, cellH[c] + 0.0015);
   }
   // Water drawn over a cell: its own, or a neighbour's (so dips along a coast fill in).
   const vLevel = new Float32Array(N).fill(-1);
@@ -397,7 +400,9 @@ function buildSmooth(inp: SurfaceInput): Surface {
    */
   let owner = 0;
   const wf = 1.1 / spacing, sigma2 = (0.42 * spacing) ** 2, warpAmp = 0.38 * spacing;
-  const wetOf = (c: number) => (w.water[c] !== WATER_LAND || w.biome[c] === B.SEA_ICE ? 1 : 0);
+  // In natural colours a lake cell blends as land (its dry margins are shore, not water; the
+  // bed under the water is darkened in add()). On the data maps lakes keep their own colour.
+  const wetOf = (c: number) => (w.water[c] === WATER_OCEAN || w.biome[c] === B.SEA_ICE || (!inp.natural && w.water[c] !== WATER_LAND) ? 1 : 0);
   const colourAt = (dx: number, dy: number, dz: number, out: number[]) => {
     const qx = dx + warpAmp * (tint(dx * wf + 11.3, dy * wf, dz * wf) + 0.5 * tint(dx * wf * 2.3, dy * wf * 2.3 + 5.1, dz * wf * 2.3));
     const qy = dy + warpAmp * (tint(dx * wf, dy * wf + 23.7, dz * wf) + 0.5 * tint(dx * wf * 2.3 + 3.3, dy * wf * 2.3, dz * wf * 2.3));
@@ -410,7 +415,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
       const wt = Math.exp(-(ex * ex + ey * ey + ez * ez) / sigma2);
       sr += cellColor[c * 3] * wt; sg += cellColor[c * 3 + 1] * wt; sb += cellColor[c * 3 + 2] * wt; sw += wt;
       sm += w.moisture[c] * wt; st += w.temperature[c] * wt;
-      if (OWN_COLOUR.has(w.biome[c]) || w.water[c] !== WATER_LAND) so += wt;
+      if (OWN_COLOUR.has(w.biome[c]) || w.water[c] === WATER_OCEAN) so += wt;
     };
     consider(owner);
     for (const n of g.neighbors[owner]) consider(n);
@@ -432,12 +437,25 @@ function buildSmooth(inp: SurfaceInput): Surface {
   const clim: number[] = [];
   const add = (dx: number, dy: number, dz: number, h: number, r: number, gg: number, b: number, lvl: number, lake = false) => {
     const i = pos.length / 3;
+    // Lake shores: a wobble in the ground near the water line, so the shore wanders through
+    // the cell instead of tracing hexagon edges. Position-only noise, so vertices shared by two
+    // cells agree.
+    if (lake && w.water[owner] !== WATER_OCEAN) {
+      const near = h > lvl - 0.0006 ? Math.max(0, 1 - Math.abs(h - lvl) / 0.0016) : 0;
+      h += near * 0.0011 * (tint(dx * lf + 3.3, dy * lf, dz * lf) + 0.45 * tint(dx * lf * 2.7, dy * lf * 2.7 + 8.1, dz * lf * 2.7));
+    }
     pos.push(dx * h, dy * h, dz * h);
+    lakeSide.push(lake ? 1 : 0);
     if (inp.blend) {
       colourAt(dx, dy, dz, blendRGB); r = blendRGB[0]; gg = blendRGB[1]; b = blendRGB[2];
       clim.push(blendRGB[3], blendRGB[4]);
     } else {
       clim.push(w.moisture[owner], w.temperature[owner]);
+    }
+    // A lake bed is dark silt and weed, not lake-blue (it shows through the shallows).
+    if (inp.natural && lake) {
+      const k = Math.max(0, Math.min(1, (lvl - h) / 0.0012));
+      r += (LAKEBED.r - r) * k; gg += (LAKEBED.g - gg) * k; b += (LAKEBED.b - b) * k;
     }
     rgb.length = 0;
     tinted(tint, dx, dy, dz, r, gg, b, rgb);
@@ -445,9 +463,14 @@ function buildSmooth(inp: SurfaceInput): Surface {
     wpos.push(dx * lvl, dy * lvl, dz * lvl);
     // Lakes are shallow by sea standards (lowland ones barely below their rims); bias their
     // depth so they read as open water, not lagoon or surf.
-    depth.push(lvl - h + (lake ? 0.006 : 0));
+    // (Only where there is water: added to dry ground too, it drew lake water over the shore out
+    // to the cell edges, which is what made lakes hexagonal.)
+    const dd = lvl - h;
+    depth.push(lake && dd > 0 ? dd + 0.01 * Math.min(1, dd / 0.0007) : dd);
     return i;
   };
+  const lakeSide: number[] = [];
+  const lf = 2.2 / spacing;
   // Each fan triangle (cell centre + two corners) becomes a k×k triangular grid. k is picked so
   // the planet stays near a fixed triangle budget: finer on small worlds, coarser on big ones.
   const k = Math.max(2, Math.min(6, Math.round(Math.sqrt(850000 / (N * 6)))));
@@ -655,7 +678,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
   terrain.setIndex(index);
   terrain.computeVertexNormals();
   if (inp.natural) {
-    naturalShading(terrain, relief, w.params.heat, tint);
+    naturalShading(terrain, relief, w.params.heat, tint, lakeSide);
     // No trees on snow.
     for (let i = trees.length - 1; i >= 0; i--) {
       const t = trees[i], l = Math.hypot(t.x, t.y, t.z);
