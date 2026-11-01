@@ -158,7 +158,11 @@ const CLOUD_GLSL = /* glsl */`
       float spin = sign(S.y);                       // cyclones turn the other way in the south
       bool tropical = S.z < 0.0;
       float arms = tropical ? 3.0 : 2.0, tight = tropical ? 2.6 : 1.6;
-      float band = 0.5 + 0.5 * sin(arms * az + spin * tight * log(max(r, 0.12)) * 3.0);
+      // The arms turn with weather time, as a whole (a differential spin would wind them ever
+      // tighter): anticlockwise in the north, the way they trail. At the idle weather rate a
+      // tropical storm turns about once in 16 s, a big mid-latitude low once in 35 s.
+      float turn = spin * uWeather * (tropical ? 40.0 : 18.0);
+      float band = 0.5 + 0.5 * sin(arms * (az - turn) + spin * tight * log(max(r, 0.12)) * 3.0);
       float body = exp(-r * r * (tropical ? 1.6 : 1.1));
       float v = body * mix(0.45, 1.0, band) * mix(0.75, 1.15, cnNoise(d * 60.0 + float(i)));
       if (tropical) v = max(v, exp(-r * r * 9.0) * 1.1) * smoothstep(0.05, 0.13, r);   // dense core, clear eye
