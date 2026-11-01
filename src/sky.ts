@@ -2,6 +2,9 @@
 import * as THREE from 'three';
 import type { CloudPixels } from './clouds.ts';
 import { hash01 } from './rng.ts';
+import { MERC_GLSL, MERC_DISCARD, mercVertex, patchShaderChunks } from './mercator.ts';
+
+patchShaderChunks();
 
 /** Uniforms shared by every material that receives cloud shadows. */
 export interface CloudUniforms {
@@ -19,11 +22,13 @@ export interface CloudUniforms {
   uRelief: { value: number };
   /** 1 where the terrain shows natural colour (snow allowed), 0 on data maps. */
   uSnow: { value: number };
+  /** On the flat map: how far away the view "is", standing in for the camera distance. */
+  uMapDist: { value: number };
 }
 
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
-    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 } };
+    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 } };
 }
 
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
@@ -50,7 +55,7 @@ export const NOISE_GLSL = /* glsl */`
  */
 const CLOUD_GLSL = /* glsl */`
   uniform sampler2D uCloudMap;
-  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uHeat, uRelief, uSnow;
+  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uHeat, uRelief, uSnow, uMapDist;
   uniform vec3 uCloudSun;
   /**
    * Seasons. The generator's annual-mean temperature for a point (the same formula as the
@@ -93,8 +98,12 @@ const CLOUD_GLSL = /* glsl */`
     vec3 n = normalize(p);
     // The cloud shading this point sits up the line toward the sun, at cloud height: offset the
     // lookup sunward, more when the sun is low (capped near the terminator).
-    float mu = max(dot(n, uCloudSun), 0.25);
-    vec3 d = normalize(n + (uCloudSun - n * dot(n, uCloudSun)) * (0.019 / mu));
+    #ifdef MERCATOR
+      vec3 d = n;   // the map is lit from overhead: shadows sit straight under their clouds
+    #else
+      float mu = max(dot(n, uCloudSun), 0.25);
+      vec3 d = normalize(n + (uCloudSun - n * dot(n, uCloudSun)) * (0.019 / mu));
+    #endif
     float c = cos(uCloudRot), s = sin(uCloudRot);
     vec3 q = vec3(d.x * c - d.z * s, d.y, d.x * s + d.z * c);
     float theta = acos(clamp(q.y, -1.0, 1.0));
@@ -131,7 +140,11 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
         }`)
       .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
         float hAbove = length(vCloudP) - 1.0;
-        float camDist = length(cameraPosition - vCloudP);
+        #ifdef MERCATOR
+          float camDist = uMapDist;
+        #else
+          float camDist = length(cameraPosition - vCloudP);
+        #endif
         float detailFade = 1.0 - smoothstep(0.25, 1.4, camDist);
         float highland = smoothstep(0.12, 0.85, hAbove / uRelief);
         float rn = rockNoise(vCloudP);
@@ -149,6 +162,12 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
         }
         diffuseColor.rgb *= cloudShade(vCloudP);`)
       .replace('#include <normal_fragment_maps>', /* glsl */`#include <normal_fragment_maps>
+        // World-space vectors into view space (on the map, view space is east/north/up).
+        #ifdef MERCATOR
+          #define TOVIEW(v) (mercFrame(vCloudP) * (v))
+        #else
+          #define TOVIEW(v) ((viewMatrix * vec4(v, 0.0)).xyz)
+        #endif
         if (detailFade > 0.0 && hAbove > 0.0) {
           vec3 up = normalize(vCloudP);
           vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
@@ -156,7 +175,7 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
           float e = 0.0003;
           vec3 grad = t1 * (rockNoise(vCloudP + t1 * e) - rn) + t2 * (rockNoise(vCloudP + t2 * e) - rn);
           float amp = (0.15 + 0.6 * highland) * detailFade;
-          normal = normalize(normal - (viewMatrix * vec4(grad * amp, 0.0)).xyz);
+          normal = normalize(normal - TOVIEW(grad * amp));
         }
         if (farFade > 0.0) {
           vec3 up = normalize(vCloudP);
@@ -165,7 +184,7 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
           float e = 0.002;
           vec3 grad = t1 * (landNoise(vCloudP + t1 * e) - ln) + t2 * (landNoise(vCloudP + t2 * e) - ln);
           float amp = (1.0 + 3.0 * highland) * farFade;
-          normal = normalize(normal - (viewMatrix * vec4(grad * amp, 0.0)).xyz);
+          normal = normalize(normal - TOVIEW(grad * amp));
         }
         // Snow, per pixel: where it is cold enough for the height, latitude and season. Done
         // here rather than per vertex, where its edge broke along the mesh triangles. It sheds
@@ -179,8 +198,11 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
           float line = 0.27;
           float edge = (vnoise(vCloudP * 40.0) - 0.5) * 0.1 + (vnoise(vCloudP * 300.0) - 0.5) * 0.05;
           float snow = smoothstep(line + 0.04, line - 0.06, st + edge);
-          vec3 wn = normalize((vec4(normal, 0.0) * viewMatrix).xyz);
-          float slope = 1.0 - dot(wn, sn);
+          #ifdef MERCATOR
+            float slope = 1.0 - normal.z;
+          #else
+            float slope = 1.0 - dot(normalize((vec4(normal, 0.0) * viewMatrix).xyz), sn);
+          #endif
           // Value noise shows its grid once thresholded, so warp it and rotate each octave.
           vec3 q = vCloudP * 160.0;
           q += vec3(vnoise(q * 0.37), vnoise(q * 0.37 + 5.2), vnoise(q * 0.37 + 9.1)) * 2.5;
@@ -254,6 +276,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         attribute float fade;
         varying float vFade;
       #endif
+      ${MERC_GLSL}
       void main() {
         vDepth = depth;
         #ifdef USE_FADE
@@ -261,9 +284,14 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         #endif
         vec4 w = modelMatrix * vec4(position, 1.0);
         vWorld = w.xyz;
-        gl_Position = projectionMatrix * viewMatrix * w;
+        #ifdef MERCATOR
+          ${mercVertex('w.xyz')}
+        #else
+          gl_Position = projectionMatrix * viewMatrix * w;
+        #endif
       }`,
     fragmentShader: /* glsl */`
+      ${MERC_GLSL}
       uniform float uTime, uDepthScale, uFoam;
       uniform vec3 uSunDir, uShallow, uMid, uDeep, uSky;
       varying float vDepth;
@@ -282,9 +310,16 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
       }
 
       void main() {
+        ${MERC_DISCARD}
         vec3 Ng = normalize(vWorld);
-        vec3 V = normalize(cameraPosition - vWorld);
-        float dist = length(cameraPosition - vWorld);
+        #ifdef MERCATOR
+          // The map looks straight down everywhere, from a height set by the zoom.
+          vec3 V = Ng;
+          float dist = uMapDist;
+        #else
+          vec3 V = normalize(cameraPosition - vWorld);
+          float dist = length(cameraPosition - vWorld);
+        #endif
         // Ripples fade with distance: at orbit they would alias into stripes.
         float near = 1.0 - smoothstep(0.12, 1.1, dist);
         float t = uTime;
@@ -319,7 +354,13 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         float shade = cloudShade(vWorld);
         // Night: the sea goes nearly black with a faint moonlit blue, and surf, glint and sky
         // reflection all dim with it. (Ng, not the rippled N, so the terminator stays soft.)
-        float day = smoothstep(-0.12, 0.22, dot(Ng, uSunDir));
+        #ifdef MERCATOR
+          float day = 1.0;     // the map has no night side
+          spec = 0.0;          // nor a sun glint, which would sit in one arbitrary spot
+          diff = 0.92;
+        #else
+          float day = smoothstep(-0.12, 0.22, dot(Ng, uSunDir));
+        #endif
         vec3 night = vec3(0.012, 0.022, 0.04) + col * 0.05;
         col = mix(night, col * diff * shade + vec3(spec) * shade, day);
 

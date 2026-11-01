@@ -125,6 +125,10 @@ export function mountShell(app: App) {
       <i class="yearbar" id="yearbar" hidden><b id="yearmark"></b></i>
       <span class="date" id="date"></span>
     </div>
+    <div class="proj" id="proj">
+      <button data-proj="globe" class="on" title="The planet as a globe"><span class="ico">◯</span> Globe</button>
+      <button data-proj="flat" title="The whole planet laid flat (Mercator projection)"><span class="ico">▭</span> Flat map</button>
+    </div>
     <div class="hint" id="hint">Drag to spin · scroll to dive · hover a place</div>
     <div class="toast" id="toast" hidden></div>
   `;
@@ -209,6 +213,8 @@ export function mountShell(app: App) {
       everPlayed ||= scale !== null;
       // Seasons and nightfall only show on the Earth view, not on the data maps.
       if (scale && app.lens() !== 'earth') applyLens('earth');
+      // Day and night need the globe: the flat map has no night side.
+      if (scale === 'day' && r.isMap()) setProj(false);
       // Start the day at mid-morning where you are looking, so dusk arrives within seconds.
       if (scale === 'day') r.setLocalHour(9);
       applyClock();
@@ -242,6 +248,22 @@ export function mountShell(app: App) {
     $('yearmark').style.left = `${(doy / 365) * 100}%`;
     requestAnimationFrame(tickDate);
   };
+  // --- Globe or flat map. A quick fade covers the swap. ---
+  const setProj = (flat: boolean) => {
+    if (flat === r.isMap()) return;
+    if (flat && scale === 'day') { scale = null; applyClock(); }
+    const c = r.renderer.domElement;
+    c.style.transition = 'opacity .14s';
+    c.style.opacity = '0';
+    setTimeout(() => {
+      r.setMap(flat);
+      root.querySelectorAll<HTMLButtonElement>('[data-proj]').forEach((b) => b.classList.toggle('on', (b.dataset.proj === 'flat') === flat));
+      $('hint').textContent = flat ? 'Drag to pan · scroll to zoom · hover a place' : 'Drag to spin · scroll to dive · hover a place';
+      requestAnimationFrame(() => { c.style.opacity = '1'; });
+    }, 140);
+  };
+  root.querySelectorAll<HTMLButtonElement>('[data-proj]').forEach((b) => { b.onclick = () => setProj(b.dataset.proj === 'flat'); });
+
   $('advanced-toggle').onclick = () => {
     const panel = document.getElementById('panel')!;
     panel.classList.toggle('advanced');
@@ -299,9 +321,9 @@ export function mountShell(app: App) {
   for (const ev of ['pointerdown', 'wheel', 'keydown', 'touchstart']) window.addEventListener(ev, touched, { passive: true });
   r.controls.autoRotateSpeed = 0.35;
   setInterval(() => {
-    const far = r.camera.position.length() > 2.2;
+    const far = r.camera.position.length() > 2.2 && !r.isMap();
     r.controls.autoRotate = far && performance.now() - lastInput > 8000 && !document.body.classList.contains('capture');
   }, 1000);
 
-  return { applyLens };
+  return { applyLens, setProj };
 }

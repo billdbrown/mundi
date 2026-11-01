@@ -202,11 +202,7 @@ $<HTMLInputElement>('radius').addEventListener('input', (e) => {
 const scaleBar = $('scale-bar'), scaleLabel = $('scale-label');
 let lastScale = '';
 function updateScale() {
-  const cam = view.camera, d = cam.position.length();
-  const above = Math.max(1e-4, d - 1);                    // distance to the ground below the centre
-  const viewH = 2 * above * Math.tan((cam.fov * Math.PI) / 360);
-  const pxPerUnit = view.renderer.domElement.clientHeight / viewH;
-  const kmPerPx = radiusKm / pxPerUnit;
+  const kmPerPx = radiusKm * view.groundPerPx();       // globe or flat map
   const raw = kmPerPx * 120, mag = Math.pow(10, Math.floor(Math.log10(raw)));
   const nice = [5, 2, 1].map((m) => m * mag).find((v) => v <= raw) ?? mag;
   const label = nice >= 1 ? `${nice.toLocaleString()} km` : `${Math.round(nice * 1000)} m`;

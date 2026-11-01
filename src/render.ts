@@ -15,6 +15,7 @@ import { buildForest, treeMaterial } from './flora.ts';
 import { LodFlora, FADE_NEAR, FADE_FAR } from './lodflora.ts';
 import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere, makeStars, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
 import type { CloudPixels } from './clouds.ts';
+import { MERC_GLSL, MERC_DISCARD, MERC_MAX_Y, mercVertex, mercY, mercLat, setMercator } from './mercator.ts';
 import type { ViewMode, TerrainStyle } from './colors.ts';
 
 export type { ViewMode, TerrainStyle };
@@ -99,6 +100,15 @@ export class PlanetView {
   private clock = new THREE.Clock();
   private sunDir = new THREE.Vector3();
   private composer?: EffectComposer;
+  private renderPass: RenderPass;
+  private atmosphere: THREE.Object3D;
+  private stars: THREE.Object3D;
+  /** Flat map: an orthographic camera over Mercator space (see mercator.ts). */
+  private mapMode = false;
+  readonly mapCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.5, 20);
+  /** Middle of the view (longitude, Mercator y) and half the view's height, in map units. */
+  private map = { x: 0, y: 0, half: Math.PI };
+  private graticule: THREE.LineSegments;
   private sunU = { uSunDir: { value: new THREE.Vector3(0, 0, 1) } };
   private ambient: THREE.AmbientLight;
   private time = 0;
@@ -150,12 +160,17 @@ export class PlanetView {
     applyCloudShadow(treeMaterial, this.cloudU, this.sunU, { uFadeNear: { value: FADE_NEAR }, uFadeFar: { value: FADE_FAR } });
 
     this.scene.add(this.planet);
-    this.scene.add(makeAtmosphere(this.sunU));
-    this.scene.add(makeStars());
+    this.atmosphere = makeAtmosphere(this.sunU);
+    this.stars = makeStars();
+    this.scene.add(this.atmosphere, this.stars);
+    this.graticule = makeGraticule();
+    this.planet.add(this.graticule);
+    this.mapInput();
 
     // Photo look: render, grade (in linear light), then tone map and encode.
     this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.renderPass = new RenderPass(this.scene, this.camera);
+    this.composer.addPass(this.renderPass);
     this.composer.addPass(new ShaderPass(GRADE_SHADER));
     this.composer.addPass(new OutputPass());
 
@@ -219,7 +234,13 @@ export class PlanetView {
   /** Follow: the sun is parented to the camera. Cycle: it lives in the scene and orbits the planet. */
   private applyLighting() {
     this.sun.removeFromParent();
-    if (this.opts.light === 'cycle') {
+    if (this.mapMode) {
+      // The map is lit from the north-west and mostly overhead, the cartographer's hillshade.
+      this.scene.add(this.sun);
+      this.sun.position.set(-0.45, 0.55, 1).normalize().multiplyScalar(5);
+      this.ambient.intensity = 0.8;
+      this.ambient.color.set(0xc8d8f0);
+    } else if (this.opts.light === 'cycle') {
       this.scene.add(this.sun);
       this.ambient.intensity = 0.16;     // night is dark, with a little moonlight
       this.ambient.color.set(0x8ea6d8);
@@ -245,7 +266,110 @@ export class PlanetView {
     if (this.siteMarks) this.siteMarks.visible = this.opts.sites && !photo;
     for (const f of this.forest) f.visible = this.opts.trees && real;
     if (this.water) this.water.visible = real;
-    this.clouds.visible = this.opts.clouds && real;
+    // The flat map is cloud-free, like the satellite composites world maps are made from:
+    // flat and evenly lit, clouds hide the land (and Mercator swells the polar ones).
+    this.clouds.visible = this.opts.clouds && real && !this.mapMode;
+    this.atmosphere.visible = this.stars.visible = !this.mapMode;
+    this.graticule.visible = this.mapMode;
+    if (this.mapMode) for (const f of this.forest) f.visible = false;
+  }
+
+  // --- Flat map -------------------------------------------------------------------------------
+
+  isMap() { return this.mapMode; }
+
+  /** Switch between the globe and the flat map. The map opens centred on what the globe showed. */
+  setMap(on: boolean) {
+    if (on === this.mapMode) return;
+    this.mapMode = on;
+    if (on) {
+      const p = this.camera.position;
+      this.map.x = Math.atan2(p.x, p.z);
+      this.map.y = mercY(Math.asin(p.y / p.length()));
+      this.map.half = this.maxHalf();
+      this.clampMap();
+    } else {
+      // Back on the globe, look at whatever was in the middle of the map, from the same height.
+      const lat = mercLat(this.map.y), lon = this.map.x, d = this.camera.position.length();
+      this.camera.position.set(Math.cos(lat) * Math.sin(lon) * d, Math.sin(lat) * d, Math.cos(lat) * Math.cos(lon) * d);
+      this.camera.lookAt(0, 0, 0);
+    }
+    setMercator(this.planet, on);
+    this.controls.enabled = !on;
+    this.applyLighting();
+    this.applyVisibility();
+  }
+
+  private aspect() { return this.container.clientWidth / Math.max(1, this.container.clientHeight); }
+  /** Zoomed fully out, the map is exactly one world wide (or tall, on a portrait screen). */
+  private maxHalf() { return Math.min(MERC_MAX_Y, Math.PI / this.aspect()); }
+  private clampMap() {
+    const m = this.map;
+    m.half = THREE.MathUtils.clamp(m.half, 0.004, this.maxHalf());
+    m.y = THREE.MathUtils.clamp(m.y, -MERC_MAX_Y + m.half, MERC_MAX_Y - m.half);
+    m.x = THREE.MathUtils.euclideanModulo(m.x + Math.PI, Math.PI * 2) - Math.PI;
+  }
+  /** Map coordinates under a screen point. */
+  private mapAt(clientX: number, clientY: number) {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const nx = ((clientX - r.left) / r.width) * 2 - 1, ny = -((clientY - r.top) / r.height) * 2 + 1;
+    return { x: this.map.x + nx * this.map.half * this.aspect(), y: this.map.y + ny * this.map.half, nx, ny };
+  }
+  private zoomMap(clientX: number, clientY: number, factor: number) {
+    const a = this.mapAt(clientX, clientY);
+    this.map.half *= factor;
+    this.clampMap();
+    this.map.x = a.x - a.nx * this.map.half * this.aspect();
+    this.map.y = a.y - a.ny * this.map.half;
+    this.clampMap();
+  }
+  /** Drag to pan (it wraps east-west), wheel or pinch to zoom about the pointer. */
+  private mapInput() {
+    const el = this.renderer.domElement;
+    const ptrs = new Map<number, { x: number; y: number }>();
+    el.addEventListener('pointerdown', (e) => {
+      if (!this.mapMode) return;
+      el.setPointerCapture(e.pointerId);
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    });
+    el.addEventListener('pointermove', (e) => {
+      const prev = ptrs.get(e.pointerId);
+      if (!this.mapMode || !prev) return;
+      if (ptrs.size === 1) {
+        const u = (2 * this.map.half) / el.clientHeight;
+        this.map.x -= (e.clientX - prev.x) * u;
+        this.map.y += (e.clientY - prev.y) * u;
+        this.clampMap();
+      } else if (ptrs.size === 2) {
+        const other = [...ptrs.entries()].find(([id]) => id !== e.pointerId)![1];
+        const before = Math.hypot(prev.x - other.x, prev.y - other.y);
+        const after = Math.hypot(e.clientX - other.x, e.clientY - other.y);
+        if (before > 0 && after > 0) this.zoomMap((e.clientX + other.x) / 2, (e.clientY + other.y) / 2, before / after);
+      }
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    });
+    const up = (e: PointerEvent) => { ptrs.delete(e.pointerId); };
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    el.addEventListener('wheel', (e) => {
+      if (!this.mapMode) return;
+      e.preventDefault();
+      this.zoomMap(e.clientX, e.clientY, Math.exp(e.deltaY * 0.001));
+    }, { passive: false });
+  }
+  private updateMapCam() {
+    const m = this.map, a = this.aspect(), c = this.mapCam;
+    c.left = -m.half * a; c.right = m.half * a; c.top = m.half; c.bottom = -m.half;
+    c.position.set(m.x, m.y, 5);
+    c.updateProjectionMatrix();
+    c.updateMatrixWorld();
+  }
+  /** Ground distance (planet radii) per screen pixel at the middle of the view: the scale bar. */
+  groundPerPx(): number {
+    const h = Math.max(1, this.renderer.domElement.clientHeight);
+    if (this.mapMode) return ((2 * this.map.half) / h) * Math.cos(mercLat(this.map.y));
+    const above = Math.max(1e-4, this.camera.position.length() - 1);
+    return (2 * above * Math.tan((this.camera.fov * Math.PI) / 360)) / h;
   }
 
   /** Pins on the given cells (settlement sites); redrawn with each new surface. */
@@ -277,6 +401,7 @@ export class PlanetView {
     this.siteMarks = new THREE.Points(geo, mat);
     this.siteMarks.renderOrder = 9;
     this.planet.add(this.siteMarks);
+    if (this.mapMode) setMercator(this.siteMarks, true);
   }
 
   /** Cell under a screen point, or −1. */
@@ -284,7 +409,15 @@ export class PlanetView {
     if (!this.terrain) return -1;
     const r = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
-    this.raycaster.setFromCamera(ndc, this.camera);
+    if (this.mapMode) {
+      // Straight down onto the globe from above the map point.
+      const a = this.mapAt(clientX, clientY);
+      if (Math.abs(a.y) > MERC_MAX_Y) return -1;
+      const lat = mercLat(a.y), dir = new THREE.Vector3(Math.cos(lat) * Math.sin(a.x), Math.sin(lat), Math.cos(lat) * Math.cos(a.x));
+      this.raycaster.set(dir.clone().multiplyScalar(1.5), dir.negate());
+    } else {
+      this.raycaster.setFromCamera(ndc, this.camera);
+    }
     const hit = this.raycaster.intersectObject(this.terrain, false)[0];
     return hit && hit.faceIndex != null ? this.faceCell[hit.faceIndex] : -1;
   }
@@ -322,16 +455,26 @@ export class PlanetView {
     const season = Math.sin((2 * Math.PI * (this.day - EQUINOX_DAY)) / YEAR_DAYS);
     this.cloudU.uSeason.value = season;
     this.cloudU.uSnow.value = this.opts.mode === 'biome' ? 1 : 0;
-    if (this.opts.light === 'cycle') {
+    if (this.opts.light === 'cycle' && !this.mapMode) {
       // The sun goes round once a day, and swings north and south with the season (the tilt).
       const a = (this.day % 1) * Math.PI * 2 - 0.6;
       const dec = ((TILT * Math.PI) / 180) * season;
       this.sun.position.set(Math.sin(a) * Math.cos(dec) * 5, Math.sin(dec) * 5, Math.cos(a) * Math.cos(dec) * 5);
     }
-    const d = this.camera.position.length();
-    // Slow the orbit as you close in, so ground-level views stay controllable.
-    this.controls.rotateSpeed = Math.min(1, (d - 1) * 0.55);
-    this.controls.update();
+    // On the map, an equivalent "camera distance" from the zoom (the globe's camera sees about
+    // 0.73 radii of ground per radius of height), so fades and detail behave the same.
+    let d: number;
+    if (this.mapMode) {
+      this.updateMapCam();
+      const dist = 2.75 * this.map.half * Math.cos(mercLat(this.map.y));
+      this.cloudU.uMapDist.value = dist;
+      d = 1 + dist;
+    } else {
+      d = this.camera.position.length();
+      // Slow the orbit as you close in, so ground-level views stay controllable.
+      this.controls.rotateSpeed = Math.min(1, (d - 1) * 0.55);
+      this.controls.update();
+    }
 
     this.sun.getWorldPosition(this.sunDir).normalize();
     this.sunU.uSunDir.value.copy(this.sunDir);
@@ -367,12 +510,14 @@ export class PlanetView {
     if (this.streams) this.streams.visible = this.opts.rivers && this.opts.mode === 'biome' && this.streamMat.uniforms.uVis.value > 0.002;
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
 
-    this.flora.update(this.camera.position, this.opts.trees && this.opts.mode === 'biome');
+    this.flora.update(this.camera.position, this.opts.trees && this.opts.mode === 'biome' && !this.mapMode);
+    const cam = this.mapMode ? this.mapCam : this.camera;
     if (this.opts.look === 'photo') {
       this.applyVisibility();
+      this.renderPass.camera = cam;
       this.composer!.render();
     } else {
-      this.renderer.render(this.scene, this.camera);
+      this.renderer.render(this.scene, cam);
     }
   }
 
@@ -432,6 +577,7 @@ export class PlanetView {
 
     this.buildRivers(w, s, P, C);
     this.buildSites();
+    if (this.mapMode) setMercator(this.planet, true);
     this.applyVisibility();
     this.highlight(-1);
   }
@@ -705,19 +851,47 @@ function makeGridMaterial(sun: { uSunDir: { value: THREE.Vector3 } }): THREE.Sha
     uniforms: { ...sun, uOpacity: { value: 0.2 } },
     vertexShader: /* glsl */`
       varying vec3 vW;
+      ${MERC_GLSL}
       void main() {
         vec4 w = modelMatrix * vec4(position, 1.0);
         vW = w.xyz;
-        gl_Position = projectionMatrix * viewMatrix * w;
+        #ifdef MERCATOR
+          ${mercVertex('w.xyz')}
+        #else
+          gl_Position = projectionMatrix * viewMatrix * w;
+        #endif
       }`,
     fragmentShader: /* glsl */`
       uniform vec3 uSunDir; uniform float uOpacity;
       varying vec3 vW;
+      ${MERC_GLSL}
       void main() {
+        ${MERC_DISCARD}
+        #ifdef MERCATOR
+          gl_FragColor = vec4(vec3(1.0), uOpacity);
+          return;
+        #endif
         float day = 0.12 + 0.88 * smoothstep(-0.15, 0.25, dot(normalize(vW), uSunDir));
         gl_FragColor = vec4(vec3(1.0), uOpacity * day);
       }`,
   });
+}
+
+/** Parallels and meridians every 30°, shown only on the flat map, above the clouds. */
+function makeGraticule(): THREE.LineSegments {
+  const r = 1.032, pts: number[] = [];
+  const at = (lat: number, lon: number) => {
+    const a = (lat * Math.PI) / 180, o = (lon * Math.PI) / 180;
+    return [Math.cos(a) * Math.sin(o) * r, Math.sin(a) * r, Math.cos(a) * Math.cos(o) * r];
+  };
+  for (let lat = -60; lat <= 60; lat += 30) for (let lon = -180; lon < 180; lon += 2) pts.push(...at(lat, lon), ...at(lat, lon + 2));
+  for (let lon = -150; lon < 180; lon += 30) for (let lat = -84; lat < 84; lat += 2) pts.push(...at(lat, lon), ...at(lat + 2, lon));
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  const l = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xdfe8f5, transparent: true, opacity: 0.1, depthWrite: false }));
+  l.renderOrder = 6;
+  l.visible = false;
+  return l;
 }
 
 /** A gold disc with a dark rim, for settlement markers. */

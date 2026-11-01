@@ -48,6 +48,8 @@ const CASES = [
   { name: 'daynight-77', hash: 'seed=77', opts: { light: 'cycle' }, view: { orbit: [75, 15, ORBIT] } },
   { name: 'sites-4242', hash: 'seed=4242', opts: { sites: true }, view: { orbit: [60, 20, ORBIT] } },
   { name: 'photo-77', hash: 'seed=77', opts: { look: 'photo' }, view: { orbit: [180, 15, ORBIT] } },
+  { name: 'flat-77', hash: 'seed=77', opts: { look: 'photo' }, map: true, view: { orbit: [180, 0, ORBIT] } },
+  { name: 'flat-77-map', hash: 'seed=77', opts: { look: 'map', grid: true, clouds: false }, map: true, view: { orbit: [180, 0, ORBIT] } },
   { name: 'photo-4242', hash: 'seed=4242', opts: { look: 'photo' }, view: { orbit: [60, 20, ORBIT] } },
   { name: 'nwinter-77', hash: 'seed=77', day: 353, view: { orbit: [180, 40, ORBIT] } },
   { name: 'nsummer-77', hash: 'seed=77', day: 171, view: { orbit: [180, 40, ORBIT] } },
@@ -107,8 +109,10 @@ try {
       wg.freeze(10);
       await wg.load(tc.hash, tc.opts ?? {});
       wg.view.setDay(tc.day ?? 80);
+      wg.view.setMap(false);
       if (tc.view.orbit) wg.orbit(...tc.view.orbit);
       else wg.flyTo(tc.view.spot, tc.view.alt);
+      if (tc.map) wg.view.setMap(true);   // the flat map opens centred on where the globe looked
       // Two frames: one to apply the camera, one to draw with it.
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       return wg.timings;

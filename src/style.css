@@ -167,3 +167,12 @@ body.shell #info { border-radius: 12px; padding: 8px 11px; background: rgba(10,1
   .clock.running .date { display: inline; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
   .hint { bottom: 166px !important; }
 }
+
+/* Globe / flat map switch */
+.proj { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px;
+  background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 999px; }
+.proj button { background: none; border: none; border-radius: 999px; padding: 6px 13px; font-size: 12px; color: var(--muted); }
+.proj button:hover { color: var(--text); }
+.proj button.on { background: rgba(255,255,255,.13); color: #fff; }
+.proj .ico { display: inline-block; width: 1.1em; text-align: center; }
+@media (max-width: 720px) { .proj { top: 64px; } }
