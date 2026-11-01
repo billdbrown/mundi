@@ -305,8 +305,10 @@ export function generateWorld(params: WorldParams): World {
       shadow = Math.max(0, Math.min(1, (maxE - Math.max(0, elev[c])) * 1.6));
       windward = Math.max(0, Math.min(0.25, (elev[c] - Math.max(0, elev[upwind[c]])) * 4));
     }
-    const m = 0.3 * coast + 0.35 * fromSea * (1 - shadow) + 0.25 * band + 0.25 * n
-      - 0.08 - 0.25 * shadow + windward + params.wetness;
+    // Which coasts are wet depends on the wind (onshore vs offshore), so proximity to just any
+    // coast counts for little; moisture carried in from upwind seas counts for most.
+    const m = 0.12 * coast + 0.5 * fromSea * (1 - shadow) + 0.25 * band + 0.25 * n
+      - 0.05 - 0.25 * shadow + windward + params.wetness;
     moisture[c] = Math.max(0, Math.min(1, m));
   }
 
