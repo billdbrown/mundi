@@ -7,7 +7,6 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { WATER_LAND, WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { B } from './biomes.ts';
 
-const DRY = new Set<number>([B.DESERT, B.SAVANNA, B.STEPPE, B.BEACH, B.TUNDRA]);
 import { hash01 } from './rng.ts';
 import { makeSimplex } from './noise.ts';
 import { SEA, RELIEF, surfaceQueries, type MeshData, type SurfaceData, type SurfaceQueries } from './surface.ts';
@@ -61,15 +60,6 @@ export class PlanetView {
   /** Rivers: the same water, plus a fade so mouths dissolve into the sea. Shares time and sun. */
   private riverMat = this.makeRiverMat();
   private streamMat = this.makeRiverMat();
-  /** Green corridors along rivers through dry land (the Nile from space). */
-  private corridors?: THREE.Mesh;
-  private corridorMat = (() => {
-    const m = new THREE.MeshStandardMaterial({
-      vertexColors: true, transparent: true, depthWrite: false, roughness: 1,
-      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
-    });
-    return m;
-  })();
 
   /** Rivers: the sea's water with a fade (mouths dissolve into the sea) and fresh-water colours. */
   private makeRiverMat() {
@@ -261,7 +251,6 @@ export class PlanetView {
     // Rivers and streams fade with zoom (see frame()); streams always appear after rivers.
     if (this.rivers) this.rivers.visible = this.opts.rivers && real;
     if (this.streams) this.streams.visible = this.opts.rivers && real;
-    if (this.corridors) this.corridors.visible = real;
     void d; void photo;
     if (this.siteMarks) this.siteMarks.visible = this.opts.sites && !photo;
     for (const f of this.forest) f.visible = this.opts.trees && real;
@@ -522,14 +511,14 @@ export class PlanetView {
   }
 
   private dispose() {
-    for (const o of [this.terrain, this.water, this.gridLines, this.rivers, this.streams, this.corridors]) {
+    for (const o of [this.terrain, this.water, this.gridLines, this.rivers, this.streams]) {
       if (!o) continue;
       this.planet.remove(o);
       o.geometry.dispose();
-      if (o.material !== this.waterMat && o.material !== this.riverMat && o.material !== this.streamMat && o.material !== this.corridorMat) (o.material as THREE.Material).dispose();
+      if (o.material !== this.waterMat && o.material !== this.riverMat && o.material !== this.streamMat) (o.material as THREE.Material).dispose();
     }
     for (const f of this.forest) { this.planet.remove(f); f.dispose(); }
-    this.terrain = this.water = this.gridLines = this.rivers = this.streams = this.corridors = undefined;
+    this.terrain = this.water = this.gridLines = this.rivers = this.streams = undefined;
     this.forest = [];
   }
 
@@ -620,48 +609,10 @@ export class PlanetView {
     interface Sample { x: number; y: number; z: number; w: number; d: number; river: boolean; f: number }
     /** Drawn centreline points per cell, so branches can find the channel they join. */
     const cellSamples = new Map<number, { p: number[]; h: number }[]>();
+    /** Green-corridor segments along rivers through dry land: a, b (unit directions), half-width, strength, cell. */
+    const corr: number[] = [];
+    const DRY = new Set<number>([B.DESERT, B.SAVANNA, B.STEPPE, B.BEACH, B.TUNDRA]);
 
-    // Green corridors: a soft strip a few river-widths wide along rivers through dry land,
-    // three vertices across (clear, green, clear), opacity following how dry the land is.
-    const green = { pos: [] as number[], col: [] as number[], index: [] as number[] };
-    const OASIS = new THREE.Color(0x3f5a22);
-    const corridor = (pts: { x: number; y: number; z: number; w: number; cell: number; river: boolean }[]) => {
-      if (pts.length < 2) return;
-      const dry = pts.map((p) => (p.cell >= 0 && DRY.has(w.biome[p.cell]) ? 1 : 0));
-      // Smooth dryness along the path so the strip fades in and out instead of switching.
-      const k = 6, sm = dry.map((_, i) => {
-        let s2 = 0, n = 0;
-        for (let j = Math.max(0, i - k); j <= Math.min(dry.length - 1, i + k); j++) { s2 += dry[j]; n++; }
-        return s2 / n;
-      });
-      if (Math.max(...sm) < 0.05) return;
-      const base = green.pos.length / 3;
-      let sx = 1, sy = 0, sz = 0;
-      for (let i = 0; i < pts.length; i++) {
-        const p = pts[i], a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
-        const l = Math.hypot(p.x, p.y, p.z), ux = p.x / l, uy = p.y / l, uz = p.z / l;
-        let tx = b.x - a.x, ty = b.y - a.y, tz = b.z - a.z;
-        const tu = tx * ux + ty * uy + tz * uz;
-        tx -= ux * tu; ty -= uy * tu; tz -= uz * tu;
-        const cx = ty * uz - tz * uy, cy = tz * ux - tx * uz, cz = tx * uy - ty * ux, cl = Math.hypot(cx, cy, cz);
-        if (cl > 1e-9) { sx = cx / cl; sy = cy / cl; sz = cz / cl; }
-        // Taper both ends to nothing: at junctions the points converge and a full-width strip folds.
-        const endTaper = Math.min(1, i / 4, (pts.length - 1 - i) / 4);
-        const hw = Math.max(p.w * 4, spacing * (p.river ? 0.11 : 0.05)) * endTaper;
-        // Above the valley walls the river carves (it writes no depth, so the river still draws
-        // over it).
-        const down = 1 + LIFT * 1.2 / l;
-        const alpha = sm[i] * (p.river ? 0.9 : 0.55);
-        for (const side of [1, 0, -1]) {
-          green.pos.push((p.x + sx * hw * side) * down, (p.y + sy * hw * side) * down, (p.z + sz * hw * side) * down);
-          green.col.push(OASIS.r, OASIS.g, OASIS.b, side === 0 ? alpha : 0);
-        }
-      }
-      for (let i = 0; i < pts.length - 1; i++) {
-        const a = base + i * 3;
-        green.index.push(a, a + 3, a + 1, a + 1, a + 3, a + 4, a + 1, a + 4, a + 2, a + 2, a + 4, a + 5);
-      }
-    };
 
     const strip = (buf: Buf, pts: Sample[]) => {
       if (pts.length < 2) return;
@@ -737,7 +688,18 @@ export class PlanetView {
           list.push({ p: d, h: o.h });
         }
       }
-      corridor(out);
+      // Corridor segments for the river (not stream) parts, with dryness smoothed along the path
+      // so the green fades in and out rather than switching at a cell edge.
+      const dry = out.map((o) => (o.cell >= 0 && DRY.has(w.biome[o.cell]) ? 1 : 0));
+      for (let i = 1; i < out.length; i++) {
+        const a = out[i - 1], b = out[i];
+        if (!a.river || !b.river || b.cell < 0) continue;
+        let sd = 0, n = 0;
+        for (let j = Math.max(0, i - 6); j <= Math.min(out.length - 1, i + 6); j++) { sd += dry[j]; n++; }
+        if (sd / n < 0.05) continue;
+        const la = Math.hypot(a.x, a.y, a.z), lb = Math.hypot(b.x, b.y, b.z);
+        corr.push(a.x / la, a.y / la, a.z / la, b.x / lb, b.y / lb, b.z / lb, Math.max(b.w * 5, spacing * 0.24), sd / n, b.cell);
+      }
       // Split into river and stream runs; the boundary point belongs to both.
       let start = 0;
       for (let i = 1; i <= out.length; i++) {
@@ -831,16 +793,53 @@ export class PlanetView {
     };
     this.rivers = mesh(riverBuf);
     this.streams = mesh(streamBuf);
-    if (green.index.length) {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(green.pos, 3));
-      geo.setAttribute('color', new THREE.Float32BufferAttribute(green.col, 4));
-      geo.setIndex(green.index);
-      geo.computeVertexNormals();
-      this.corridors = new THREE.Mesh(geo, this.corridorMat);
-      this.corridors.renderOrder = 2;
-      this.planet.add(this.corridors);
+    this.paintCorridors(w, corr);
+  }
+
+  /**
+   * Green corridors along rivers through dry land (the Nile from space), painted into the
+   * terrain's vertex colours so they lie on the ground. (They used to be a separate flat strip
+   * at river level, which poked up through the valley's creases as long thin wedges.)
+   * Distances are to the drawn, meandering river, so the green follows the water.
+   */
+  private paintCorridors(w: World, seg: number[]) {
+    if (!this.terrain || this.opts.mode !== 'biome' || !seg.length) return;
+    const g = w.grid, S = 9;
+    const byCell = new Map<number, number[]>();
+    const put = (c: number, i: number) => { let l = byCell.get(c); if (!l) byCell.set(c, (l = [])); l.push(i); };
+    for (let i = 0; i < seg.length; i += S) {
+      const c = seg[i + 8];
+      put(c, i);
+      for (const nb of g.neighbors[c]) put(nb, i);
     }
+    const geo = this.terrain.geometry, pos = geo.getAttribute('position'), col = geo.getAttribute('color');
+    const index = geo.getIndex(), faces = this.faceCell, done = new Uint8Array(pos.count);
+    const green = new THREE.Color(0x3f5a22);
+    for (let t = 0; t < faces.length; t++) {
+      const list = byCell.get(faces[t]);
+      if (!list) continue;
+      for (let j = 0; j < 3; j++) {
+        const v = index ? index.getX(t * 3 + j) : t * 3 + j;
+        if (done[v]) continue;
+        done[v] = 1;
+        const x = pos.getX(v), y = pos.getY(v), z = pos.getZ(v), l = Math.hypot(x, y, z);
+        if (l <= SEA) continue;
+        const px = x / l, py = y / l, pz = z / l;
+        let best = 0;
+        for (const i of list) {
+          const ax = seg[i], ay = seg[i + 1], az = seg[i + 2];
+          const bx = seg[i + 3] - ax, by = seg[i + 4] - ay, bz = seg[i + 5] - az;
+          const qx = px - ax, qy = py - ay, qz = pz - az;
+          const tt = Math.max(0, Math.min(1, (qx * bx + qy * by + qz * bz) / Math.max(1e-14, bx * bx + by * by + bz * bz)));
+          const f = 1 - Math.hypot(qx - bx * tt, qy - by * tt, qz - bz * tt) / seg[i + 6];
+          if (f > 0) best = Math.max(best, f * seg[i + 7]);
+        }
+        if (best <= 0) continue;
+        const k = best * best * (3 - 2 * best) * 0.9;
+        col.setXYZ(v, col.getX(v) + (green.r - col.getX(v)) * k, col.getY(v) + (green.g - col.getY(v)) * k, col.getZ(v) + (green.b - col.getZ(v)) * k);
+      }
+    }
+    col.needsUpdate = true;
   }
 }
 
