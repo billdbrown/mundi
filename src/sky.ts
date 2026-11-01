@@ -119,13 +119,24 @@ const CLOUD_GLSL = /* glsl */`
  * bends the normal so slopes catch light like rock and scree, stronger on high ground, and
  * the same noise breaks up colour. Both fade out with distance, where they would only shimmer.
  */
-export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMaterial {
+export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+  // Ground patterns need the per-vertex climate (natural colours, smooth style only).
+  if (climate) mat.defines = { ...mat.defines, USE_CLIMATE: '' };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCloudP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      .replace('#include <common>', `#include <common>
+        varying vec3 vCloudP;
+        #ifdef USE_CLIMATE
+          attribute vec2 climate;
+          varying vec2 vClim;
+        #endif`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vCloudP = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        #ifdef USE_CLIMATE
+          vClim = climate;
+        #endif`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;\n' + CLOUD_GLSL + NOISE_GLSL + /* glsl */`
         // Ridged octaves (1 - |2n - 1|) give crest lines and gullies rather than uniform grain.
@@ -137,7 +148,46 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
         // look of land from space. Takes over as the fine rock detail fades out.
         float landNoise(vec3 p) {
           return ridge(vnoise(p * 45.0)) * 0.55 + ridge(vnoise(p * 120.0)) * 0.3 + vnoise(p * 300.0) * 0.15;
-        }`)
+        }
+        #ifdef USE_CLIMATE
+          varying vec2 vClim;
+        #endif
+        // --- Ground patterns, by climate. Each fades out once its features get smaller than a
+        // few pixels (fwidth), so it adds detail up close without shimmering from orbit.
+        float aaFade(float lambda, float foot) { return 1.0 - smoothstep(lambda * 0.12, lambda * 0.45, foot); }
+        vec3 hash3(vec3 p) {
+          p = vec3(dot(p, vec3(127.1, 311.7, 74.7)), dot(p, vec3(269.5, 183.3, 246.1)), dot(p, vec3(113.5, 271.9, 124.6)));
+          return fract(sin(p) * 43758.5453);
+        }
+        /** Distance to the nearest cell wall of a 3D Voronoi pattern (0 on the wall), for cracks. */
+        float voronoiEdge(vec3 x) {
+          vec3 i = floor(x), f = fract(x);
+          float d1 = 8.0, d2 = 8.0;
+          for (int a = -1; a <= 1; a++) for (int b = -1; b <= 1; b++) for (int c = -1; c <= 1; c++) {
+            vec3 g = vec3(a, b, c), r = g + hash3(i + g) - f;
+            float d = dot(r, r);
+            if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+          }
+          return sqrt(d2) - sqrt(d1);
+        }
+        /**
+         * Dunes: crests roughly north-south, across the east-west trade winds, with a long gentle
+         * windward slope and a short steep lee face. Wavering, and broken into fields with flat
+         * sand between them. About 7 km apart (exaggerated, as everything here is).
+         */
+        const float DUNE = 0.0011;
+        float duneH(vec3 p) {
+          vec3 n = normalize(p);
+          float lon = atan(n.x, n.z), lat = asin(clamp(n.y, -1.0, 1.0));
+          // Long, gently bending crests: a broad bend, a little waver, and slow phase drift so
+          // crests fork and end now and then.
+          float u = lon * cos(lat) + (vnoise(p * 110.0) - 0.5) * 0.004 + (vnoise(p * 900.0) - 0.5) * 0.00035;
+          float f = fract(u / DUNE + (vnoise(p * 140.0 + 3.1) - 0.5) * 0.9);
+          float prof = f < 0.75 ? f / 0.75 : (1.0 - f) / 0.25;
+          float field = smoothstep(0.3, 0.7, vnoise(p * 120.0));
+          return smoothstep(0.0, 1.0, prof) * field;
+        }
+`)
       .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
         float hAbove = length(vCloudP) - 1.0;
         #ifdef MERCATOR
@@ -152,6 +202,42 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
         float farFade = smoothstep(0.12, 0.8, camDist) * step(0.0005, hAbove);
         float ln = landNoise(vCloudP);
         diffuseColor.rgb *= mix(1.0, 0.74 + 0.52 * ln, (0.45 + 0.55 * highland) * farFade);
+        float foot = length(fwidth(vCloudP));
+        float desertW = 0.0;
+        #ifdef USE_CLIMATE
+          if (hAbove > 0.0004) {
+            float moist = vClim.x, temp = vClim.y;
+            float lowland = 1.0 - highland;
+            // Deserts: dune fields (shaded in the normal step below) and the odd white salt pan in
+            // low basins.
+            desertW = smoothstep(0.24, 0.12, moist) * smoothstep(0.4, 0.55, temp) * lowland;
+            if (desertW > 0.0) {
+              float pan = smoothstep(0.74, 0.8, vnoise(vCloudP * 140.0)) * (1.0 - smoothstep(0.08, 0.2, hAbove / uRelief));
+              diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.80, 0.77, 0.70), pan * desertW * 0.85);
+              diffuseColor.rgb *= mix(1.0, 0.9 + 0.2 * duneH(vCloudP), desertW * aaFade(DUNE, foot));
+            }
+            // Grass and steppe: mottled, sun-bleached patches over a few kilometres.
+            float grassW = smoothstep(0.12, 0.25, moist) * smoothstep(0.62, 0.42, moist) * smoothstep(0.25, 0.4, temp) * lowland;
+            if (grassW > 0.0) {
+              float m = vnoise(vCloudP * 900.0) * 0.55 + vnoise(vCloudP * 2600.0) * 0.3 + vnoise(vCloudP * 7000.0) * 0.15;
+              float k = grassW * aaFade(0.0006, foot);
+              diffuseColor.rgb *= mix(1.0, 0.76 + 0.48 * m, k);
+              diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.12, 1.04, 0.8), smoothstep(0.55, 0.8, m) * k * 0.6);
+            }
+            // Tundra: frost polygons, a net of dark cracks with the odd meltwater pond.
+            float tundraW = smoothstep(0.08, 0.16, temp) * smoothstep(0.34, 0.24, temp) * lowland;
+            if (tundraW > 0.0) {
+              float k = tundraW * aaFade(0.0007, foot);
+              // Warped, so the polygons are irregular rather than paving stones.
+              vec3 q = vCloudP * 2200.0 + vec3(vnoise(vCloudP * 900.0), vnoise(vCloudP * 900.0 + 7.0), vnoise(vCloudP * 900.0 + 13.0)) * 1.2;
+              float edge = voronoiEdge(q);
+              float crack = 1.0 - smoothstep(0.0, 0.08, edge);
+              diffuseColor.rgb *= mix(1.0, 1.0 - 0.18 * crack * (0.5 + vnoise(vCloudP * 600.0)), k);
+              float pond = smoothstep(0.82, 0.86, vnoise(vCloudP * 3000.0)) * smoothstep(0.25, 0.5, moist);
+              diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.06, 0.1, 0.14), pond * k * 0.8);
+            }
+          }
+        #endif
         if (uSeason != 0.0 && hAbove > 0.0006) {
           vec3 sn = normalize(vCloudP);
           // Winter browns the mid-latitude vegetation of the cold hemisphere.
@@ -176,6 +262,29 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
           vec3 grad = t1 * (rockNoise(vCloudP + t1 * e) - rn) + t2 * (rockNoise(vCloudP + t2 * e) - rn);
           float amp = (0.15 + 0.6 * highland) * detailFade;
           normal = normalize(normal - TOVIEW(grad * amp));
+        }
+        // Dunes catch the light on their windward slopes and shade their lee faces.
+        if (desertW > 0.0) {
+          float k = desertW * aaFade(DUNE, foot);
+          if (k > 0.0) {
+            vec3 up = normalize(vCloudP);
+            vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
+            vec3 t2 = cross(up, t1);
+            float e = DUNE * 0.08, h0 = duneH(vCloudP);
+            vec3 grad = (t1 * (duneH(vCloudP + t1 * e) - h0) + t2 * (duneH(vCloudP + t2 * e) - h0)) / e;
+            normal = normalize(normal - TOVIEW(grad * DUNE * 0.3 * k));
+          }
+        }
+        // Rock strata: bands across steep high ground, as layered rock shows in cliffs.
+        if (highland > 0.0 && hAbove > 0.0) {
+          #ifdef MERCATOR
+            float steep = 1.0 - normal.z;
+          #else
+            float steep = 1.0 - dot(normalize((vec4(normal, 0.0) * viewMatrix).xyz), normalize(vCloudP));
+          #endif
+          float band = sin(hAbove / uRelief * 70.0 + (vnoise(vCloudP * 260.0) - 0.5) * 6.0);
+          float k = smoothstep(0.04, 0.16, steep) * highland * aaFade(0.0005, foot);
+          diffuseColor.rgb *= mix(1.0, 0.86 + 0.14 * band, k);
         }
         if (farFade > 0.0) {
           vec3 up = normalize(vCloudP);

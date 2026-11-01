@@ -584,7 +584,7 @@ export class PlanetView {
     const s = surfaceQueries(data, g);
     this.surface = s;
 
-    this.terrain = new THREE.Mesh(toGeometry(data.terrain), makeTerrainMaterial(this.cloudU));
+    this.terrain = new THREE.Mesh(toGeometry(data.terrain), makeTerrainMaterial(this.cloudU, !!data.terrain.climate));
     this.faceCell = data.faces;
     this.planet.add(this.terrain);
 
@@ -987,6 +987,7 @@ function toGeometry(m: MeshData): THREE.BufferGeometry {
   g.setAttribute('position', new THREE.BufferAttribute(m.position, 3));
   if (m.normal) g.setAttribute('normal', new THREE.BufferAttribute(m.normal, 3));
   if (m.color) g.setAttribute('color', new THREE.BufferAttribute(m.color, 3));
+  if (m.climate) g.setAttribute('climate', new THREE.BufferAttribute(m.climate, 2));
   if (m.depth) g.setAttribute('depth', new THREE.BufferAttribute(m.depth, 1));
   if (m.index) g.setIndex(new THREE.BufferAttribute(m.index, 1));
   return g;

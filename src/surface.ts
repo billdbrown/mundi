@@ -35,6 +35,8 @@ export interface MeshData {
   position: Float32Array;
   normal?: Float32Array;
   color?: Float32Array;
+  /** Terrain only: blended (moisture, temperature) per vertex, for the ground patterns. */
+  climate?: Float32Array;
   depth?: Float32Array;
   index?: Uint32Array;
 }
@@ -62,7 +64,7 @@ export interface BuildOptions {
 function meshData(geo: THREE.BufferGeometry): MeshData {
   const a = (name: string) => geo.getAttribute(name)?.array as Float32Array | undefined;
   return {
-    position: a('position')!, normal: a('normal'), color: a('color'), depth: a('depth'),
+    position: a('position')!, normal: a('normal'), color: a('color'), climate: a('climate'), depth: a('depth'),
     index: geo.index ? Uint32Array.from(geo.index.array) : undefined,
   };
 }
@@ -366,23 +368,34 @@ function buildSmooth(inp: SurfaceInput): Surface {
     const qy = dy + warpAmp * (tint(dx * wf, dy * wf + 23.7, dz * wf) + 0.5 * tint(dx * wf * 2.3 + 3.3, dy * wf * 2.3, dz * wf * 2.3));
     const qz = dz + warpAmp * (tint(dx * wf, dy * wf, dz * wf + 37.1) + 0.5 * tint(dx * wf * 2.3, dy * wf * 2.3, dz * wf * 2.3 + 8.9));
     const side = wetOf(owner);
-    let sr = 0, sg = 0, sb = 0, sw = 0;
+    let sr = 0, sg = 0, sb = 0, sw = 0, sm = 0, st = 0;
     const consider = (c: number) => {
       if (wetOf(c) !== side) return;
       const ex = P[c * 3] - qx, ey = P[c * 3 + 1] - qy, ez = P[c * 3 + 2] - qz;
       const wt = Math.exp(-(ex * ex + ey * ey + ez * ez) / sigma2);
       sr += cellColor[c * 3] * wt; sg += cellColor[c * 3 + 1] * wt; sb += cellColor[c * 3 + 2] * wt; sw += wt;
+      sm += w.moisture[c] * wt; st += w.temperature[c] * wt;
     };
     consider(owner);
     for (const n of g.neighbors[owner]) consider(n);
-    if (sw < 1e-9) { out[0] = cellColor[owner * 3]; out[1] = cellColor[owner * 3 + 1]; out[2] = cellColor[owner * 3 + 2]; return; }
-    out[0] = sr / sw; out[1] = sg / sw; out[2] = sb / sw;
+    if (sw < 1e-9) {
+      out[0] = cellColor[owner * 3]; out[1] = cellColor[owner * 3 + 1]; out[2] = cellColor[owner * 3 + 2];
+      out[3] = w.moisture[owner]; out[4] = w.temperature[owner];
+      return;
+    }
+    out[0] = sr / sw; out[1] = sg / sw; out[2] = sb / sw; out[3] = sm / sw; out[4] = st / sw;
   };
-  const blendRGB = [0, 0, 0];
+  const blendRGB = [0, 0, 0, 0, 0];
+  const clim: number[] = [];
   const add = (dx: number, dy: number, dz: number, h: number, r: number, gg: number, b: number, lvl: number, lake = false) => {
     const i = pos.length / 3;
     pos.push(dx * h, dy * h, dz * h);
-    if (inp.blend) { colourAt(dx, dy, dz, blendRGB); r = blendRGB[0]; gg = blendRGB[1]; b = blendRGB[2]; }
+    if (inp.blend) {
+      colourAt(dx, dy, dz, blendRGB); r = blendRGB[0]; gg = blendRGB[1]; b = blendRGB[2];
+      clim.push(blendRGB[3], blendRGB[4]);
+    } else {
+      clim.push(w.moisture[owner], w.temperature[owner]);
+    }
     rgb.length = 0;
     tinted(tint, dx, dy, dz, r, gg, b, rgb);
     col.push(rgb[0], rgb[1], rgb[2]);
@@ -572,6 +585,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
   const terrain = new THREE.BufferGeometry();
   terrain.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   terrain.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  if (inp.natural) terrain.setAttribute('climate', new THREE.Float32BufferAttribute(clim, 2));
   terrain.setIndex(index);
   terrain.computeVertexNormals();
   if (inp.natural) {
