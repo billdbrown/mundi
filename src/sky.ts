@@ -446,7 +446,9 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
             // Forest: dense canopy in the groves, with lumpy crowns up close, and paler, yellower
             // clearings between. Open country gets the odd dark grove. The trees placed near the
             // camera follow the same pattern (groves.ts), so canopy and trees agree.
-            float forestW = smoothstep(0.005, 0.04, diffuseColor.g - max(diffuseColor.r, diffuseColor.b)) * smoothstep(0.35, 0.5, moist) * lowland;
+            // Forest is where it's moist enough and warmer than tundra (by climate: a test on the
+            // ground colour missed dark taiga, which then read as bare hills past the trees).
+            float forestW = smoothstep(0.3, 0.45, moist) * smoothstep(0.17, 0.24, temp) * lowland;
             float gv = groveField(vCloudP);
             if (forestW > 0.0) {
               // Fades out where groves are too small to resolve: from orbit the waves of the
@@ -459,7 +461,12 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               float closed = smoothstep(0.6, 0.72, moist) * mix(0.35, 0.5, smoothstep(0.65, 0.75, temp));
               float inGrove = mix(mix(0.45 + closed, 0.85 + closed * 0.3, broad), smoothstep(-0.35, 0.25, gv + closed), groveNear);
               float crowns = snoise01(vCloudP * 3200.0) * 0.6 + snoise01(vCloudP * 9000.0) * 0.4;
-              diffuseColor.rgb *= mix(1.0, 0.68, forestW * inGrove);
+              // Under the canopy the ground takes the trees' own colours (flora.ts), as forest looks
+              // from the air: dark, bluer in the north. Past the drawn trees (plants are small, so
+              // only drawn near the view) this is what carries the forest.
+              vec3 canopy = mix(vec3(0.026, 0.066, 0.03), vec3(0.04, 0.12, 0.025), smoothstep(0.3, 0.7, temp));
+              diffuseColor.rgb = mix(diffuseColor.rgb, canopy, forestW * inGrove * 0.6);
+              diffuseColor.rgb *= mix(1.0, 0.85, forestW * inGrove);
               diffuseColor.rgb *= mix(1.0, 0.75 + 0.35 * crowns, forestW * inGrove * aaFade(0.0003, foot));
               // Clearings: sun-bleached grass in warm forest, moss and bog in cold forest.
               vec3 glade = mix(vec3(0.82, 0.98, 0.8), vec3(1.18, 1.12, 0.82), smoothstep(0.35, 0.55, temp));

@@ -1,11 +1,15 @@
 /**
- * Trees and props near the camera, at a believable size and density.
+ * Trees and props near the camera.
  *
  * At planet scale a tree is far too small to see, so from orbit forests are just colour, as in
- * satellite imagery. Zoom in and the cells around the view fill with small, dense trees, rocks,
- * cacti and icebergs. Each cell's plants are generated on demand from its own seed, placed
- * exactly on the terrain triangles, and cached; only the cells within a radius that shrinks as
- * you descend are drawn.
+ * satellite imagery. Zoom in and the ground around the view fills with small, dense trees,
+ * rocks, cacti and icebergs. Plants are generated per terrain triangle (several to a cell) from
+ * that triangle's own seed, placed exactly on it, and cached; generation is spread over frames,
+ * nearest first, so moving never stalls; only triangles within a radius that shrinks as you
+ * descend are drawn, and far ones are forgotten.
+ *
+ * The plant scale (setScale) sets their size; density rises with the square of the shrink so
+ * forests stay closed, and the radius shrinks with it, so about as many are drawn at any scale.
  */
 import * as THREE from 'three';
 import { B, landBiome } from './biomes.ts';
@@ -13,26 +17,26 @@ import { WATER_LAND, WATER_OCEAN, type World } from './world.ts';
 import type { SurfaceData } from './surface.ts';
 import { FLORA, ICEBERG, CACTUS, ROCK, treeGeometry, treeMaterial } from './flora.ts';
 import { groveField, groveFreq, forestMask, openMask, REF_SPACING } from './groves.ts';
+import { makeRng } from './rng.ts';
+import { makeSimplex, type Noise3 } from './noise.ts';
 
 /** Biomes that are forest (trees with clearings) and open country (trees only in groves). */
 const FOREST = new Set<number>([B.TAIGA, B.FOREST, B.TEMPERATE_RAIN, B.RAINFOREST, B.DRY_FOREST]);
 const OPEN = new Set<number>([B.SAVANNA, B.GRASSLAND]);
-import { makeRng } from './rng.ts';
-import { makeSimplex, type Noise3 } from './noise.ts';
 
 const SEA = 1.0;
-/** Plants are full size within FADE_NEAR of the camera and shrink to nothing at FADE_FAR. */
+/** At scale 1, plants are full size within FADE_NEAR of the camera and gone at FADE_FAR. */
 export const FADE_NEAR = 0.15, FADE_FAR = 0.26;
-/** Camera distance (planet radius 1) below which plants are generated at all. */
-export const LOD_DIST = 1 + FADE_FAR + 0.005;
-/** Plants per cell relative to the FLORA table's numbers. */
+/** Plants per cell-sized area relative to the FLORA table's numbers, at scale 1. */
 const DENSITY = 36;
 const KINDS = 7;
 /** Floats per plant: x, y, z, size, spin, shade, kind, colour, cut year (0 = never). */
 const STRIDE = 9;
 const MAX_INSTANCES = 320000;
+/** Main-thread time per frame for generating plants, ms. */
+const BUDGET_MS = 5;
 
-/** A cell's plants as instance data, by kind: count, matrices (16 each), colours (3), clearing year. */
+/** A triangle's plants as instance data, by kind: count, matrices (16 each), colours (3), clearing year. */
 interface Baked { n: Int32Array; mat: Float32Array[]; col: Float32Array[]; cut: Float32Array[] }
 
 export class LodFlora {
@@ -41,15 +45,24 @@ export class LodFlora {
   private world?: World;
   private pos?: Float32Array;
   private index?: Uint32Array;
+  private faces?: Int32Array;
+  /** Triangle centroid directions (unit), for the radius test. */
+  private centroid = new Float32Array(0);
   private triStart = new Int32Array(0);
   private triCount = new Int32Array(0);
-  private cache = new Map<number, Float32Array>();
-  /** Per cell, its plants ready to copy into the instance buffers (see bake). */
+  /** Per triangle, its plants ready to copy into the instance buffers. */
   private baked = new Map<number, Baked>();
   private clump?: Noise3;
   private lastCenter = 0;
   private lastKey = '';
+  /** Triangles that should be drawn now, nearest first; reselected when the view moves. */
+  private wanted: number[] = [];
+  private dirty = false;
+  private lastRebuild = 0;
   private relief = 0.035;
+  private scale = 1;
+  /** Fade distances for the plants' shader (applyCloudShadow), following the scale. */
+  readonly fade = { uFadeNear: { value: FADE_NEAR }, uFadeFar: { value: FADE_FAR } };
   /** Centuries: the year each spot is cleared for farming (0 = never), or none. */
   private clearing: ((x: number, y: number, z: number, cell: number) => number) | null = null;
 
@@ -57,14 +70,24 @@ export class LodFlora {
   private inWater: ((x: number, y: number, z: number, cell: number) => boolean) | null = null;
   setWater(f: ((x: number, y: number, z: number, cell: number) => boolean) | null) {
     this.inWater = f;
-    this.cache.clear();
-    this.baked.clear();
-    this.lastKey = '';
+    this.forget();
   }
 
   setClearing(f: ((x: number, y: number, z: number, cell: number) => number) | null) {
     this.clearing = f;
-    this.cache.clear();
+    this.forget();
+  }
+
+  /** Plant size relative to the original (1); density and radius follow (see the top). */
+  setScale(s: number) {
+    this.scale = s;
+    this.fade.uFadeNear.value = FADE_NEAR * s;
+    this.fade.uFadeFar.value = FADE_FAR * s;
+    this.forget();
+  }
+  getScale() { return this.scale; }
+
+  private forget() {
     this.baked.clear();
     this.lastKey = '';
   }
@@ -79,22 +102,33 @@ export class LodFlora {
     this.relief = relief;
     this.pos = data.terrain.position;
     this.index = data.terrain.index;
-    const N = world.grid.count;
+    this.faces = data.faces;
+    const N = world.grid.count, T = data.faces.length;
     this.triStart = new Int32Array(N).fill(-1);
     this.triCount = new Int32Array(N);
     data.faces.forEach((c, t) => {          // the builders emit each cell's triangles together
       if (this.triStart[c] < 0) this.triStart[c] = t;
       this.triCount[c]++;
     });
-    this.cache.clear();
-    this.baked.clear();
+    this.centroid = new Float32Array(T * 3);
     this.clump = makeSimplex(world.params.seed * 5 + 17);
-    this.lastKey = '';
+    this.forget();
+    // (The tile style's mesh has no index: no plants there, as before.)
+    const p = data.terrain.position, ix = data.terrain.index;
+    if (!ix) { this.index = undefined; return; }
+    for (let t = 0; t < T; t++) {
+      const a = ix[t * 3] * 3, b = ix[t * 3 + 1] * 3, c = ix[t * 3 + 2] * 3;
+      const x = p[a] + p[b] + p[c], y = p[a + 1] + p[b + 1] + p[c + 1], z = p[a + 2] + p[b + 2] + p[c + 2];
+      const l = Math.hypot(x, y, z) || 1;
+      this.centroid[t * 3] = x / l; this.centroid[t * 3 + 1] = y / l; this.centroid[t * 3 + 2] = z / l;
+    }
   }
 
-  update(camera: THREE.Vector3, visible: boolean) {
+  /** all: generate everything needed now, not over frames (for screenshots, which can't wait). */
+  update(camera: THREE.Vector3, visible: boolean, all = false) {
     const d = camera.length();
-    if (!visible || !this.world || d > LOD_DIST) { this.group.visible = false; return; }
+    const far = FADE_FAR * this.scale;
+    if (!visible || !this.world || !this.index || d > 1 + far + 0.005) { this.group.visible = false; return; }
     this.group.visible = true;
     const g = this.world.grid, P = g.centers;
     const dx = camera.x / d, dy = camera.y / d, dz = camera.z / d;
@@ -108,22 +142,66 @@ export class LodFlora {
       cur = best;
     }
     this.lastCenter = cur;
-    // Cover every cell that could hold a visible plant, plus a margin, so cells join the set
-    // while their plants are still at zero size.
+    // Cover every triangle that could hold a visible plant, plus a margin, so they join while
+    // their plants are still at zero size.
     const alt = Math.max(0, d - 1);
-    const radius = Math.sqrt(Math.max(0, FADE_FAR * FADE_FAR - alt * alt)) + 0.03;
-    const key = `${cur}:${Math.round(radius * 60)}`;
-    if (key === this.lastKey) return;
-    this.lastKey = key;
+    const radius = Math.sqrt(Math.max(0, far * far - alt * alt)) + 0.03 * this.scale + 0.004;
+    const key = `${cur}:${Math.round(radius * 600)}`;
+    if (key !== this.lastKey) {
+      this.lastKey = key;
+      this.selectTriangles(cur, radius, dx, dy, dz);
+    }
+    // Generate what's missing, nearest first, within the frame budget.
+    const t0 = performance.now();
+    let added = false, missing = false;
+    for (const t of this.wanted) {
+      if (this.baked.has(t)) continue;
+      if (!all && performance.now() - t0 > BUDGET_MS) { missing = true; break; }
+      this.baked.set(t, this.bake(t));
+      added = true;
+    }
+    if (added) this.dirty = true;
+    // Rebuild the instance buffers when the set changed; while plants are still coming in, at
+    // most a few times a second (each rebuild copies every plant).
+    const now = performance.now();
+    if (this.dirty && (!missing || now - this.lastRebuild > 150)) {
+      this.dirty = false;
+      this.lastRebuild = now;
+      this.rebuild();
+    }
+  }
 
-    // Cells within the radius, by flood fill from the centre.
-    const cosR = Math.cos(radius), seen = new Set([cur]), cells = [cur];
+  /** The triangles within the radius, nearest first; forget baked ones well outside it. */
+  private selectTriangles(cur: number, radius: number, dx: number, dy: number, dz: number) {
+    const g = this.world!.grid, P = g.centers, C = this.centroid;
+    const cellReach = Math.cos(Math.min(Math.PI, radius + 1.2 * Math.sqrt((4 * Math.PI) / g.count)));
+    const dot = (c: number) => P[c * 3] * dx + P[c * 3 + 1] * dy + P[c * 3 + 2] * dz;
+    const seen = new Set([cur]), cells = [cur];
     for (let i = 0; i < cells.length; i++) {
       for (const n of g.neighbors[cells[i]]) {
-        if (!seen.has(n) && dot(n) > cosR) { seen.add(n); cells.push(n); }
+        if (!seen.has(n) && dot(n) > cellReach) { seen.add(n); cells.push(n); }
       }
     }
-    const parts = cells.map((c) => this.bake(c));
+    const cosR = Math.cos(radius), list: [number, number][] = [];
+    for (const c of cells) {
+      for (let t = this.triStart[c]; t < this.triStart[c] + this.triCount[c]; t++) {
+        const k = C[t * 3] * dx + C[t * 3 + 1] * dy + C[t * 3 + 2] * dz;
+        if (k > cosR) list.push([t, k]);
+      }
+    }
+    list.sort((a, b) => b[1] - a[1]);
+    this.wanted = list.map(([t]) => t);
+    this.dirty = true;
+    // Memory: drop triangles far outside the radius.
+    const cosKeep = Math.cos(Math.min(Math.PI, radius * 2.5 + 0.01));
+    for (const t of this.baked.keys()) {
+      if (C[t * 3] * dx + C[t * 3 + 1] * dy + C[t * 3 + 2] * dz < cosKeep) this.baked.delete(t);
+    }
+  }
+
+  private rebuild() {
+    const parts: Baked[] = [];
+    for (const t of this.wanted) { const b = this.baked.get(t); if (b) parts.push(b); }
     const counts = new Array(KINDS).fill(0);
     for (const b of parts) for (let k = 0; k < KINDS; k++) counts[k] += b.n[k];
     const total = counts.reduce((s, n) => s + n, 0);
@@ -145,8 +223,8 @@ export class LodFlora {
         this.group.add(mesh);
       }
     }
-    // Copy each cell's ready-made blocks; when over budget, every cell gives up the same share
-    // (its plants are in random order, so taking the first ones thins evenly).
+    // Copy each triangle's ready-made blocks; when over budget, every triangle gives up the same
+    // share (its plants are in random order, so taking the first ones thins evenly).
     const fill = new Array(KINDS).fill(0);
     for (const b of parts) {
       for (let k = 0; k < KINDS; k++) {
@@ -173,15 +251,9 @@ export class LodFlora {
     });
   }
 
-  /**
-   * One cell's plants as instance data, worked out once: a matrix, colour and clearing year
-   * per plant, grouped by kind. Composing every plant's matrix on each rebuild (whenever the
-   * cell under the camera changed) stalled the page for tens of milliseconds while moving.
-   */
-  private bake(c: number): Baked {
-    const hit = this.baked.get(c);
-    if (hit) return hit;
-    const a = this.cell(c);
+  /** One triangle's plants as instance data: a matrix, colour and clearing year each, by kind. */
+  private bake(t: number): Baked {
+    const a = this.plants(t);
     const n = new Int32Array(KINDS);
     for (let i = 0; i < a.length; i += STRIDE) n[a[i + 6]]++;
     const b: Baked = {
@@ -207,7 +279,6 @@ export class LodFlora {
       color.toArray(b.col[k], j * 3);
       b.cut[k][j] = a[i + 8];
     }
-    this.baked.set(c, b);
     return b;
   }
   private tmp = {
@@ -215,23 +286,32 @@ export class LodFlora {
     m: new THREE.Matrix4(), p: new THREE.Vector3(), sc: new THREE.Vector3(), color: new THREE.Color(),
   };
 
-  /** One cell's plants, generated once from the cell's own seed. */
-  private cell(c: number): Float32Array {
-    const hit = this.cache.get(c);
-    if (hit) return hit;
-    const w = this.world!, g = w.grid, P = g.centers;
-    // Plants are sized and spaced in fixed ground units; a cell's share scales with its area.
-    const spacing = REF_SPACING;
-    const area = (4 * Math.PI) / g.count / (REF_SPACING * REF_SPACING);
-    const rng = makeRng(w.params.seed * 7919 + c * 31 + 1);
+  /** Area of triangle t, in units of REF_SPACING squared (a cell-sized area at detail 40). */
+  private triArea(t: number): number {
+    const p = this.pos!, ix = this.index!;
+    const a = ix[t * 3] * 3, b = ix[t * 3 + 1] * 3, c = ix[t * 3 + 2] * 3;
+    const ux = p[b] - p[a], uy = p[b + 1] - p[a + 1], uz = p[b + 2] - p[a + 2];
+    const vx = p[c] - p[a], vy = p[c + 1] - p[a + 1], vz = p[c + 2] - p[a + 2];
+    return 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / (REF_SPACING * REF_SPACING);
+  }
+
+  /** One triangle's plants, generated once from the triangle's own seed. */
+  private plants(t: number): Float32Array {
+    const w = this.world!, g = w.grid, P = g.centers, c = this.faces![t];
+    // Plants are sized and spaced in fixed ground units, times the scale; density rises with the
+    // square of the shrink so canopy cover stays the same.
+    const s = this.scale, spacing = REF_SPACING * s;
+    const area = this.triArea(t) / (s * s);
+    const rng = makeRng(w.params.seed * 7919 + t * 31 + 7);
+    const count = (x: number) => Math.floor(x + rng());     // random rounding: small counts average right
     const out: number[] = [];
 
     if (w.water[c] === WATER_OCEAN) {
       // Icebergs on cold open sea near the ice.
       if (w.biome[c] !== B.SEA_ICE && w.temperature[c] < 0.2) {
-        const n = Math.floor(rng() * 4 * area + rng());
+        const n = count(rng() * 4 * area);
         for (let i = 0; i < n; i++) {
-          const pt = this.randomPoint(c, rng, true);
+          const pt = this.randomPoint(t, rng, true);
           if (!pt) continue;
           const r = rng();
           out.push(pt[0], pt[1], pt[2], spacing * (0.02 + 0.05 * r * r), rng() * Math.PI * 2, 0.92 + 0.08 * rng(), ICEBERG, 0xeef5fa, 0);
@@ -247,7 +327,7 @@ export class LodFlora {
         ? [...(FLORA[b] ?? []).map(([k, col, d, sz]): Spec[number] => [k, col, d * 0.6, sz]), ...(FLORA[B.MOUNTAIN] ?? []).filter(([k]) => k === ROCK)]
         : FLORA[b];
       if (spec) {
-        const f = 0.45 / spacing, clump = this.clump!;
+        const f = 0.45 / REF_SPACING, clump = this.clump!;
         const cn = 0.5 + 0.5 * clump(P[c * 3] * f, P[c * 3 + 1] * f, P[c * 3 + 2] * f);
         // Forest and open country take their shape from the grove pattern (shared with the ground
         // shader's canopy); elsewhere the old cell-scale clumping still varies density.
@@ -255,15 +335,14 @@ export class LodFlora {
         const groves = forest ? 3.2 : open ? 2.6 : Math.max(0.05, 1.9 * cn * cn);
         const gf = groveFreq(g.count);
         const riverThin = w.river[c] ? 0.85 : 1;   // the channel itself is kept clear (inWater)
+        const nearRiver = !!w.river[c] || g.neighbors[c].some((nb) => w.river[nb]);
         for (const [kind, col, density, size = 1] of spec) {
-          const n = Math.round(density * DENSITY * groves * riverThin * area * (0.85 + 0.3 * rng()));
+          const n = count(density * DENSITY * groves * riverThin * area * (0.85 + 0.3 * rng()));
           const shaped = (forest || open) && kind !== ROCK && kind !== CACTUS;
           for (let i = 0; i < n; i++) {
-            const pt = this.randomPoint(c, rng, false);
+            const pt = this.randomPoint(t, rng, false);
             if (!pt) continue;
-            if (w.river[c] || g.neighbors[c].some((nb) => w.river[nb])) {
-              if (this.inWater?.(pt[0], pt[1], pt[2], c)) continue;
-            }
+            if (nearRiver && this.inWater?.(pt[0], pt[1], pt[2], c)) continue;
             if (shaped) {
               const gv = groveField(pt[0], pt[1], pt[2], gf);
               // Rainforest canopy is nearly closed; temperate forest has glades; taiga has bogs.
@@ -279,19 +358,15 @@ export class LodFlora {
         }
       }
     }
-    const arr = Float32Array.from(out);
-    this.cache.set(c, arr);
-    return arr;
+    return Float32Array.from(out);
   }
 
   /**
-   * A random point on one of the cell's terrain triangles. Land: skip steep slopes, snow and
-   * anything at or below the waterline. Sea: the point is lifted onto the water surface.
+   * A random point on terrain triangle t. Land: skip steep slopes, snow and anything at or below
+   * the waterline. Sea: the point is lifted onto the water surface.
    */
-  private randomPoint(c: number, rng: () => number, onWater: boolean): number[] | null {
-    const count = this.triCount[c];
-    if (!count || !this.pos || !this.index) return null;
-    const t = this.triStart[c] + Math.floor(rng() * count);
+  private randomPoint(t: number, rng: () => number, onWater: boolean): number[] | null {
+    if (!this.pos || !this.index) return null;
     const ia = this.index[t * 3] * 3, ib = this.index[t * 3 + 1] * 3, ic = this.index[t * 3 + 2] * 3, p = this.pos;
     let u = rng(), v = rng();
     if (u + v > 1) { u = 1 - u; v = 1 - v; }

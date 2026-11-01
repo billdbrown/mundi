@@ -7,7 +7,7 @@
 import { chromium } from 'playwright-core';
 const browser = await chromium.launch({ channel: 'msedge', args: ['--use-angle=d3d11', '--enable-gpu'] });
 const page = await (await browser.newContext({ viewport: { width: 1200, height: 800 } })).newPage();
-await page.goto('http://localhost:5291/');
+await page.goto(process.env.LOOK_URL ?? 'http://localhost:5291/');
 await page.waitForFunction(() => window.mundi?.world, null, { timeout: 60000 });
 await page.evaluate(() => window.mundi.load('seed=77', { look: 'photo' }));
 await page.waitForTimeout(8000);

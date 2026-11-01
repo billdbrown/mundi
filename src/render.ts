@@ -11,7 +11,7 @@ import { hash01 } from './rng.ts';
 import { makeSimplex } from './noise.ts';
 import { SEA, RELIEF, surfaceQueries, type MeshData, type SurfaceData, type SurfaceQueries } from './surface.ts';
 import { buildForest, treeMaterial, treeGeometry } from './flora.ts';
-import { LodFlora, FADE_NEAR, FADE_FAR } from './lodflora.ts';
+import { LodFlora } from './lodflora.ts';
 import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere, makeStars, makeSky, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
 import type { CloudPixels } from './clouds.ts';
 import { groveFreq } from './groves.ts';
@@ -112,6 +112,32 @@ export class PlanetView {
   /** Centuries: the history being shown, its drawing, and whether borders are on. */
   private history: History | null = null;
   private civ!: CivLayer;
+  /**
+   * TEMPORARY, for choosing a plant scale by comparison: ?veg=1, 3 or 6 in the address (plants at
+   * 1, 1/3 or 1/6 of the original size), V cycles them, a label shows which. Remove once chosen.
+   */
+  private vegSwitch() {
+    const steps = [1, 3, 6];
+    const label = document.createElement('div');
+    label.className = 'ui';   // hidden in screenshots (body.capture .ui)
+    label.style.cssText = 'position:fixed;left:50%;bottom:64px;transform:translateX(-50%);padding:4px 10px;border-radius:8px;background:rgba(10,14,22,.75);color:#dfe6ef;font:12px system-ui;pointer-events:none;z-index:50';
+    document.body.appendChild(label);
+    const set = (k: number) => {
+      this.flora.setScale(1 / k);
+      label.textContent = `Plants 1/${k}${k === 1 ? ' (original)' : ''} · press V to switch`;
+      const q = new URLSearchParams(location.search);
+      q.set('veg', String(k));
+      history.replaceState(null, '', '?' + q.toString() + location.hash);
+    };
+    const start = Number(new URLSearchParams(location.search).get('veg'));
+    set(steps.includes(start) ? start : 6);
+    window.addEventListener('keydown', (e) => {
+      if (e.key !== 'v' && e.key !== 'V') return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const k = Math.round(1 / this.flora.getScale());
+      set(steps[(steps.indexOf(k) + 1) % steps.length]);
+    });
+  }
   private prewarmed = false;
   /**
    * Shaders first needed near the ground (the ground patch, trees, the low sky) compile in the
@@ -203,7 +229,8 @@ export class PlanetView {
     this.hover.visible = false;
     this.planet.add(this.hover);
     this.planet.add(this.clouds);
-    applyCloudShadow(treeMaterial, this.cloudU, this.sunU, { uFadeNear: { value: FADE_NEAR }, uFadeFar: { value: FADE_FAR } });
+    applyCloudShadow(treeMaterial, this.cloudU, this.sunU, this.flora.fade);
+    this.vegSwitch();
 
     this.scene.add(this.planet);
     this.atmosphere = makeAtmosphere(this.sunU);
@@ -767,7 +794,7 @@ export class PlanetView {
     if (this.streams) this.streams.visible = this.opts.rivers && this.opts.mode === 'biome' && this.streamMat.uniforms.uVis.value > 0.002;
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
 
-    this.flora.update(this.camera.position, this.opts.trees && this.opts.mode === 'biome' && !this.mapMode);
+    this.flora.update(this.camera.position, this.opts.trees && this.opts.mode === 'biome' && !this.mapMode, this.frozen !== null);
     const civOn = this.cloudU.uYear.value >= 0;
     this.civ.group.visible = civOn;
     if (civOn) this.civ.setVisibility(this.mapMode ? 2 : d, this.civBorders);
