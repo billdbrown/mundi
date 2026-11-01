@@ -48,6 +48,14 @@ export class LodFlora {
   /** Centuries: the year each spot is cleared for farming (0 = never), or none. */
   private clearing: ((x: number, y: number, z: number, cell: number) => number) | null = null;
 
+  /** Rivers: true where a point is in a drawn channel, so nothing grows there. */
+  private inWater: ((x: number, y: number, z: number, cell: number) => boolean) | null = null;
+  setWater(f: ((x: number, y: number, z: number, cell: number) => boolean) | null) {
+    this.inWater = f;
+    this.cache.clear();
+    this.lastKey = '';
+  }
+
   setClearing(f: ((x: number, y: number, z: number, cell: number) => number) | null) {
     this.clearing = f;
     this.cache.clear();
@@ -190,13 +198,16 @@ export class LodFlora {
         const forest = FOREST.has(b), open = OPEN.has(b);
         const groves = forest ? 3.2 : open ? 2.6 : Math.max(0.05, 1.9 * cn * cn);
         const gf = groveFreq(g.count);
-        const riverThin = w.river[c] ? 0.35 : 1;
+        const riverThin = w.river[c] ? 0.85 : 1;   // the channel itself is kept clear (inWater)
         for (const [kind, col, density, size = 1] of spec) {
           const n = Math.round(density * DENSITY * groves * riverThin * (0.85 + 0.3 * rng()));
           const shaped = (forest || open) && kind !== ROCK && kind !== CACTUS;
           for (let i = 0; i < n; i++) {
             const pt = this.randomPoint(c, rng, false);
             if (!pt) continue;
+            if (w.river[c] || g.neighbors[c].some((nb) => w.river[nb])) {
+              if (this.inWater?.(pt[0], pt[1], pt[2], c)) continue;
+            }
             if (shaped) {
               const gv = groveField(pt[0], pt[1], pt[2], gf);
               if (rng() > (forest ? forestMask(gv) : openMask(gv))) continue;

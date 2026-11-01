@@ -189,3 +189,5 @@ body.shell #info { border-radius: 12px; padding: 8px 11px; background: rgba(10,1
 @keyframes chron-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @media (max-width: 720px) { .chronicle { top: auto; bottom: 170px; left: 8px; right: 8px; width: auto; max-height: 30vh; overflow: hidden; }
   .clock .timeline { width: 90px; } }
+
+.proj .sep { width: 1px; align-self: stretch; margin: 4px 3px; background: var(--edge); }

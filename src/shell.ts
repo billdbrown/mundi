@@ -136,6 +136,8 @@ export function mountShell(app: App) {
     <div class="proj" id="proj">
       <button data-proj="globe" class="on" title="The planet as a globe"><span class="ico">◯</span> Globe</button>
       <button data-proj="flat" title="The whole planet laid flat (Mercator projection)"><span class="ico">▭</span> Flat map</button>
+      <i class="sep"></i>
+      <button id="clouds-toggle" class="on" title="Show or hide the clouds"><span class="ico">☁</span> Clouds</button>
     </div>
     <div class="hint" id="hint">Drag to spin · scroll to dive · hover a place</div>
     <div class="toast" id="toast" hidden></div>
@@ -166,16 +168,26 @@ export function mountShell(app: App) {
   };
 
   // --- Lenses ---
+  // The clouds button is a standing preference: lenses that show clouds respect it.
+  let cloudsOn = (() => { try { return localStorage.getItem('mundi-clouds') !== 'off'; } catch { return true; } })();
   const applyLens = (l: Lens, user = true) => {
     const def = LENSES.find((x) => x.id === l) ?? LENSES[0];
     root.querySelectorAll<HTMLButtonElement>('#lenses button').forEach((b) => b.classList.toggle('on', b.dataset.lens === def.id));
     app.setLens(def.id);
-    if (user || true) app.setView({ ...def.view, sites: def.id === 'map' });
+    if (user || true) app.setView({ ...def.view, sites: def.id === 'map', clouds: !!def.view.clouds && cloudsOn });
     const lg = LEGENDS[def.id];
     $('legend').hidden = !lg;
     if (lg) { $('legend-lo').textContent = lg[0]; $('legend-hi').textContent = lg[1]; $('legend-bar').style.background = lg[2]; }
   };
   root.querySelectorAll<HTMLButtonElement>('#lenses button').forEach((b) => { b.onclick = () => applyLens(b.dataset.lens as Lens); });
+  const syncCloudButton = () => $('clouds-toggle').classList.toggle('on', cloudsOn);
+  $('clouds-toggle').onclick = () => {
+    cloudsOn = !cloudsOn;
+    try { localStorage.setItem('mundi-clouds', cloudsOn ? 'on' : 'off'); } catch { /* private window */ }
+    syncCloudButton();
+    applyLens(app.lens());
+  };
+  syncCloudButton();
 
   // --- Drawer: presets, dials, advanced ---
   const openDrawer = (on: boolean) => { $('drawer').hidden = !on; $('shape-toggle').classList.toggle('on', on); };

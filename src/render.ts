@@ -17,6 +17,7 @@ import type { CloudPixels } from './clouds.ts';
 import { groveFreq } from './groves.ts';
 import { CivLayer } from './civview.ts';
 import { Weather } from './weather.ts';
+import { GroundProbe } from './ground.ts';
 import type { History } from './civ.ts';
 import { MERC_GLSL, MERC_DISCARD, MERC_MAX_Y, mercVertex, mercY, mercLat, setMercator } from './mercator.ts';
 import type { ViewMode, TerrainStyle } from './colors.ts';
@@ -113,7 +114,9 @@ export class PlanetView {
   private civBorders = false;
   /** Weather: storm schedule for this world, and weather time in days. */
   private weather?: Weather;
-  private weatherDays = 4;   // a few days in, so storms are already about at load
+  private weatherDays = 4;
+  /** Exact ground height on the current terrain mesh (smooth style only). */
+  private probe: GroundProbe | null = null;   // a few days in, so storms are already about at load
   private sunU = { uSunDir: { value: new THREE.Vector3(0, 0, 1) } };
   private ambient: THREE.AmbientLight;
   private time = 0;
@@ -294,6 +297,9 @@ export class PlanetView {
    * haze. From orbit none of this applies.
    */
   private groundCell = 0;
+  private virtualPos = new THREE.Vector3();
+  private tiltedPos = new THREE.Vector3();
+  private tiltActive = false;
   /** The cell under the camera, by walking from the last one toward the camera's direction. */
   private cellBelow(): number {
     const w = this.world;
@@ -315,8 +321,32 @@ export class PlanetView {
     // Keep a little clearance over the ground below, so you can skim valleys but not enter hills.
     const c = this.cellBelow();
     if (c >= 0 && this.surface) this.controls.minDistance = Math.max(1.006, Math.max(this.surface.centerH(c), SEA) + 0.005);
-    this.tilt = (1 - s(1.01, 1.24)) * 1.25;              // up to ~72° above straight down
-    this.camera.rotateX(this.tilt);
+    // Tilt grows smoothly all the way down from 1.5 radii, most of it near the ground, up to
+    // ~66°. The view pivots about the ground point at the middle of the screen, which stays put:
+    // zooming in always closes on the spot you were looking at.
+    const t = 1 - s(1.012, 1.5);
+    this.tilt = 1.15 * t * t;
+    this.tiltActive = this.tilt > 1e-4;
+    if (this.tiltActive) {
+      const up = this.camera.position.clone().normalize();
+      const ground = this.probe ? Math.max(SEA, this.probe.heightAt(up.x, up.y, up.z, SEA)) : SEA;
+      const target = up.clone().multiplyScalar(ground);
+      let north = new THREE.Vector3(0, 1, 0).addScaledVector(up, -up.y);
+      if (north.lengthSq() < 1e-6) north = new THREE.Vector3(0, 0, -1).addScaledVector(up, up.z);
+      north.normalize();
+      const dist = Math.max(0.003, d - ground);
+      const pos = target.clone()
+        .addScaledVector(up, Math.cos(this.tilt) * dist)
+        .addScaledVector(north, -Math.sin(this.tilt) * dist);
+      // Keep clear of hills between the camera and its target.
+      const l = pos.length();
+      const under = this.probe ? Math.max(SEA, this.probe.heightAt(pos.x, pos.y, pos.z, SEA)) : SEA;
+      if (l < under + 0.0025) pos.multiplyScalar((under + 0.0025) / l);
+      this.camera.position.copy(pos);
+      this.camera.up.copy(up);
+      this.camera.lookAt(target);
+      this.tiltedPos.copy(pos);
+    }
     const low = 1 - s(1.06, 1.26);
     (this.sky.material as THREE.ShaderMaterial).uniforms.uLow.value = low;
     this.sky.visible = low > 0.001;
@@ -554,10 +584,16 @@ export class PlanetView {
       this.cloudU.uMapDist.value = dist;
       d = 1 + dist;
     } else {
+      // The controls drive a "virtual" camera that always looks at the centre; the drawn camera
+      // is that one, tilted (applyTilt). Put the virtual one back first, unless something else
+      // (flyTo, a test) has moved the camera since.
+      if (this.tiltActive && this.camera.position.equals(this.tiltedPos)) this.camera.position.copy(this.virtualPos);
+      this.camera.up.set(0, 1, 0);
       d = this.camera.position.length();
       // Slow the orbit as you close in, so ground-level views stay controllable.
       this.controls.rotateSpeed = Math.min(1, (d - 1) * 0.55);
       this.controls.update();
+      this.virtualPos.copy(this.camera.position);
       this.applyTilt(d);
     }
 
@@ -568,7 +604,7 @@ export class PlanetView {
 
     if (this.gridLines) {
       const top = this.opts.style === 'smooth' ? 0.13 : 0.3;
-      (this.gridLines.material as THREE.ShaderMaterial).uniforms.uOpacity.value = THREE.MathUtils.clamp(0.04 + (d - 1.1) * 0.08, 0.04, top);
+      (this.gridLines.material as THREE.ShaderMaterial).uniforms.uOpacity.value = THREE.MathUtils.clamp(0.04 + (d - 1.1) * 0.08, 0.09, top);
     }
     // Clouds thin out as you descend; their shadows stay, a little softer, so the ground keeps
     // its dappled light.
@@ -649,16 +685,36 @@ export class PlanetView {
     for (const f of this.forest) this.planet.add(f);
     this.flora.setSurface(w, data, RELIEF * o.relief);
 
-    // Grid outlines, each edge once.
+    this.probe = data.style === 'smooth' ? GroundProbe.fromMesh(g, this.terrain, data.faces) : null;
+    // Grid outlines, each edge once. On the smooth surface each edge is draped over the ground
+    // in a few steps (over water, at the water level), so lines lie on the land rather than
+    // floating over valleys.
     const gl: number[] = [];
+    const probe = this.probe, SUB = 4, GLIFT = 0.00035;
+    const drape = (x: number, y: number, z: number, cell: number) => {
+      const l = Math.hypot(x, y, z);
+      const h = Math.max(probe!.heightAt(x, y, z, SEA, probe!.cellOf(x, y, z, cell)), SEA) + GLIFT;
+      return [(x / l) * h, (y / l) * h, (z / l) * h];
+    };
     for (let c = 0; c < N; c++) {
       const ks = g.corners[c], m = ks.length;
       for (let i = 0; i < m; i++) {
         const nb = g.neighbors[c][i];
         if (nb < c) continue;
+        const k0 = ks[i], k1 = ks[(i + 1) % m];
+        if (probe) {
+          let prev = drape(C[k0 * 3], C[k0 * 3 + 1], C[k0 * 3 + 2], c);
+          for (let j = 1; j <= SUB; j++) {
+            const t = j / SUB;
+            const next = drape(C[k0 * 3] + (C[k1 * 3] - C[k0 * 3]) * t, C[k0 * 3 + 1] + (C[k1 * 3 + 1] - C[k0 * 3 + 1]) * t,
+              C[k0 * 3 + 2] + (C[k1 * 3 + 2] - C[k0 * 3 + 2]) * t, c);
+            gl.push(...prev, ...next);
+            prev = next;
+          }
+          continue;
+        }
         let h0 = s.outlineH(c, i), h1 = s.outlineH(c, (i + 1) % m);
         if (data.style === 'tiles') h0 = h1 = Math.max(h0, s.outlineH(nb, 0));
-        const k0 = ks[i], k1 = ks[(i + 1) % m];
         gl.push(C[k0 * 3] * h0, C[k0 * 3 + 1] * h0, C[k0 * 3 + 2] * h0, C[k1 * 3] * h1, C[k1 * 3 + 1] * h1, C[k1 * 3 + 2] * h1);
       }
     }
@@ -714,6 +770,8 @@ export class PlanetView {
     interface Sample { x: number; y: number; z: number; w: number; d: number; river: boolean; f: number }
     /** Drawn centreline points per cell, so branches can find the channel they join. */
     const cellSamples = new Map<number, { p: number[]; h: number }[]>();
+    /** Drawn channel points per cell (x, y, z, half-width), so trees keep out of the water. */
+    const riverPts = new Map<number, number[]>();
     /** Green-corridor segments along rivers through dry land: a, b (unit directions), half-width, strength, cell. */
     const corr: number[] = [];
     const DRY = new Set<number>([B.DESERT, B.SAVANNA, B.STEPPE, B.BEACH, B.TUNDRA]);
@@ -784,13 +842,24 @@ export class PlanetView {
         const taper = Math.min(1, arc[i] / ramp, (total - arc[i]) / ramp);
         const off = taper * spacing * 0.17 * meander(ux * mf, uy * mf, uz * mf);
         const d = unit(ux + perp[0] * off, uy + perp[1] * off, uz + perp[2] * off);
-        // Mouth points sit just above the sea; everything else rides LIFT above the ground.
-        const h = (o.h < SEA ? o.h : Math.max(o.h, SEA)) + LIFT;
+        // Mouth points sit just above the sea; on land the water lies just above the ground as
+        // drawn (the lowest of the channel's middle and its two banks), so it never floats.
+        let h = (o.h < SEA ? o.h : Math.max(o.h, SEA)) + LIFT;
+        if (this.probe && o.h >= SEA && o.f > 0.5) {
+          const hw = o.w;
+          const g0 = this.probe.heightAt(d[0], d[1], d[2], h);
+          const g1 = this.probe.heightAt(d[0] + perp[0] * hw, d[1] + perp[1] * hw, d[2] + perp[2] * hw, g0);
+          const g2 = this.probe.heightAt(d[0] - perp[0] * hw, d[1] - perp[1] * hw, d[2] - perp[2] * hw, g0);
+          h = Math.max(SEA + 0.0002, Math.min(g0, g1, g2) + 0.0002);
+        }
         o.x = d[0] * h; o.y = d[1] * h; o.z = d[2] * h;
         if (o.cell >= 0) {
           let list = cellSamples.get(o.cell);
           if (!list) cellSamples.set(o.cell, (list = []));
           list.push({ p: d, h: o.h });
+          let rp = riverPts.get(o.cell);
+          if (!rp) riverPts.set(o.cell, (rp = []));
+          rp.push(d[0], d[1], d[2], o.w);
         }
       }
       // Corridor segments for the river (not stream) parts, with dryness smoothed along the path
@@ -899,6 +968,20 @@ export class PlanetView {
     this.rivers = mesh(riverBuf);
     this.streams = mesh(streamBuf);
     this.paintCorridors(w, corr);
+    const gap = spacing / 8;
+    this.flora.setWater((x, y, z, cell) => {
+      const l = Math.hypot(x, y, z);
+      for (const k of [cell, ...g.neighbors[cell]]) {
+        const a = riverPts.get(k);
+        if (!a) continue;
+        for (let i = 0; i < a.length; i += 4) {
+          const r = Math.max(a[i + 3] * 1.5, gap * 0.6);
+          const dx = x / l - a[i], dy = y / l - a[i + 1], dz = z / l - a[i + 2];
+          if (dx * dx + dy * dy + dz * dz < r * r) return true;
+        }
+      }
+      return false;
+    });
   }
 
   /**
