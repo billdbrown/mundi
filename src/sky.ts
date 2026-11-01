@@ -338,6 +338,24 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
             // Deserts: dune fields (shaded in the normal step below) and the odd white salt pan in
             // low basins.
             desertW = smoothstep(0.24, 0.12, moist) * smoothstep(0.4, 0.55, temp) * lowland;
+            // Hot deserts at the scale seen from orbit: dark, rusty rock on plateaus and massifs
+            // (hamada; the Tibesti, the Ahaggar), pale gravel plains (reg) between the sand seas,
+            // and the sand seas themselves a warmer orange. Highland is included, unlike dunes.
+            float aridW = smoothstep(0.24, 0.12, moist) * smoothstep(0.4, 0.55, temp);
+            if (aridW > 0.0) {
+              float seaMask = smoothstep(-0.55, 0.05, snoise(vCloudP * 40.0) + 0.25 * snoise(vCloudP * 160.0));
+              float plateau = smoothstep(0.08, 0.3, hAbove / uRelief + 0.08 * snoise(vCloudP * 50.0 + 2.0));
+              vec3 wq = vCloudP * 6.0 + vec3(snoise(vCloudP * 11.0), snoise(vCloudP * 11.0 + 4.0), 0.0) * 0.5;
+              float rockyN = smoothstep(0.15, 0.85, snoise(wq + 7.0) + 0.35 * snoise(vCloudP * 30.0)) * 0.7;
+              float hamada = max(plateau, rockyN * (1.0 - seaMask) * 0.8);
+              vec3 base = diffuseColor.rgb;
+              vec3 reg = base * vec3(1.03, 1.0, 0.95) * 1.04;
+              vec3 erg = base * vec3(1.08, 0.97, 0.84);
+              vec3 rock = base * vec3(0.62, 0.5, 0.42) * (0.9 + 0.2 * snoise(vCloudP * 220.0));
+              vec3 surf = mix(reg, erg, seaMask);
+              surf = mix(surf, rock, hamada);
+              diffuseColor.rgb = mix(base, surf, aridW);
+            }
             if (desertW > 0.0) {
               // Salt pans: few, large and ragged, in the lowest basins only. (Thresholding a single
               // noise's peaks gave an even grid of white dots.)
