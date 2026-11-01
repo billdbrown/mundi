@@ -145,7 +145,22 @@ export class PlanetView {
     this.controls.enablePan = false;
     this.controls.minDistance = 1.006;   // raised over high ground each frame (applyTilt)
     this.controls.maxDistance = 7;
-    this.controls.zoomSpeed = 0.8;
+    // Zoom is ours (globeZoomInput): it scales height above the ground, not distance from the
+    // centre, so it is as gentle at treetop height as in orbit.
+    this.controls.enableZoom = false;
+    // The controls also update themselves inside pointer events, not only from frame(). Each
+    // update must start from the untilted camera, or it adopts the tilted (lower) position as
+    // its own and the view sinks a little with every finger or mouse movement.
+    const update = this.controls.update.bind(this.controls);
+    this.controls.update = (dt?: number | null) => {
+      if (this.tiltActive && this.camera.position.equals(this.tiltedPos)) {
+        this.camera.position.copy(this.virtualPos);
+        this.camera.up.set(0, 1, 0);
+      }
+      const moved = update(dt);
+      this.virtualPos.copy(this.camera.position);
+      return moved;
+    };
 
     // The sun rides with the camera, off to one side, so the view is lit but relief still shades.
     this.sun = new THREE.DirectionalLight(0xfff0d8, 2.8);
@@ -179,6 +194,7 @@ export class PlanetView {
     this.civ = new CivLayer(this.cloudU.uYear);
     this.planet.add(this.civ.group);
     this.mapInput();
+    this.globeZoomInput();
 
     // Photo look: render, grade (in linear light), then tone map and encode.
     this.composer = new EffectComposer(this.renderer);
@@ -481,6 +497,51 @@ export class PlanetView {
       this.zoomMap(e.clientX, e.clientY, Math.exp(e.deltaY * 0.001));
     }, { passive: false });
   }
+  /**
+   * Wheel and pinch on the globe. Each gesture multiplies the height above the ground, applied
+   * in frame() to the untilted camera. Scaling distance from the centre instead (the controls'
+   * own dolly) made a small pinch near the ground jump to orbit or snap onto the surface.
+   */
+  private zoomPending = 1;
+  private globeZoomInput() {
+    const el = this.renderer.domElement;
+    const touches = new Map<number, { x: number; y: number }>();
+    // iOS Safari ignores user-scalable=no; its own gesture events are the way to stop page zoom.
+    document.addEventListener('gesturestart', (e) => e.preventDefault());
+    el.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch') touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    });
+    el.addEventListener('pointermove', (e) => {
+      const prev = touches.get(e.pointerId);
+      if (!prev) return;
+      if (touches.size === 2 && !this.mapMode) {
+        const other = [...touches.entries()].find(([id]) => id !== e.pointerId)![1];
+        const before = Math.hypot(prev.x - other.x, prev.y - other.y);
+        const after = Math.hypot(e.clientX - other.x, e.clientY - other.y);
+        if (before > 4 && after > 4) this.zoomPending *= Math.pow(before / after, 1.6);
+      }
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    });
+    const up = (e: PointerEvent) => { touches.delete(e.pointerId); };
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    el.addEventListener('wheel', (e) => {
+      if (this.mapMode) return;
+      e.preventDefault();
+      // Lines or pages from some mice; pixels from trackpads.
+      const px = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
+      this.zoomPending *= Math.exp(THREE.MathUtils.clamp(px, -300, 300) * 0.0016);
+    }, { passive: false });
+  }
+  /** Apply pending zoom to the (untilted) camera: height above the ground times the factor. */
+  private applyZoom() {
+    if (this.zoomPending === 1) return;
+    const p = this.camera.position, d = p.length();
+    const ground = this.controls.minDistance - 0.007;
+    const nd = THREE.MathUtils.clamp(ground + (d - ground) * this.zoomPending, this.controls.minDistance, this.controls.maxDistance);
+    p.setLength(nd);
+    this.zoomPending = 1;
+  }
   private updateMapCam() {
     const m = this.map, a = this.aspect(), c = this.mapCam;
     c.left = -m.half * a; c.right = m.half * a; c.top = m.half; c.bottom = -m.half;
@@ -599,6 +660,7 @@ export class PlanetView {
       // (flyTo, a test) has moved the camera since.
       if (this.tiltActive && this.camera.position.equals(this.tiltedPos)) this.camera.position.copy(this.virtualPos);
       this.camera.up.set(0, 1, 0);
+      this.applyZoom();
       d = this.camera.position.length();
       // Slow the orbit as you close in, so ground-level views stay controllable.
       this.controls.rotateSpeed = Math.min(1, (d - 1) * 0.55);

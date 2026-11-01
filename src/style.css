@@ -8,7 +8,9 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: #05070d; color: var(--text);
-  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden;
+  /* Pinches zoom the globe, never the page (panels still scroll). */
+  touch-action: pan-x pan-y; }
 #view { position: fixed; inset: 0; }
 #view canvas { display: block; }
 
