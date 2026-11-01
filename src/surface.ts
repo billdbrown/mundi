@@ -17,7 +17,7 @@ import type { Grid } from './grid.ts';
 
 export const SEA = 1.0;
 /** Height of the highest land above sea level at relief ×1, in planet radii. */
-export const RELIEF = 0.035;
+export const RELIEF = 0.013;
 
 interface Surface {
   terrain: THREE.BufferGeometry;
@@ -245,12 +245,16 @@ function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number,
     const tv = vertexTemp(y / l, e, heat);
     // Patchy edge: noise moves the snow line, so it breaks into streaks along ridges.
     const tvn = tv + n * 0.07;
-    const snow = Math.max(sm(0.24, 0.12, tvn), sm(0.6, 0.82, e + n * 0.1) * sm(0.55, 0.4, tvn));
+    // Thresholds sit below the biome's ice line on purpose: the generator calls a whole high
+    // plateau "cold", but only its crests should be white, with rock in the valleys between.
+    const snow = Math.max(sm(0.08, -0.04, tvn), sm(1.0, 1.2, e + n * 0.1) * sm(0.5, 0.35, tvn));
     // Snow sheds off steep faces and lies in streaks along ridges, with rock showing between:
     // the striped look of high ranges from space, rather than a solid white cap.
     const streak = 1 - Math.abs(noise(x * 170 + 9.7, y * 170, z * 170));
     const lie = (1 - 0.85 * sm(0.035, 0.11, slope)) * (0.35 + 0.65 * sm(0.45, 0.85, streak + (snow - 0.5) * 0.4));
-    mix(i, SNOW, snow * lie);
+    // Snow itself is drawn per pixel in the terrain shader (sky.ts); here it only keeps the
+    // alpine band from browning ground that will be white anyway.
+    void SNOW; void lie;
   }
   col.needsUpdate = true;
 }
@@ -266,8 +270,9 @@ function treeBudget(world: World): number {
 function buildSmooth(inp: SurfaceInput): Surface {
   const { world: w, cellColor, tint, rough } = inp;
   const g = w.grid, N = g.count, P = g.centers, C = g.cornerPos, K = C.length / 3;
-  // Vertical exaggeration: peaks reach ~3.5% of the radius (~220 km on an Earth-sized planet,
-  // ~25× Everest). Real scale would look smooth as a marble; this keeps relief readable.
+  // Vertical exaggeration: peaks reach ~1.3% of the radius (~85 km on an Earth-sized planet,
+  // ~10× Everest), low enough to stay under the cloud deck. Real scale would look smooth as a
+  // marble; readable mountains come from ridges (below) more than from height.
   const relief = RELIEF * inp.relief;
   const spacing = spacingOf(N);
   const landH = (e: number) => SEA + 0.0012 + Math.pow(Math.max(0, e), 1.35) * relief;
@@ -403,20 +408,49 @@ function buildSmooth(inp: SurfaceInput): Surface {
     }
     return sum / norm;
   };
+  /**
+   * Smooth height on high ground. Linear centre-to-corner interpolation makes every high cell a
+   * hexagonal pyramid, and snow on the apexes then tiles the range in hexagons. Up high, height
+   * instead comes from a noise-warped Gaussian blend of nearby land cells, like the colours.
+   */
+  const hSigma2 = (0.7 * spacing) ** 2, hWarp = 0.45 * spacing, hf = 0.9 / spacing;
+  const smoothH = (dx: number, dy: number, dz: number, lin: number) => {
+    const t = Math.max(0, Math.min(1, (lin - SEA - 0.12 * relief) / (0.25 * relief)));
+    if (t <= 0 || w.water[owner] !== WATER_LAND) return lin;
+    const qx = dx + hWarp * tint(dx * hf + 51.3, dy * hf, dz * hf);
+    const qy = dy + hWarp * tint(dx * hf, dy * hf + 63.7, dz * hf);
+    const qz = dz + hWarp * tint(dx * hf, dy * hf, dz * hf + 77.1);
+    let sh = 0, sw = 0;
+    const consider = (c: number) => {
+      if (w.water[c] !== WATER_LAND) return;
+      const ex = P[c * 3] - qx, ey = P[c * 3 + 1] - qy, ez = P[c * 3 + 2] - qz;
+      const wt = Math.exp(-(ex * ex + ey * ey + ez * ez) / hSigma2);
+      sh += cellH[c] * wt; sw += wt;
+    };
+    consider(owner);
+    for (const nb of g.neighbors[owner]) consider(nb);
+    if (sw < 1e-9) return lin;
+    const hs = t * t * (3 - 2 * t);
+    return lin + (sh / sw - lin) * hs;
+  };
   /** Displacement for a point whose interpolated height is h: gentle in lowlands, craggy up high. */
-  const bump = (dx: number, dy: number, dz: number, h: number) => {
+  const bump = (dx: number, dy: number, dz: number, h0: number) => {
+    const h = smoothH(dx, dy, dz, h0);
     const n = rough(dx * freq, dy * freq, dz * freq);
     if (h <= SEA + 0.0005) return h + 0.0003 * n;
     const e = Math.min(1, (h - SEA) / Math.max(1e-6, relief));
     const gentle = (0.0004 + 0.0015 * e) * n;
-    const crags = 0.006 * Math.pow(e, 1.5) * (ridged(dx, dy, dz) - 0.4);
-    return h + (gentle + crags) * inp.relief;
+    // Ranges are ridges and valleys, not domes: only the crests reach the snow line, so snow
+    // lies in streaks along them instead of capping the whole massif.
+    // Valleys bottom out (the floor clamp) rather than sinking into round pits.
+    const crags = 0.45 * relief * Math.pow(e, 1.1) * Math.max(-0.12, ridged(dx, dy, dz) - 0.45);
+    return h + gentle * inp.relief + crags;
   };
 
   const cornerIdx = new Int32Array(K).fill(-1);
   const corner = (kk: number) => {
     if (cornerIdx[kk] < 0) {
-      cornerIdx[kk] = add(C[kk * 3], C[kk * 3 + 1], C[kk * 3 + 2], cornerH[kk],
+      cornerIdx[kk] = add(C[kk * 3], C[kk * 3 + 1], C[kk * 3 + 2], smoothH(C[kk * 3], C[kk * 3 + 1], C[kk * 3 + 2], cornerH[kk]),
         cornerCol[kk * 3], cornerCol[kk * 3 + 1], cornerCol[kk * 3 + 2], cornerLevel[kk], cornerLake[kk] === 1);
     }
     return cornerIdx[kk];
@@ -454,7 +488,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
     const lvl = vLevel[c] > 0 ? vLevel[c] : SEA;
     const px = P[c * 3], py = P[c * 3 + 1], pz = P[c * 3 + 2];
     const lake = vLake[c] === 1;
-    const iA = add(px, py, pz, cellH[c], r, gg, b, lvl, lake);
+    const iA = add(px, py, pz, smoothH(px, py, pz, cellH[c]), r, gg, b, lvl, lake);
     // Spokes: points from the centre toward each corner, shared by the two fan triangles there.
     const spoke: number[][] = Array.from(ks, (kk) => {
       const out: number[] = [];

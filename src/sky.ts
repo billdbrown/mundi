@@ -17,11 +17,13 @@ export interface CloudUniforms {
   /** World heat offset and vertical scale, so shaders can reproduce the generator's temperatures. */
   uHeat: { value: number };
   uRelief: { value: number };
+  /** 1 where the terrain shows natural colour (snow allowed), 0 on data maps. */
+  uSnow: { value: number };
 }
 
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
-    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.035 } };
+    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 } };
 }
 
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
@@ -48,7 +50,7 @@ export const NOISE_GLSL = /* glsl */`
  */
 const CLOUD_GLSL = /* glsl */`
   uniform sampler2D uCloudMap;
-  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uHeat, uRelief;
+  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uHeat, uRelief, uSnow;
   uniform vec3 uCloudSun;
   /**
    * Seasons. The generator's annual-mean temperature for a point (the same formula as the
@@ -92,7 +94,7 @@ const CLOUD_GLSL = /* glsl */`
     // The cloud shading this point sits up the line toward the sun, at cloud height: offset the
     // lookup sunward, more when the sun is low (capped near the terminator).
     float mu = max(dot(n, uCloudSun), 0.25);
-    vec3 d = normalize(n + (uCloudSun - n * dot(n, uCloudSun)) * (0.016 / mu));
+    vec3 d = normalize(n + (uCloudSun - n * dot(n, uCloudSun)) * (0.019 / mu));
     float c = cos(uCloudRot), s = sin(uCloudRot);
     vec3 q = vec3(d.x * c - d.z * s, d.y, d.x * s + d.z * c);
     float theta = acos(clamp(q.y, -1.0, 1.0));
@@ -131,7 +133,7 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
         float hAbove = length(vCloudP) - 1.0;
         float camDist = length(cameraPosition - vCloudP);
         float detailFade = 1.0 - smoothstep(0.25, 1.4, camDist);
-        float highland = smoothstep(0.004, 0.03, hAbove);
+        float highland = smoothstep(0.12, 0.85, hAbove / uRelief);
         float rn = rockNoise(vCloudP);
         diffuseColor.rgb *= mix(1.0, 0.82 + 0.36 * rn, (0.35 + 0.65 * highland) * detailFade);
         float farFade = smoothstep(0.12, 0.8, camDist) * step(0.0005, hAbove);
@@ -139,16 +141,11 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
         diffuseColor.rgb *= mix(1.0, 0.74 + 0.52 * ln, (0.45 + 0.55 * highland) * farFade);
         if (uSeason != 0.0 && hAbove > 0.0006) {
           vec3 sn = normalize(vCloudP);
-          float mt = meanTemp(sn, hAbove), st = seasonalTemp(sn, mt);
-          float patchy = (vnoise(vCloudP * 9.0) - 0.5) * 0.12 + vnoise(vCloudP * 260.0) * 0.06;
-          // Only the seasonal part: snow that the annual mean doesn't already have.
-          float wsnow = smoothstep(0.27, 0.15, st + patchy) * (1.0 - smoothstep(0.27, 0.15, mt));
           // Winter browns the mid-latitude vegetation of the cold hemisphere.
           float winter = max(0.0, -sign(sn.y) * uSeason) * smoothstep(0.2, 0.55, abs(sn.y));
           float green = clamp((diffuseColor.g - max(diffuseColor.r, diffuseColor.b)) * 6.0, 0.0, 1.0);
           float l = dot(diffuseColor.rgb, vec3(0.3, 0.55, 0.15));
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.12, 0.98, 0.7) * l, green * winter * 0.55);
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.92, 0.94, 0.97), wsnow * 0.92);
         }
         diffuseColor.rgb *= cloudShade(vCloudP);`)
       .replace('#include <normal_fragment_maps>', /* glsl */`#include <normal_fragment_maps>
@@ -158,7 +155,7 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
           vec3 t2 = cross(up, t1);
           float e = 0.0003;
           vec3 grad = t1 * (rockNoise(vCloudP + t1 * e) - rn) + t2 * (rockNoise(vCloudP + t2 * e) - rn);
-          float amp = (0.2 + 1.6 * highland) * detailFade;
+          float amp = (0.15 + 0.6 * highland) * detailFade;
           normal = normalize(normal - (viewMatrix * vec4(grad * amp, 0.0)).xyz);
         }
         if (farFade > 0.0) {
@@ -167,8 +164,30 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
           vec3 t2 = cross(up, t1);
           float e = 0.002;
           vec3 grad = t1 * (landNoise(vCloudP + t1 * e) - ln) + t2 * (landNoise(vCloudP + t2 * e) - ln);
-          float amp = (1.2 + 7.0 * highland) * farFade;
+          float amp = (1.0 + 3.0 * highland) * farFade;
           normal = normalize(normal - (viewMatrix * vec4(grad * amp, 0.0)).xyz);
+        }
+        // Snow, per pixel: where it is cold enough for the height, latitude and season. Done
+        // here rather than per vertex, where its edge broke along the mesh triangles. It sheds
+        // off steep faces and lies in streaks along ridges, so ranges read as rock with white
+        // crests, not white blobs. It cools with height at about half the generator's rate:
+        // the generator calls whole plateaus frozen, but only their crests should be white.
+        if (uSnow > 0.0 && hAbove > 0.0004) {
+          vec3 sn = normalize(vCloudP);
+          float lat = abs(asin(clamp(sn.y, -1.0, 1.0))) / 1.5707963;
+          float st = seasonalTemp(sn, 1.0 - 1.1 * pow(lat, 1.25) - 0.3 * hAbove / uRelief + uHeat);
+          float line = 0.27;
+          float edge = (vnoise(vCloudP * 40.0) - 0.5) * 0.1 + (vnoise(vCloudP * 300.0) - 0.5) * 0.05;
+          float snow = smoothstep(line + 0.04, line - 0.06, st + edge);
+          vec3 wn = normalize((vec4(normal, 0.0) * viewMatrix).xyz);
+          float slope = 1.0 - dot(wn, sn);
+          // Value noise shows its grid once thresholded, so warp it and rotate each octave.
+          vec3 q = vCloudP * 160.0;
+          q += vec3(vnoise(q * 0.37), vnoise(q * 0.37 + 5.2), vnoise(q * 0.37 + 9.1)) * 2.5;
+          mat3 R = mat3(0.8, 0.6, 0.0, -0.36, 0.48, 0.8, 0.48, -0.64, 0.6);
+          float streak = vnoise(q) * 0.5 + vnoise(R * q * 2.1) * 0.3 + vnoise(R * R * q * 4.3) * 0.2;
+          float lie = (1.0 - 0.9 * smoothstep(0.08, 0.3, slope)) * smoothstep(0.25, 0.65, streak + snow * 0.35);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.95, 0.98), clamp(snow * lie, 0.0, 1.0) * 0.95);
         }`);
   };
   return mat;
@@ -375,7 +394,7 @@ export function makeClouds(u: CloudUniforms): THREE.Group {
     return m;
   };
   // Low over the ground (the highest peaks poke through, as real ones do).
-  const deck = layer(1.016, 0.85), cirrus = layer(1.024, 0.5);
+  const deck = layer(1.019, 0.85), cirrus = layer(1.026, 0.5);
   // The deck's texture holds raw cover; shapes are decided here, live.
   const mat = deck.material as THREE.MeshStandardMaterial;
   mat.onBeforeCompile = (sh) => {

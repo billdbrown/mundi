@@ -32,7 +32,10 @@ export const BIOMES: Biome[] = [
 
 /** Whittaker-style lookup on temperature and moisture, both 0..1. */
 export function landBiome(temp: number, moist: number, elev: number): number {
-  if (temp < 0.14) return B.ICE;
+  // Ice sheets are a polar thing: cold at sea level, not just cold because the land is high.
+  // High ground that is only cold from altitude is rock, and per-vertex snow picks out the
+  // crests; otherwise every mid-latitude range became one white glacier blob.
+  if (temp < 0.14 && (elev < 0.5 || temp + 0.55 * elev < 0.3)) return B.ICE;
   if (elev > 0.78) return temp < 0.5 ? B.PEAK : B.MOUNTAIN;
   if (elev > 0.58) return temp < 0.28 ? B.PEAK : B.MOUNTAIN;
   if (temp < 0.3) return moist > 0.5 ? B.TAIGA : B.TUNDRA;

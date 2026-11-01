@@ -1,11 +1,10 @@
 /**
  * The planet-first interface: the globe fills the screen and the controls stay out of its way.
  *
- * Two variants while Bill compares them (switch with the A | B toggle or ?ui=a / ?ui=b):
- *  A, minimal: name, new world, share, a lens bar, and a "Shape this world" drawer.
- *  B, almanac: the same, plus an always-open card describing the planet, legends for the
- *     data lenses, and preset chips on screen.
- * The old slider panel survives as "Advanced".
+ * Name, new world, share, a lens bar, a "Shape this world" drawer, an almanac card describing
+ * the planet, legends for the data lenses, preset chips, and the clock. (A minimal variant
+ * without the almanac was tried side by side and dropped, 2026-10-31.) The old slider panel
+ * survives as "Advanced".
  */
 import type { PlanetView, ViewOptions } from './render.ts';
 import type { World, WorldParams } from './world.ts';
@@ -86,12 +85,7 @@ const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 export function mountShell(app: App) {
   const r = app.renderer;
-  const variant = (() => {
-    const q = new URLSearchParams(location.search).get('ui');
-    if (q === 'a' || q === 'b') return q;
-    try { return (localStorage.getItem('mundi-ui') as 'a' | 'b') || 'a'; } catch { return 'a'; }
-  })();
-  document.body.classList.add('shell', `ui-${variant}`);
+  document.body.classList.add('shell', 'ui-b');
   document.getElementById('panel')!.classList.add('advanced');
 
   const root = document.createElement('div');
@@ -126,34 +120,16 @@ export function mountShell(app: App) {
     <section class="almanac" id="almanac"></section>
     <div class="chips" id="chips">${PRESETS.map((p) => `<button data-preset="${p.id}">${p.label}</button>`).join('')}</div>
     <div class="clock" id="clock">
-      <button class="play" id="play" title="Play / pause time">▶</button>
-      <div class="scales" id="scales">
-        <button data-scale="day" title="Watch a day pass: the sun goes round, clouds drift">Day</button>
-        <button data-scale="year" class="on" title="Watch a year pass: snow, sea ice and forests follow the seasons">Year</button>
-        <button disabled title="Coming: cities grow, roads and borders spread">Centuries</button>
-        <button disabled title="Coming: continents drift, mountains rise">Ages</button>
-      </div>
+      <button data-scale="day" title="Speed time up: a day passes in 24 seconds"><span class="ico">☀</span> Watch a day</button>
+      <button data-scale="year" title="Speed time up: a year passes in 30 seconds"><span class="ico">❄</span> Watch a year</button>
+      <i class="yearbar" id="yearbar" hidden><b id="yearmark"></b></i>
       <span class="date" id="date"></span>
     </div>
     <div class="hint" id="hint">Drag to spin · scroll to dive · hover a place</div>
     <div class="toast" id="toast" hidden></div>
-    <div class="compare" title="Temporary: compare the two interface designs">
-      <button data-ui="a">A</button><button data-ui="b">B</button>
-    </div>
   `;
   document.body.appendChild(root);
   const $ = <T extends HTMLElement>(id: string) => root.querySelector<T>('#' + id)!;
-
-  // --- Variant switch (temporary) ---
-  root.querySelectorAll<HTMLButtonElement>('.compare button').forEach((b) => {
-    b.classList.toggle('on', b.dataset.ui === variant);
-    b.onclick = () => {
-      try { localStorage.setItem('mundi-ui', b.dataset.ui!); } catch { /* private window */ }
-      const u = new URL(location.href);
-      u.searchParams.set('ui', b.dataset.ui!);
-      location.href = u.toString();
-    };
-  });
 
   // --- Name ---
   const showName = () => {
@@ -184,7 +160,7 @@ export function mountShell(app: App) {
     app.setLens(def.id);
     if (user || true) app.setView({ ...def.view, sites: def.id === 'map' });
     const lg = LEGENDS[def.id];
-    $('legend').hidden = !lg || variant !== 'b';
+    $('legend').hidden = !lg;
     if (lg) { $('legend-lo').textContent = lg[0]; $('legend-hi').textContent = lg[1]; $('legend-bar').style.background = lg[2]; }
   };
   root.querySelectorAll<HTMLButtonElement>('#lenses button').forEach((b) => { b.onclick = () => applyLens(b.dataset.lens as Lens); });
@@ -210,33 +186,60 @@ export function mountShell(app: App) {
     const input = root.querySelector<HTMLInputElement>(`[data-dial="${d.id}"]`)!;
     input.oninput = () => app.setParams(d.set(Number(input.value)));
   }
-  // --- Clock: Day runs the sun round (day/night), Year sweeps the seasons. ---
-  const RATES = { day: 1 / 24, year: 365 / 60 };   // days per second: a day in 24 s, a year in a minute
-  let scale: 'day' | 'year' = 'year', playing = false;
+  // --- Clock: speed time up. A day runs the sun round (day and night); a year sweeps the
+  // seasons (snow, sea ice, autumn colour). Clicking the running one pauses it. ---
+  const RATES = { day: 1 / 24, year: 365 / 30 };   // days per second: a day in 24 s, a year in 30 s
+  let scale: 'day' | 'year' | null = null, everPlayed = false;
   const applyClock = () => {
-    r.setClock(playing ? RATES[scale] : 0);
+    r.setClock(scale ? RATES[scale] : 0);
     // Day/night only makes sense at day speed; at year speed it would strobe.
-    app.setView({ light: playing && scale === 'day' ? 'cycle' : 'follow' });
-    $('play').textContent = playing ? '❚❚' : '▶';
-    root.querySelectorAll<HTMLButtonElement>('[data-scale]').forEach((b) => b.classList.toggle('on', b.dataset.scale === scale));
-    $('clock').classList.toggle('running', playing);
+    app.setView({ light: scale === 'day' ? 'cycle' : 'follow' });
+    root.querySelectorAll<HTMLButtonElement>('[data-scale]').forEach((b) => {
+      const on = b.dataset.scale === scale;
+      b.classList.toggle('on', on);
+      b.querySelector('.ico')!.textContent = on ? '❚❚' : b.dataset.scale === 'day' ? '☀' : '❄';
+    });
+    $('clock').classList.toggle('running', scale !== null);
+    $('yearbar').hidden = scale !== 'year';
   };
-  $('play').onclick = () => { playing = !playing; applyClock(); };
   root.querySelectorAll<HTMLButtonElement>('[data-scale]').forEach((b) => {
-    b.onclick = () => { scale = b.dataset.scale as 'day' | 'year'; playing = true; applyClock(); };
+    b.onclick = () => {
+      const s = b.dataset.scale as 'day' | 'year';
+      scale = scale === s ? null : s;
+      everPlayed ||= scale !== null;
+      // Seasons and nightfall only show on the Earth view, not on the data maps.
+      if (scale && app.lens() !== 'earth') applyLens('earth');
+      // Start the day at mid-morning where you are looking, so dusk arrives within seconds.
+      if (scale === 'day') r.setLocalHour(9);
+      applyClock();
+    };
   });
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const SEASONS = ['winter', 'spring', 'summer', 'autumn'];
+  // What to look for in each northern season (the south has the opposite one).
+  const SEASONS = [
+    'Northern winter: snow and sea ice push south',
+    'Northern spring: the snow retreats',
+    'Northern summer: the north is at its greenest',
+    'Northern autumn: forests turn, the ice returns',
+  ];
   const tickDate = () => {
     const d = r.getDay(), doy = ((d % 365) + 365) % 365;
     const month = MONTHS[Math.min(11, Math.floor(doy / 30.42))];
     // Northern season: winter from ~Dec 21 (day 355), spring from ~Mar 21 (day 80)...
     const sIdx = Math.floor((((doy - 355 + 365) % 365)) / 91.25) % 4;
-    const year = Math.floor(d / 365) + 1;
-    const hour = Math.floor((d % 1) * 24);
-    $('date').textContent = scale === 'day' && playing
-      ? `${month} ${Math.floor(doy % 30.42) + 1} · ${String(hour).padStart(2, '0')}:00`
-      : `Year ${year} · ${month} · northern ${SEASONS[sIdx]}`;
+    const date = `${month} ${Math.floor(doy % 30.42) + 1}`;
+    let text: string;
+    if (scale === 'day') {
+      // Local time at the middle of the view, so the label agrees with what you see.
+      const lh = r.localHour(), hh = Math.floor(lh);
+      const part = lh < 5 || lh >= 21 ? 'night' : lh < 7.5 ? 'dawn' : lh < 17 ? 'day' : 'dusk';
+      text = `${date}, ${String(hh).padStart(2, '0')}:00 here · ${part}`;
+    }
+    else if (scale === 'year') text = `${month} · ${SEASONS[sIdx]}`;
+    else if (!everPlayed) text = 'Speed up time';
+    else text = `Paused · ${date}`;
+    $('date').textContent = text;
+    $('yearmark').style.left = `${(doy / 365) * 100}%`;
     requestAnimationFrame(tickDate);
   };
   $('advanced-toggle').onclick = () => {
@@ -245,9 +248,8 @@ export function mountShell(app: App) {
     $('advanced-toggle').textContent = panel.classList.contains('advanced') ? 'Advanced settings' : 'Hide advanced settings';
   };
 
-  // --- Almanac (variant B) ---
+  // --- Almanac ---
   const almanac = () => {
-    if (variant !== 'b') return;
     const w = app.world(), g = app.game();
     if (!w || !g) return;
     const N = w.grid.count;

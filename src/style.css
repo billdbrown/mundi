@@ -78,9 +78,6 @@ body.shell #panel { top: auto; bottom: 84px; left: 16px; max-height: calc(100vh 
   color: var(--muted); font-size: 13px; }
 .lenses button.on { background: rgba(255,255,255,.14); color: #fff; }
 .lenses .ico { font-size: 14px; }
-.ui-a .lenses .lbl { display: none; }
-.ui-a .lenses button { padding: 7px 11px; }
-.ui-a .lenses button.on .lbl { display: inline; }
 
 .legend { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
   font-size: 11px; color: var(--muted); text-shadow: 0 1px 4px #000; }
@@ -122,10 +119,6 @@ body.shell #panel { top: auto; bottom: 84px; left: 16px; max-height: calc(100vh 
 .ui-b .hint { bottom: 96px; }
 .toast { position: fixed; top: 74px; right: 22px; background: var(--glass); border: 1px solid var(--edge); border-radius: 10px;
   padding: 8px 12px; font-size: 12px; }
-.compare { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; background: rgba(255,200,80,.15);
-  border: 1px dashed rgba(255,200,80,.5); border-radius: 8px; padding: 2px; }
-.compare button { background: none; border: none; padding: 3px 9px; border-radius: 6px; font-size: 11px; color: rgba(255,220,150,.8); }
-.compare button.on { background: rgba(255,200,80,.3); color: #fff; }
 
 body.shell #scale { bottom: 26px; right: 26px; }
 body.shell #info { border-radius: 12px; padding: 8px 11px; background: rgba(10,14,22,.78); backdrop-filter: blur(8px); }
@@ -153,22 +146,24 @@ body.shell #info { border-radius: 12px; padding: 8px 11px; background: rgba(10,1
 @media (max-width: 720px) { .ui .shape-toggle { left: 50%; transform: translateX(-50%); } }
 
 /* Clock */
-.clock { position: fixed; left: 50%; bottom: 74px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
-  background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 999px; padding: 4px 12px 4px 4px;
+.clock { position: fixed; left: 50%; bottom: 74px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px;
+  background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 999px; padding: 4px 14px 4px 4px;
   font-size: 12px; white-space: nowrap; }
-.clock .play { width: 30px; height: 30px; border-radius: 50%; border: none; background: rgba(110,170,255,.25); font-size: 12px; }
-.clock.running .play { background: rgba(110,170,255,.45); }
-.clock .scales { display: flex; gap: 2px; }
-.clock .scales button { background: none; border: none; border-radius: 999px; padding: 4px 9px; font-size: 12px; color: var(--muted); }
-.clock .scales button.on { background: rgba(255,255,255,.12); color: #fff; }
-.clock .scales button:disabled { opacity: .35; cursor: default; }
-.clock .date { color: var(--text); min-width: 170px; font-variant-numeric: tabular-nums; }
+.clock button { background: rgba(255,255,255,.06); border: none; border-radius: 999px; padding: 6px 12px; font-size: 12px; color: var(--text); }
+.clock button:hover { background: rgba(255,255,255,.12); }
+.clock button.on { background: rgba(110,170,255,.42); color: #fff; }
+.clock .ico { display: inline-block; width: 1.1em; text-align: center; }
+.clock .date { color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 4px; }
+.clock.running .date { color: var(--text); }
+.clock .yearbar { position: relative; width: 64px; height: 4px; border-radius: 2px; margin: 0 4px;
+  background: linear-gradient(90deg, #cfe3ff 0 22%, #9fd28a 22% 47%, #e7c86a 47% 72%, #d48a4a 72% 97%, #cfe3ff 97%); opacity: .8; }
+.clock .yearbar b { position: absolute; top: -3px; width: 2px; height: 10px; margin-left: -1px; background: #fff; border-radius: 1px; }
 .hint { bottom: 122px !important; }
 .legend { bottom: 124px; }
 .ui-b .legend { bottom: 124px; }
 @media (max-width: 720px) {
   .clock { bottom: 118px; }
-  .clock .scales button:disabled { display: none; }
-  .clock .date { min-width: 0; }
+  .clock .date { display: none; }
+  .clock.running .date { display: inline; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
   .hint { bottom: 166px !important; }
 }
