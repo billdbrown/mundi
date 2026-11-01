@@ -251,6 +251,10 @@ export const PATCH_GLSL = PATCH_BASE_GLSL + /* glsl */`
     vec4 b0 = texelFetch(uBake0, ij, 0), b1 = texelFetch(uBake1, ij, 0), b2 = texelFetch(uBake2, ij, 0);
     float farDist = 1.0 - smoothstep(0.08, 0.22, length(cameraPosition - base));
     pSurf = base + up * (b0.x + b0.y * farDist);
+    // At sea the patch sinks out of the way and the plain seabed shows: its depth offset (to sit
+    // in front of the terrain) made the water fail its depth test in the shallows, which drew
+    // the patch's square edge across the sea.
+    if (capA.x <= 0.0) pSurf = base - up * 0.002;
     pNorm = normalize(n0 - b1.xyz - b2.xyz * farDist);
     pCol = capB.rgb;
     pClim = vec2(capA.w, capB.w);

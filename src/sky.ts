@@ -492,14 +492,14 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               float coastWet = smoothstep(0.0009, 0.0004, hAbove) * smoothstep(0.35, 0.55, moist);
               float wet = max(max(smoothstep(0.45, 0.62, moist) * low, riverWet * low * 1.2), coastWet) * level * (1.0 - iceK);
               // Broad patches: not every wet lowland is marsh.
-              wet *= smoothstep(-0.25, 0.35, snoise(vCloudP * 22.0 + 17.0) + 0.5 * snoise(vCloudP * 70.0));
+              wet *= smoothstep(0.05, 0.55, snoise(vCloudP * 22.0 + 17.0) + 0.5 * snoise(vCloudP * 70.0));
               if (wet > 0.01) {
                 vec3 reed = mix(vec3(0.2, 0.2, 0.09), vec3(0.13, 0.17, 0.07), smoothstep(0.4, 0.7, temp));
                 float rn = snoise01(vCloudP * 1500.0) * 0.6 + snoise01(vCloudP * 4500.0) * 0.4;
                 diffuseColor.rgb = mix(diffuseColor.rgb, reed * (0.8 + 0.4 * rn), wet * 0.75);
                 // Pools: ragged, thresholded simplex at two scales (value noise showed its grid).
-                float pn = snoise(vCloudP * 380.0) * 0.6 + snoise(vCloudP * 1100.0 + 3.0) * 0.3 + snoise(vCloudP * 3200.0 + 7.0) * 0.1;
-                poolK = smoothstep(0.18, 0.26, pn + 0.35 * (wet - 0.6)) * wet * aaFade(0.003, foot);
+                float pn = snoise(vCloudP * 700.0) * 0.6 + snoise(vCloudP * 2000.0 + 3.0) * 0.3 + snoise(vCloudP * 5500.0 + 7.0) * 0.1;
+                poolK = smoothstep(0.3, 0.38, pn + 0.3 * (wet - 0.7)) * wet * aaFade(0.0016, foot);
                 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.035, 0.055, 0.065), poolK * 0.9);
               }
             }
@@ -547,11 +547,34 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         #endif
         // Beach: a thin, wavering strip of sand right at the sea's edge, in all but cold climates.
         // Thin and partial: from orbit a full-strength strip outlined every continent in yellow.
+        // Within the water map's region the shore is found by distance from the sea (a fixed
+        // few km), not by height, which on gentle coasts painted sand bands tens of km wide.
+        // Where the land rises steeply behind the shore it is rock, not sand.
         #ifdef USE_CLIMATE
-          if (hAbove > -0.0004 && hAbove < 0.0006) {
-            float bk = 1.0 - smoothstep(0.00005, 0.00035, hAbove + 0.00012 * snoise(vCloudP * 300.0));
-            bk *= smoothstep(0.25, 0.4, vClim.y) * 0.7;
-            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.69, 0.58, 0.33), bk);
+          if (hAbove > -0.0004 && hAbove < 0.004) {
+            float cs = groundCoast(vCloudP);
+            float warmB = smoothstep(0.25, 0.4, vClim.y);
+            if (cs >= 0.0) {
+              float wob = 0.06 * snoise(vCloudP * 900.0) + 0.04 * snoise(vCloudP * 2800.0);
+              float shore = smoothstep(0.1, 0.32, cs + wob) * step(-0.0002, hAbove);
+              if (shore > 0.0) {
+                // How high the land is a few km inland: up the coast field's slope.
+                float e; vec2 uv = groundUv(vCloudP, e);
+                vec2 d = vec2(1.0 / 512.0, 0.0);
+                vec2 gr = vec2(texture(uShRiv, uv + d.xy).b - texture(uShRiv, uv - d.xy).b,
+                               texture(uShRiv, uv + d.yx).b - texture(uShRiv, uv - d.yx).b);
+                vec2 inland = -gr / max(length(gr), 1e-6);
+                float km = 0.0005 / (2.0 * uShR);   // ~3 km in uv
+                float hIn = texture(uShH, uv + inland * km * 2.0).r / 50.0;
+                float cliff = smoothstep(0.0016, 0.0035, hIn + 0.0006 * snoise(vCloudP * 200.0));
+                vec3 rockC = vec3(0.3, 0.28, 0.25) * (0.85 + 0.3 * snoise01(vCloudP * 2400.0));
+                vec3 sand = vec3(0.69, 0.58, 0.33);
+                diffuseColor.rgb = mix(diffuseColor.rgb, mix(sand, rockC, cliff), shore * mix(0.75 * warmB, 0.85, cliff));
+              }
+            } else if (hAbove < 0.0006) {
+              float bk = 1.0 - smoothstep(0.00005, 0.00035, hAbove + 0.00012 * snoise(vCloudP * 300.0));
+              diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.69, 0.58, 0.33), bk * warmB * 0.7);
+            }
           }
         #endif
         // Water gathers in the gullies: their floors are greener and darker, the spurs between
@@ -783,6 +806,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
     uniforms: {
       ...cloud,
       ...(fade ? patchUniforms : {}),
+      ...shadowUniforms,
       ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
       uTime: { value: 0 },
       uSunDir: { value: new THREE.Vector3(0, 0, 1) },
@@ -838,6 +862,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         uniform float uVis;
       #endif
       ${CLOUD_GLSL}
+      ${SHADOW_GLSL}
       ${NOISE_GLSL}
       // Three octaves of drifting noise; each drifts its own way so the surface never repeats.
       float waves(vec3 p, float t) {
@@ -872,6 +897,16 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         }
 
         float d = clamp(vDepth / uDepthScale, 0.0, 1.0);
+        // Depth for the shore's clear fringe and surf. The mesh's depth reaches deep water across
+        // one ~60 km triangle, so on gentle coasts the see-through band and the surf were tens of
+        // km wide; the water map's distance from shore (terrainshadow.ts) caps them at a few km.
+        float sd = vDepth, cs = -1.0;
+        #if !defined(USE_FADE) && !defined(MERCATOR)
+          if (length(vWorld) < 1.0002) {
+            cs = groundCoast(vWorld);
+            if (cs >= 0.0) sd = max(vDepth, (cs - 0.5) * 0.0032);
+          }
+        #endif
         // Turquoise shallows belong to warm seas (Bahamas, Red Sea, northern Australia); cold
         // shelves are only a little lighter and greener than the open ocean.
         vec3 shallow = uShallow;
@@ -896,6 +931,8 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
           spec *= 0.12;   // rivers: sparkle on a thin channel reads as whitewater
         #endif
         float shade = cloudShade(vWorld);
+        // Mountains' shadows fall on the water too (terrainshadow.ts).
+        shade *= mix(0.45, 1.0, terrainShadow(vWorld));
         // Night: the sea goes nearly black with a faint moonlit blue, and surf, glint and sky
         // reflection all dim with it. (Ng, not the rippled N, so the terminator stays soft.)
         #ifdef MERCATOR
@@ -911,13 +948,26 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         // Foam: a steady line at the shore, plus swells rolling in toward it.
         // Depth is interpolated linearly across big triangles, so shore lines come out straight;
         // wobbling it with noise makes the foam follow a ragged, natural-looking shore.
-        float fd = vDepth + (vnoise(vWorld * 900.0) - 0.5) * uFoam * 1.6 + (vnoise(vWorld * 2400.0) - 0.5) * uFoam * 0.7;
+        float fd = sd + (vnoise(vWorld * 900.0) - 0.5) * uFoam * 1.6 + (vnoise(vWorld * 2400.0) - 0.5) * uFoam * 0.7;
         float edge = 1.0 - smoothstep(0.0, uFoam, fd);
         float zone = 1.0 - smoothstep(0.0, uFoam * 2.5, fd);
         float swell = smoothstep(0.8, 1.0, sin(fd / uFoam * 4.0 + t * 1.6)) * zone * 0.6;
         float breakup = smoothstep(0.35, 0.75, vnoise(vWorld * 2600.0 + vec3(t * 0.3)));
         // Surf is metres wide: from orbit it would be an outline round every coast, so it fades.
         float foam = clamp(edge * (0.6 + 0.4 * breakup) + swell * breakup * near, 0.0, 1.0) * (1.0 - smoothstep(0.35, 1.3, dist));
+        // Reefs in warm, shallow seas: a crest along the shelf's edge with breakers on it, and a
+        // bright lagoon inside, in patches along the coast.
+        #if !defined(USE_FADE) && !defined(MERCATOR)
+          if (cs > 0.52 && vDepth < 0.004 && warmSea > 0.6) {
+            float r0 = 0.0011 + 0.0005 * snoise(vWorld * 140.0);
+            float patchy = smoothstep(0.3, 0.6, snoise(vWorld * 16.0 + 11.0) + 0.35 * snoise(vWorld * 55.0)) * smoothstep(0.6, 0.85, warmSea);
+            float crest = (1.0 - smoothstep(0.00004, 0.00016, abs(vDepth - r0))) * patchy;
+            float lagoon = smoothstep(r0, r0 - 0.0003, vDepth) * patchy;
+            col = mix(col, vec3(0.3, 0.75, 0.72) * shade * mix(0.06, 1.0, day), lagoon * 0.45);
+            col = mix(col, vec3(0.62, 0.7, 0.6) * shade * mix(0.06, 1.0, day), crest * 0.6);
+            foam = max(foam, crest * (0.35 + 0.65 * breakup) * smoothstep(0.9, 0.3, dist) * 0.8);
+          }
+        #endif
         #ifdef USE_FADE
           foam = 0.0;   // rivers have no breakers
         #endif
@@ -925,7 +975,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
 
         // Shallow water clears only near the shore: with ~60 km mesh steps, depth reaches deep
         // water across one long triangle, and a wide see-through band read as a flat sandy shelf.
-        float a = mix(0.62, 0.95, smoothstep(0.0, 0.18, d));
+        float a = mix(0.62, 0.95, smoothstep(0.0, 0.18, clamp(sd / uDepthScale, 0.0, 1.0)));
         #ifndef USE_FADE
           if (uSeason != 0.0) {
             float mt = meanTemp(Ng, 0.0), st = seasonalTemp(Ng, mt);
@@ -939,7 +989,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         // Ragged coastline: in a noisy fringe along the shore the water thins out and the sandy
         // floor shows, so the land edge is jagged at every scale instead of a smooth curve.
         float cn = vnoise(vWorld * 110.0) * 0.75 + vnoise(vWorld * 330.0) * 0.25;
-        float coast = smoothstep(0.0, uFoam * 0.35, vDepth - (cn - 0.4) * uFoam * 1.1);
+        float coast = smoothstep(0.0, uFoam * 0.35, sd - (cn - 0.4) * uFoam * 1.1);
         // Lakes (water above sea level): their depth is biased deep right up to the shore, and
         // with two mesh steps per cell the shore can only fall on cell edges. A strong per-pixel
         // wobble pulls the shoreline in from the hexagon instead. (Simplex: thresholded value

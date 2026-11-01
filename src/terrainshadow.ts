@@ -26,7 +26,7 @@ export interface ShadowUniforms {
   uShMap: { value: THREE.Texture | null };
   /** The height map itself (x50), for things that look at the land's shape nearby (coasts). */
   uShH: { value: THREE.Texture | null };
-  /** Water map: r near rivers (a few km), g the wider valley floor (tens of km). */
+  /** Water map: r near rivers (a few km), g the wider valley floor (tens of km), b the sea blurred a few km (0.5 at the shore). */
   uShRiv: { value: THREE.Texture | null };
   uShOn: { value: number };
 }
@@ -59,6 +59,13 @@ export const SHADOW_GLSL = /* glsl */`
     if (edge <= 0.0) return 1.0;
     return mix(1.0, texture(uShMap, uv).r, edge);
   }
+  /** 1 well out to sea, ~0.5 at the shore, 0 a few km inland; and the uv, for neighbours. */
+  float groundCoast(vec3 p) {
+    float edge;
+    vec2 uv = groundUv(p, edge);
+    if (edge <= 0.0) return -1.0;
+    return texture(uShRiv, uv).b;
+  }
   vec2 groundRiver(vec3 p) {
     float edge;
     vec2 uv = groundUv(p, edge);
@@ -88,7 +95,7 @@ const heightVertex = /* glsl */`
   }`;
 const heightFragment = /* glsl */`
   varying float vH;
-  void main() { gl_FragColor = vec4(max(vH, 0.0) * 50.0, 0.0, 0.0, 1.0); }`;
+  void main() { gl_FragColor = vec4(vH * 50.0, 0.0, 0.0, 1.0); }`;
 
 const shadowFragment = /* glsl */`
   uniform sampler2D uHeight;
@@ -107,7 +114,7 @@ const shadowFragment = /* glsl */`
     vec2 dir = vec2(dot(st, uE), dot(st, uN));
     dir /= max(length(dir), 1e-6);
     float tanE = cosZ / sl;                   // how fast a ray toward the sun rises
-    float h0 = texture(uHeight, vUv).r / 50.0;
+    float h0 = max(texture(uHeight, vUv).r, 0.0) / 50.0;
     // Far enough that a ray climbing at the sun's angle clears the highest ground (~0.02).
     float L = clamp((0.02 - h0) / max(tanE, 0.03), 4.0 * uTexel * uR, 2.0 * uR);
     float lit = 1.0;
@@ -117,7 +124,7 @@ const shadowFragment = /* glsl */`
       vec2 q = lat + dir * t;
       vec2 uv = q / uR * 0.5 + 0.5;
       if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) break;
-      float ht = texture(uHeight, uv).r / 50.0;
+      float ht = max(texture(uHeight, uv).r, 0.0) / 50.0;
       // The ray's height above the sphere: rising at the sun's angle, and the sphere curving
       // away beneath it.
       float hr = h0 + 0.00004 + tanE * t + 0.5 * t * t;
@@ -133,21 +140,25 @@ const shadowFragment = /* glsl */`
  * ground whatever the region's size.
  */
 const blurFragment = /* glsl */`
-  uniform sampler2D uSrc;
+  uniform sampler2D uSrc, uHeight;
   uniform vec2 uDir;
-  uniform float uNear, uWide, uFirst;
+  uniform float uNear, uWide, uCoast, uFirst;
   varying vec2 vUv;
   void main() {
-    float n = 0.0, w = 0.0, k = 0.0;
+    float n = 0.0, w = 0.0, s = 0.0, k = 0.0;
     for (int i = -6; i <= 6; i++) {
       float f = float(i) / 3.0, g = exp(-0.5 * f * f);
       vec4 a = texture(uSrc, vUv + uDir * float(i) * uNear / 3.0);
       vec4 b = texture(uSrc, vUv + uDir * float(i) * uWide / 3.0);
+      vec2 cu = vUv + uDir * float(i) * uCoast / 3.0;
+      // The sea, from the height map (below sea level) on the first pass.
+      float c = uFirst > 0.5 ? step(texture(uHeight, cu).r, 0.0) : texture(uSrc, cu).b;
       n += g * a.r;
       w += g * (uFirst > 0.5 ? b.r : b.g);
+      s += g * c;
       k += g;
     }
-    gl_FragColor = vec4(n / k, w / k, 0.0, 1.0);
+    gl_FragColor = vec4(n / k, w / k, s / k, 1.0);
   }`;
 
 export class TerrainShadow {
@@ -184,7 +195,7 @@ export class TerrainShadow {
     this.u.uShH.value = this.height.texture;
     this.u.uShRiv.value = this.riverMap.texture;
     this.blurMat = new THREE.ShaderMaterial({
-      uniforms: { uSrc: { value: null }, uDir: { value: new THREE.Vector2() }, uNear: { value: 1 }, uWide: { value: 4 }, uFirst: { value: 1 } },
+      uniforms: { uSrc: { value: null }, uHeight: { value: this.height.texture }, uDir: { value: new THREE.Vector2() }, uNear: { value: 1 }, uWide: { value: 4 }, uCoast: { value: 1 }, uFirst: { value: 1 } },
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: blurFragment,
       depthTest: false, depthWrite: false,
@@ -300,6 +311,7 @@ export class TerrainShadow {
     const texel = (2 * r) / 512, b = this.blurMat.uniforms;
     b.uNear.value = Math.max(1, 0.0014 / texel) / 512;
     b.uWide.value = Math.max(1, 0.004 / texel) / 512;
+    b.uCoast.value = Math.max(0.7, 0.0005 / texel) / 512;
     b.uSrc.value = this.riverRaw.texture; b.uDir.value.set(1, 0); b.uFirst.value = 1;
     renderer.setRenderTarget(this.riverTmp);
     renderer.render(this.blurScene, this.quadCam);
