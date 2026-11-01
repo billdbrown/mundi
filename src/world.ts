@@ -288,7 +288,11 @@ export function generateWorld(params: WorldParams): World {
   for (let c = 0; c < N; c++) {
     const x = P[c * 3], y = P[c * 3 + 1], z = P[c * 3 + 2];
     const coast = Math.exp(-Math.max(0, coastDist[c]) / reach);
-    const band = 0.5 + 0.5 * Math.cos(6 * lat[c]); // wet equator, dry 30°, wet 60°, dry poles
+    // Earth's zonal rainfall: the equatorial rain belt (ITCZ) is by far the wettest, the
+    // subtropical highs near 25° the driest, the mid-latitude storm tracks near 50° wet again,
+    // the poles dry.
+    const deg = Math.abs(lat[c]) * 180 / Math.PI;
+    const band = 1.25 * Math.exp(-((deg / 13) ** 2)) + 0.75 * Math.exp(-(((deg - 52) / 13) ** 2)) + 0.1;
     const n = 0.5 + 0.5 * fbm(noiseB, x + 5, y, z, 3, 2);
     let fromSea = 0, shadow = 0, windward = 0;
     if (water[c] !== WATER_OCEAN) {
@@ -335,6 +339,46 @@ export function generateWorld(params: WorldParams): World {
     if (!westSea) continue;
     moisture[c] = Math.max(0, moisture[c] - 0.28 * cold * westSea);
     temperature[c] = Math.max(0, Math.min(1, temperature[c] - 0.05 * cold * westSea + 0.07 * mild * westSea));
+  }
+
+  // --- Monsoon east coasts. On the western flank of each subtropical high, warm moist air
+  // flows onto the east coasts of continents in summer: the humid subtropics (south-east USA,
+  // south China, eastern Australia, southern Brazil) instead of the deserts of the west sides. ---
+  const reachEast = Math.max(2, Math.round(detail / 6));
+  for (let c = 0; c < N; c++) {
+    if (water[c] === WATER_OCEAN) continue;
+    const deg = Math.abs(lat[c]) * 180 / Math.PI;
+    const zone = sstep(16, 22, deg) * (1 - sstep(38, 45, deg));
+    if (zone === 0) continue;
+    let cur = c, eastSea = 0;
+    for (let k = 1; k <= reachEast; k++) {
+      const x = P[cur * 3], z = P[cur * 3 + 2];
+      let best = nbrs[cur][0], bd = -Infinity;
+      for (const nb of nbrs[cur]) {
+        const d = (P[nb * 3] - x) * z + (P[nb * 3 + 2] - z) * -x;   // along east = (z, 0, −x)
+        if (d > bd) { bd = d; best = nb; }
+      }
+      cur = best;
+      if (water[cur] === WATER_OCEAN) { eastSea = 1 - (k - 1) / reachEast; break; }
+    }
+    moisture[c] = Math.min(1, moisture[c] + 0.3 * zone * eastSea);
+  }
+
+  // --- Smooth the moisture field over land. The upwind walk, rain shadow and windward terms
+  // jump from cell to cell, and the biomes they produced were a cell-scale camouflage; Earth's
+  // climate zones are broad and coherent (one Sahara, a clean Sahel, solid rainforest). ---
+  {
+    const tmp = new Float32Array(N);
+    const passes = Math.max(2, Math.round(detail / 12));
+    for (let it = 0; it < passes; it++) {
+      for (let c = 0; c < N; c++) {
+        if (water[c] === WATER_OCEAN) { tmp[c] = moisture[c]; continue; }
+        let s = 0, n = 0;
+        for (const nb of nbrs[c]) if (water[nb] !== WATER_OCEAN) { s += moisture[nb]; n++; }
+        tmp[c] = n ? 0.4 * moisture[c] + 0.6 * (s / n) : moisture[c];
+      }
+      moisture.set(tmp);
+    }
   }
 
   // --- Drainage: priority-flood from the sea gives every land cell a downhill route out.
@@ -392,10 +436,9 @@ export function generateWorld(params: WorldParams): World {
     } else if (water[c] === WATER_LAKE) {
       biome[c] = t < 0.12 ? B.ICE : B.LAKE;
     } else {
+      // (No whole-cell beaches: a cell is ~100 km across, and the sand strip at the waterline is
+      // drawn per vertex. Beach cells made every coast a broad yellow band.)
       biome[c] = landBiome(t, moisture[c], e);
-      if (e < 0.05 && t > 0.3 && biome[c] !== B.MOUNTAIN) {
-        for (const nb of nbrs[c]) if (water[nb] === WATER_OCEAN) { biome[c] = B.BEACH; break; }
-      }
     }
   }
 

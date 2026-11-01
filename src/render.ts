@@ -196,19 +196,22 @@ export class PlanetView {
   setClock(rate: number) { this.clockRate = rate; }
   getDay() { return this.day; }
   setDay(d: number) { this.day = d; }
-  /** Sun angle round the axis for the current day (matches frame()). */
-  private sunAngle() { return (((this.day % 1) + 1) % 1) * Math.PI * 2 - 0.6; }
+  /**
+   * Sun angle round the axis for the current day. The generator's east is +longitude
+   * (atan2(x, z)); the sun moves west, toward −longitude, as on Earth.
+   */
+  private sunAngle() { return 0.6 - (((this.day % 1) + 1) % 1) * Math.PI * 2; }
   /** Longitude angle of the point under the middle of the view. */
   private viewAngle() { return Math.atan2(this.camera.position.x, this.camera.position.z); }
   /** Local solar time (0..24) at the middle of the view, in cycle lighting. */
   localHour() {
-    const h = 12 + ((this.sunAngle() - this.viewAngle()) / (Math.PI * 2)) * 24;
+    const h = 12 + ((this.viewAngle() - this.sunAngle()) / (Math.PI * 2)) * 24;   // east of the sun: afternoon
     return ((h % 24) + 24) % 24;
   }
   /** Move the clock within the current day so it is `hour` o'clock under the middle of the view. */
   setLocalHour(hour: number) {
-    const a = this.viewAngle() + ((hour - 12) / 24) * Math.PI * 2;
-    const frac = ((((a + 0.6) / (Math.PI * 2)) % 1) + 1) % 1;
+    const a = this.viewAngle() - ((hour - 12) / 24) * Math.PI * 2;
+    const frac = ((((0.6 - a) / (Math.PI * 2)) % 1) + 1) % 1;
     this.day = Math.floor(this.day) + frac;
   }
 
@@ -571,7 +574,7 @@ export class PlanetView {
     this.cloudU.uSnow.value = this.opts.mode === 'biome' ? 1 : 0;
     if (this.opts.light === 'cycle' && !this.mapMode) {
       // The sun goes round once a day, and swings north and south with the season (the tilt).
-      const a = (this.day % 1) * Math.PI * 2 - 0.6;
+      const a = this.sunAngle();
       const dec = ((TILT * Math.PI) / 180) * season;
       this.sun.position.set(Math.sin(a) * Math.cos(dec) * 5, Math.sin(dec) * 5, Math.cos(a) * Math.cos(dec) * 5);
     }

@@ -6,8 +6,8 @@
  * west, curve poleward and then east, and weaken over land. The shader (sky.ts) draws each as
  * spiral cloud bands round its centre; the wind bands that carry ordinary cloud live there too.
  *
- * Longitude here is atan2(x, z), the renderer's convention, in which the sun moves toward +lon
- * over a day; so east is −lon.
+ * Longitude here is atan2(x, z). East is +lon, as in the generator's winds and currents (the
+ * sun, accordingly, moves toward −lon over a day).
  */
 import * as THREE from 'three';
 import { WATER_OCEAN, type World } from './world.ts';
@@ -72,10 +72,10 @@ export class Weather {
       let lon: number, lat: number;
       if (s.tropical) {
         // West at first, slowing, then recurving poleward and east.
-        lon = s.lon0 + 0.3 * a - 0.035 * a * a * a;
+        lon = s.lon0 - 0.3 * a + 0.035 * a * a * a;
         lat = s.lat0 + sg * (0.04 * a + 0.012 * a * a);
       } else {
-        lon = s.lon0 - 0.38 * a;                     // with the westerlies, toward the east
+        lon = s.lon0 + 0.38 * a;                     // with the westerlies, toward the east
         lat = s.lat0 + sg * 0.03 * a;
       }
       // Grow fast, fade slowly. Tropical storms die over land.

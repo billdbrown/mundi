@@ -175,13 +175,13 @@ const CLOUD_GLSL = /* glsl */`
     float p0 = fract(uWeather / T), p1 = fract(uWeather / T + 0.5);
     float c0, c1;
     {
-      float o = w * p0 * T, co = cos(o), so = sin(o);
+      float o = -w * p0 * T, co = cos(o), so = sin(o);
       vec3 q = vec3(d.x * co - d.z * so, d.y, d.x * so + d.z * co);
       float raw = textureLod(uCloudMap, vec2((phi + o) / 6.2831853, 0.5 + lat / 3.14159265), lod).a;
       c0 = cloudCover(raw, q, uCloudTime);
     }
     {
-      float o = w * p1 * T, co = cos(o), so = sin(o);
+      float o = -w * p1 * T, co = cos(o), so = sin(o);
       vec3 q = vec3(d.x * co - d.z * so, d.y, d.x * so + d.z * co);
       float raw = textureLod(uCloudMap, vec2((phi + o) / 6.2831853, 0.5 + lat / 3.14159265), lod).a;
       c1 = cloudCover(raw, q, uCloudTime + 37.0);
@@ -338,7 +338,10 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
             // low basins.
             desertW = smoothstep(0.24, 0.12, moist) * smoothstep(0.4, 0.55, temp) * lowland;
             if (desertW > 0.0) {
-              float pan = smoothstep(0.83, 0.88, snoise01(vCloudP * 38.0) + 0.06 * snoise(vCloudP * 300.0)) * (1.0 - smoothstep(0.06, 0.16, hAbove / uRelief));
+              // Salt pans: few, large and ragged, in the lowest basins only. (Thresholding a single
+              // noise's peaks gave an even grid of white dots.)
+              float pn = 0.6 * snoise(vCloudP * 9.0) + 0.3 * snoise(vCloudP * 31.0 + 4.0) + 0.1 * snoise(vCloudP * 140.0);
+              float pan = smoothstep(0.42, 0.5, pn) * (1.0 - smoothstep(0.03, 0.09, hAbove / uRelief));
               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.80, 0.77, 0.70), pan * desertW * 0.85);
               // Crests are bright, loose orange sand; corridors between are flatter, paler and
               // greyer; slip faces sit in their own shade whatever the light.
@@ -658,8 +661,8 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         // Glint: broad and soft from orbit, tight and bright up close.
         // Glint: from orbit a broad, dim, silvery patch (the sea is rough at that scale), up close
         // a tight bright highlight.
-        float shine = mix(14.0, 380.0, near);
-        float spec = pow(max(dot(R, V), 0.0), shine) * mix(0.32, 2.2, near);
+        float shine = mix(40.0, 380.0, near);
+        float spec = pow(max(dot(R, V), 0.0), shine) * mix(0.26, 2.2, near);
         #ifdef USE_FADE
           spec *= 0.12;   // rivers: sparkle on a thin channel reads as whitewater
         #endif

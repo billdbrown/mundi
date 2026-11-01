@@ -149,6 +149,39 @@ function tinted(tint: Noise3, x: number, y: number, z: number, r: number, g: num
   out.push(r * f * (1 + 0.05 * n2), g * f, b * f * (1 - 0.07 * n2));
 }
 
+/**
+ * Natural land colour as a continuous function of moisture (columns) and temperature (rows),
+ * read off true-colour satellite mosaics: salmon-tan hot desert, olive savanna, deep green
+ * rainforest; grey-tan cold desert, steppe, grassland, temperate forest; dark taiga; brown
+ * tundra. Interpolated, so climate zones shade into each other as on Earth instead of
+ * switching colour at cell edges.
+ */
+const CLIMATE_M = [0.08, 0.24, 0.4, 0.56, 0.78];
+const CLIMATE_T = [0.1, 0.3, 0.55, 0.82];
+const CLIMATE_PALETTE = [
+  [0x7d7563, 0x6f6c58, 0x5f6249, 0x535a40, 0x4c553d],   // tundra
+  [0x9d9278, 0x8c8a6a, 0x4f5b3a, 0x34442a, 0x2c3b26],   // boreal
+  [0xc4a582, 0xab9e72, 0x7b8a49, 0x4a642c, 0x34542b],   // temperate
+  [0xd99b6a, 0xbf9862, 0x8f8a4a, 0x52682b, 0x2a5222],   // tropical
+].map((row) => row.map((hex) => new THREE.Color(hex)));
+function climateColour(m: number, t: number, out: THREE.Color) {
+  const idx = (v: number, xs: number[]) => {
+    if (v <= xs[0]) return [0, 0];
+    for (let i = 0; i < xs.length - 1; i++) if (v <= xs[i + 1]) return [i, (v - xs[i]) / (xs[i + 1] - xs[i])];
+    return [xs.length - 2, 1];
+  };
+  const [mi, mf] = idx(m, CLIMATE_M), [ti, tf] = idx(t, CLIMATE_T);
+  const P = CLIMATE_PALETTE;
+  const r = (row: number) => {
+    const a = P[row][mi], b = P[row][mi + 1];
+    return [a.r + (b.r - a.r) * mf, a.g + (b.g - a.g) * mf, a.b + (b.b - a.b) * mf];
+  };
+  const lo = r(ti), hi = r(ti + 1);
+  out.setRGB(lo[0] + (hi[0] - lo[0]) * tf, lo[1] + (hi[1] - lo[1]) * tf, lo[2] + (hi[2] - lo[2]) * tf);
+}
+/** Cells whose own colour stands rather than the climate palette: ice and bare high rock. */
+const OWN_COLOUR = new Set<number>([B.ICE, B.PEAK, B.MOUNTAIN]);
+
 function cornerCellsOf(world: World): number[][] {
   const g = world.grid;
   const out: number[][] = Array.from({ length: g.cornerPos.length / 3 }, () => []);
@@ -368,13 +401,14 @@ function buildSmooth(inp: SurfaceInput): Surface {
     const qy = dy + warpAmp * (tint(dx * wf, dy * wf + 23.7, dz * wf) + 0.5 * tint(dx * wf * 2.3 + 3.3, dy * wf * 2.3, dz * wf * 2.3));
     const qz = dz + warpAmp * (tint(dx * wf, dy * wf, dz * wf + 37.1) + 0.5 * tint(dx * wf * 2.3, dy * wf * 2.3, dz * wf * 2.3 + 8.9));
     const side = wetOf(owner);
-    let sr = 0, sg = 0, sb = 0, sw = 0, sm = 0, st = 0;
+    let sr = 0, sg = 0, sb = 0, sw = 0, sm = 0, st = 0, so = 0;
     const consider = (c: number) => {
       if (wetOf(c) !== side) return;
       const ex = P[c * 3] - qx, ey = P[c * 3 + 1] - qy, ez = P[c * 3 + 2] - qz;
       const wt = Math.exp(-(ex * ex + ey * ey + ez * ez) / sigma2);
       sr += cellColor[c * 3] * wt; sg += cellColor[c * 3 + 1] * wt; sb += cellColor[c * 3 + 2] * wt; sw += wt;
       sm += w.moisture[c] * wt; st += w.temperature[c] * wt;
+      if (OWN_COLOUR.has(w.biome[c]) || w.water[c] !== WATER_LAND) so += wt;
     };
     consider(owner);
     for (const n of g.neighbors[owner]) consider(n);
@@ -384,7 +418,14 @@ function buildSmooth(inp: SurfaceInput): Surface {
       return;
     }
     out[0] = sr / sw; out[1] = sg / sw; out[2] = sb / sw; out[3] = sm / sw; out[4] = st / sw;
+    // Natural colours: the climate palette, except where the cell's own colour stands.
+    if (inp.natural && side === 0) {
+      climateColour(out[3], out[4], climTmp);
+      const k = 1 - so / sw;
+      out[0] += (climTmp.r - out[0]) * k; out[1] += (climTmp.g - out[1]) * k; out[2] += (climTmp.b - out[2]) * k;
+    }
   };
+  const climTmp = new THREE.Color();
   const blendRGB = [0, 0, 0, 0, 0];
   const clim: number[] = [];
   const add = (dx: number, dy: number, dz: number, h: number, r: number, gg: number, b: number, lvl: number, lake = false) => {
