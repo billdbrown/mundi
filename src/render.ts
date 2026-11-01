@@ -16,6 +16,7 @@ import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere,
 import type { CloudPixels } from './clouds.ts';
 import { groveFreq } from './groves.ts';
 import { DunePatch } from './dunepatch.ts';
+import { TerrainShadow } from './terrainshadow.ts';
 import { CivLayer } from './civview.ts';
 import { Weather } from './weather.ts';
 import { GroundProbe } from './ground.ts';
@@ -132,6 +133,8 @@ export class PlanetView {
   }
   /** Fine ground under the middle of the view, where dunes stand up as shapes (dunepatch.ts). */
   private dunePatch!: DunePatch;
+  /** Shadows cast by the terrain (terrainshadow.ts). */
+  private terrainShadow = new TerrainShadow();
   private civBorders = false;
   /** Weather: storm schedule for this world, and weather time in days. */
   private weather?: Weather;
@@ -220,6 +223,8 @@ export class PlanetView {
     this.planet.add(this.civ.group);
     this.dunePatch = new DunePatch(this.cloudU);
     this.planet.add(this.dunePatch.mesh);
+    this.terrainShadow.setExtras([this.dunePatch.heightMesh]);
+    this.dunePatch.onCapture = () => this.terrainShadow.invalidate();
     this.mapInput();
     this.globeZoomInput();
 
@@ -731,6 +736,7 @@ export class PlanetView {
     }
 
     this.sun.getWorldPosition(this.sunDir).normalize();
+    this.terrainShadow.update(this.renderer, this.virtualPos, this.mapMode ? 99 : this.virtualPos.length(), this.sunDir, !this.mapMode);
     this.sunU.uSunDir.value.copy(this.sunDir);
     this.waterMat.uniforms.uTime.value += dt;
     this.waterMat.uniforms.uSunDir.value.copy(this.sunDir);
@@ -793,6 +799,7 @@ export class PlanetView {
     for (const f of this.forest) { this.planet.remove(f); f.dispose(); }
     this.terrain = this.water = this.gridLines = this.rivers = this.streams = undefined;
     this.dunePatch?.setTerrain(null);
+    this.terrainShadow?.setTerrain(null);
     this.dunePatch?.setRivers([]);
     this.forest = [];
   }
@@ -810,6 +817,7 @@ export class PlanetView {
     this.faceCell = data.faces;
     this.planet.add(this.terrain);
     this.dunePatch.setTerrain(data.style === 'smooth' ? this.terrain : null);
+    this.terrainShadow.setTerrain(this.terrain);
     if (!this.prewarmed && data.style === 'smooth') { this.prewarmed = true; setTimeout(() => this.prewarm(), 0); }
 
     if (data.water) {

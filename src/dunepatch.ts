@@ -20,6 +20,7 @@ import * as THREE from 'three';
 import { makeTerrainMaterial, NOISE_GLSL, type CloudUniforms } from './sky.ts';
 import { PATCH_N, PATCH_A, PATCH_R, CAPTURE_SIZE, DUNES_GLSL, PATCH_GLSL, PATCH_BAKE_GLSL, patchUniforms, type PatchUniforms } from './dunes.ts';
 import { EROSION_GLSL } from './erosion.ts';
+import { TerrainShadow } from './terrainshadow.ts';
 
 const CAPTURE = CAPTURE_SIZE;
 /** Camera heights below which the patch is drawn (dunes are invisible from higher). */
@@ -50,6 +51,10 @@ const captureFragment = (which: 'A' | 'B') => /* glsl */`
 export class DunePatch {
   readonly mesh: THREE.Group;
   private colour: THREE.Mesh;
+  /** The patch's shape for the terrain-shadow height map (terrainshadow.ts). */
+  readonly heightMesh: THREE.Mesh;
+  /** Called after each recentre (the patch's shape changed). */
+  onCapture: (() => void) | null = null;
   private depth: THREE.Mesh;
   private u: PatchUniforms;
   private capA: THREE.WebGLRenderTarget;
@@ -134,6 +139,9 @@ export class DunePatch {
     this.depth = new THREE.Mesh(geo, pre);
     this.depth.renderOrder = -1;
     for (const m of [this.colour, this.depth]) m.frustumCulled = false;
+    this.heightMesh = new THREE.Mesh(geo, TerrainShadow.heightMaterial(PATCH_GLSL, 'patchSample(position.xy); vec3 transformed = pSurf;', { ...this.u }));
+    this.heightMesh.frustumCulled = false;
+    this.heightMesh.visible = false;
     this.mesh = new THREE.Group();
     this.mesh.add(this.depth, this.colour);
     this.mesh.visible = false;
@@ -194,6 +202,7 @@ export class DunePatch {
   update(renderer: THREE.WebGLRenderer, centre: THREE.Vector3, dist: number, active: boolean, wait = true) {
     const on = (this.ready || !wait) && active && !!this.source && this.source.visible && dist < PATCH_MAX_DIST;
     this.mesh.visible = on;
+    this.heightMesh.visible = on;
     this.u.uPatchOn.value = on ? 1 : 0;
     if (!on) return;
     const c = centre.clone().normalize();
@@ -243,6 +252,7 @@ export class DunePatch {
     });
     renderer.setRenderTarget(prevTarget);
     renderer.setClearColor(prevClear, prevAlpha);
+    this.onCapture?.();
   }
 
   /**

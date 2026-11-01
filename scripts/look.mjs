@@ -7,7 +7,8 @@
  * A shot is name=seed:target:alt[:lens] (lens: map, elev) (seed may carry more hash, e.g. 77&detail=40), where target is a biome list (b12, b8+9) or a debug
  * spot (desert, river, coast...), or @lon,lat. `zoom=seed:target` shoots a descent at several heights.
  * URL from LOOK_URL (default http://localhost:5291/). TOPDOWN=1 looks straight down (no tilt);
- * ERO=0 turns the erosion filter off.
+ * ERO=0 turns the erosion filter off. HOUR=17 lights by the sun at that local hour;
+ * NOSHADOW=1 turns terrain shadows off.
  */
 import { chromium } from 'playwright-core';
 
@@ -80,6 +81,8 @@ for (const spec of specs) {
   await aim(seed, target, Number(alt), lens);
   if (process.env.TOPDOWN) await page.evaluate(() => { const v = window.mundi.view; v.tilt = 0; v.applyTilt = () => {}; v.haze.density = 0; v.sky.visible = false; v.sun.position.set(-2, 1.5, 2.6); });
   if (process.env.ERO) await page.evaluate((e) => { window.mundi.view.cloudU.uErosion.value = Number(e); }, process.env.ERO);
+  if (process.env.HOUR) await page.evaluate((h) => { const v = window.mundi.view; v.setOptions({ light: 'cycle' }); v.setLocalHour(Number(h)); }, process.env.HOUR);
+  if (process.env.NOSHADOW) await page.evaluate(() => { window.mundi.view.terrainShadow.update = () => { window.mundi.view.terrainShadow.u.uShOn.value = 0; }; });
   if (process.env.NOWATER) await page.evaluate(() => { const v = window.mundi.view; v.water.visible = false; v.applyVisibility = () => {}; });
   await page.waitForTimeout(1300);
   await page.screenshot({ path: `${out}/${tag}-${name}.png` });

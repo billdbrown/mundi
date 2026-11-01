@@ -5,6 +5,7 @@ import { hash01 } from './rng.ts';
 import { MERC_GLSL, MERC_DISCARD, mercVertex, patchShaderChunks } from './mercator.ts';
 import { GROVE_GLSL } from './groves.ts';
 import { EROSION_GLSL } from './erosion.ts';
+import { SHADOW_GLSL, shadowLights, shadowUniforms } from './terrainshadow.ts';
 import { DUNES_GLSL, PATCH_GLSL, LIFT_GLSL, patchUniforms, makeDuneUniforms, type DuneUniforms, type PatchUniforms } from './dunes.ts';
 
 patchShaderChunks();
@@ -227,7 +228,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
   // The dune patch (dunepatch.ts): the same ground shading on a fine grid that carries the dunes.
   if (patch) mat.defines = { ...mat.defines, DUNE_PATCH: '' };
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, u, patch ?? {});
+    Object.assign(sh.uniforms, u, patch ?? {}, shadowUniforms);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         varying vec3 vCloudP;
@@ -267,7 +268,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           vCiv = civ;
         #endif`);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;\n' + CLOUD_GLSL + NOISE_GLSL + /* glsl */`
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;\n' + CLOUD_GLSL + SHADOW_GLSL + NOISE_GLSL + /* glsl */`
         // Ridged octaves (1 - |2n - 1|) give crest lines and gullies rather than uniform grain.
         float ridge(float n) { return 1.0 - abs(2.0 * n - 1.0); }
         float rockNoise(vec3 p) {
@@ -669,6 +670,8 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           float lie = (1.0 - 0.9 * smoothstep(0.08, 0.3, slope)) * smoothstep(0.25, 0.65, streak + snow * 0.35);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.95, 0.98), clamp(snow * lie, 0.0, 1.0) * 0.95);
         }`);
+    // Shadows cast by the terrain dim the sun's direct light (terrainshadow.ts).
+    sh.fragmentShader = shadowLights(sh.fragmentShader, 'vCloudP');
   };
   return mat;
 }
@@ -693,7 +696,7 @@ export function applyCloudShadow(
           if (cut > 0.5 && uYear >= 0.0) transformed *= 1.0 - smoothstep(cut, cut + 25.0, uYear);
         #endif` : '';
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, u, sun ?? {}, fade ?? {}, fade ? patchUniforms : {});
+    Object.assign(sh.uniforms, u, sun ?? {}, fade ?? {}, fade ? patchUniforms : {}, fade ? shadowUniforms : {});
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;' + (fade ? '\nuniform float uFadeNear, uFadeFar, uYear;\nattribute float cut;\n' + LIFT_GLSL : ''))
       // Plants stand on the ground as the high-detail patch shapes it (dunepatch.ts).
@@ -715,6 +718,8 @@ export function applyCloudShadow(
       .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;\n' + CLOUD_GLSL + (sun ? 'uniform vec3 uSunDir;\n' : ''))
       .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= cloudShade(vCloudP);' +
         (sun ? '\ndiffuseColor.rgb *= mix(0.12, 1.0, smoothstep(-0.12, 0.12, dot(normalize(vCloudP), uSunDir)));' : ''));
+    // Plants stand in the terrain's shadows too.
+    if (fade) sh.fragmentShader = shadowLights(sh.fragmentShader.replace('#include <common>', '#include <common>\n' + SHADOW_GLSL), 'vCloudP');
   };
   mat.needsUpdate = true;
 }

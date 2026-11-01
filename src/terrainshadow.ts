@@ -1,0 +1,247 @@
+/**
+ * Shadows cast by the terrain: ridges darken the valleys beside them, dunes their lee, most of
+ * all at low sun.
+ *
+ * Around the middle of the view, the land's height is captured from straight above (the terrain
+ * mesh, plus the high-detail ground patch where it is drawn) into a height map. A pass over that
+ * map marches from each texel toward the sun, and wherever the land rises above the ray the
+ * texel is in shadow, softly at the edges (the sun is a disc). The ground, the patch and the
+ * plants read the result and dim their direct sunlight by it; ambient light is untouched.
+ *
+ * The region grows with height above the ground (from a little past the horizon when low, to a
+ * continent from high up), in steps, and stays put until the view moves well off its centre, so
+ * shadow edges don't swim. The height map is retaken when the region moves; the shadows are
+ * recomputed when the sun moves.
+ */
+import * as THREE from 'three';
+
+const SIZE = 1024;
+const STEPS = 64;
+
+export interface ShadowUniforms {
+  uShC: { value: THREE.Vector3 };
+  uShE: { value: THREE.Vector3 };
+  uShN: { value: THREE.Vector3 };
+  uShR: { value: number };
+  uShMap: { value: THREE.Texture | null };
+  uShOn: { value: number };
+}
+
+/** One set, shared by everything that receives terrain shadows. */
+export const shadowUniforms: ShadowUniforms = {
+  uShC: { value: new THREE.Vector3(0, 0, 1) }, uShE: { value: new THREE.Vector3(1, 0, 0) }, uShN: { value: new THREE.Vector3(0, 1, 0) },
+  uShR: { value: 0.1 }, uShMap: { value: null }, uShOn: { value: 0 },
+};
+
+/** terrainShadow(p): 1 in sunlight, toward 0 in the terrain's shadow, at world point p. */
+export const SHADOW_GLSL = /* glsl */`
+  uniform vec3 uShC, uShE, uShN;
+  uniform float uShR, uShOn;
+  uniform sampler2D uShMap;
+  float terrainShadow(vec3 p) {
+    if (uShOn < 0.5 || dot(p, uShC) < 0.5) return 1.0;
+    vec2 lat = vec2(dot(p, uShE), dot(p, uShN)) / uShR;
+    float edge = smoothstep(1.0, 0.85, max(abs(lat.x), abs(lat.y)));
+    if (edge <= 0.0) return 1.0;
+    return mix(1.0, texture(uShMap, lat * 0.5 + 0.5).r, edge);
+  }
+`;
+
+/**
+ * Patch three's light loop so the sun's direct light is dimmed by terrainShadow(world). Not to
+ * nothing: shadowed ground is lit by the sky, so a little bluish light stays (black shadows lost
+ * all detail).
+ */
+export function shadowLights(fragmentShader: string, world: string): string {
+  const chunk = THREE.ShaderChunk.lights_fragment_begin.replace(
+    'getDirectionalLightInfo( directionalLight, directLight );',
+    `getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= mix(vec3(0.16, 0.2, 0.28), vec3(1.0), terrainShadow(${world}));`);
+  return fragmentShader.replace('#include <lights_fragment_begin>', chunk);
+}
+
+const heightVertex = /* glsl */`
+  varying float vH;
+  void main() {
+    vec4 w = modelMatrix * vec4(position, 1.0);
+    vH = length(w.xyz) - 1.0;
+    gl_Position = projectionMatrix * viewMatrix * w;
+  }`;
+const heightFragment = /* glsl */`
+  varying float vH;
+  void main() { gl_FragColor = vec4(max(vH, 0.0) * 50.0, 0.0, 0.0, 1.0); }`;
+
+const shadowFragment = /* glsl */`
+  uniform sampler2D uHeight;
+  uniform vec3 uSun, uC, uE, uN;
+  uniform float uR, uTexel;
+  varying vec2 vUv;
+  void main() {
+    vec2 lat = (vUv * 2.0 - 1.0) * uR;
+    vec3 up = normalize(uC + uE * lat.x + uN * lat.y);
+    float cosZ = dot(uSun, up);
+    // Night side, or sun overhead: nothing to do.
+    if (cosZ < -0.05) { gl_FragColor = vec4(1.0); return; }
+    vec3 st = uSun - up * cosZ;
+    float sl = length(st);
+    if (sl < 1e-4) { gl_FragColor = vec4(1.0); return; }
+    vec2 dir = vec2(dot(st, uE), dot(st, uN));
+    dir /= max(length(dir), 1e-6);
+    float tanE = cosZ / sl;                   // how fast a ray toward the sun rises
+    float h0 = texture(uHeight, vUv).r / 50.0;
+    // Far enough that a ray climbing at the sun's angle clears the highest ground (~0.02).
+    float L = clamp((0.02 - h0) / max(tanE, 0.03), 4.0 * uTexel * uR, 2.0 * uR);
+    float lit = 1.0;
+    for (int i = 1; i <= ${STEPS}; i++) {
+      float f = float(i) / ${STEPS}.0;
+      float t = L * f * f + uTexel * uR * 1.5 * f;
+      vec2 q = lat + dir * t;
+      vec2 uv = q / uR * 0.5 + 0.5;
+      if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) break;
+      float ht = texture(uHeight, uv).r / 50.0;
+      // The ray's height above the sphere: rising at the sun's angle, and the sphere curving
+      // away beneath it.
+      float hr = h0 + 0.00004 + tanE * t + 0.5 * t * t;
+      // Soft edges: the sun is a disc (exaggerated, like the relief, to ~3 degrees).
+      lit = min(lit, (hr - ht) / (t * 0.05));
+    }
+    gl_FragColor = vec4(vec3(smoothstep(-1.0, 1.0, lit)), 1.0);
+  }`;
+
+export class TerrainShadow {
+  private height = new THREE.WebGLRenderTarget(SIZE, SIZE, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true });
+  private shadow = new THREE.WebGLRenderTarget(SIZE, SIZE, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+  private cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.001, 0.5);
+  private heightScene = new THREE.Scene();
+  private heightMat = new THREE.ShaderMaterial({ vertexShader: heightVertex, fragmentShader: heightFragment });
+  private terrainCopy = new THREE.Mesh();
+  private extras: THREE.Object3D[] = [];
+  private quadScene = new THREE.Scene();
+  private quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  private shadowMat: THREE.ShaderMaterial;
+  private source: THREE.Mesh | null = null;
+  private centre = new THREE.Vector3(0, 0, 1);
+  private radius = 0;
+  private lastSun = new THREE.Vector3();
+  private heightDirty = true;
+  private u = shadowUniforms;
+
+  constructor() {
+    this.u.uShMap.value = this.shadow.texture;
+    this.terrainCopy.matrixAutoUpdate = false;
+    this.terrainCopy.frustumCulled = false;
+    this.heightScene.add(this.terrainCopy);
+    this.shadowMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uHeight: { value: this.height.texture }, uSun: { value: new THREE.Vector3() },
+        uC: this.u.uShC, uE: this.u.uShE, uN: this.u.uShN, uR: { value: 0.1 }, uTexel: { value: 2 / SIZE },
+      },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: shadowFragment,
+      depthTest: false, depthWrite: false,
+    });
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.shadowMat);
+    quad.frustumCulled = false;
+    this.quadScene.add(quad);
+  }
+
+  /** The terrain to cast shadows, or null for none. */
+  setTerrain(terrain: THREE.Mesh | null) {
+    this.source = terrain;
+    this.heightDirty = true;
+    if (!terrain) this.u.uShOn.value = 0;
+  }
+
+  /**
+   * Other things whose shape should cast shadows (the high-detail patch), drawn into the height
+   * map with their own material's vertex code: a mesh whose material has a height variant.
+   */
+  setExtras(objs: THREE.Object3D[]) {
+    for (const o of this.extras) this.heightScene.remove(o);
+    this.extras = objs;
+    for (const o of objs) this.heightScene.add(o);
+    this.heightDirty = true;
+  }
+  /** Something casting shadows changed shape (the patch recentred). */
+  invalidate() { this.heightDirty = true; }
+
+  /**
+   * Each frame. centre: direction of the middle of the view; dist: camera distance from the
+   * planet's centre; sun: direction to the sun (world).
+   */
+  update(renderer: THREE.WebGLRenderer, centre: THREE.Vector3, dist: number, sun: THREE.Vector3, active: boolean) {
+    const on = active && !!this.source && dist < 2.4;
+    this.u.uShOn.value = on ? 1 : 0;
+    if (!on) return;
+    // Region half-width: a little past the horizon when low, wider from high up; in steps.
+    const alt = Math.max(0.002, dist - 1);
+    const want = Math.min(0.7, Math.max(1.3 * alt, 0.8 * Math.sqrt(2 * alt)));
+    const r = 0.04 * Math.pow(1.25, Math.round(Math.log(want / 0.04) / Math.log(1.25)));
+    const c = centre.clone().normalize();
+    if (this.heightDirty || r !== this.radius || c.angleTo(this.centre) > r * 0.15) this.captureHeight(renderer, c, r);
+    if (this.heightDirty || sun.dot(this.lastSun) < Math.cos(0.0015)) this.castShadows(renderer, sun);
+    this.heightDirty = false;
+  }
+
+  private captureHeight(renderer: THREE.WebGLRenderer, c: THREE.Vector3, r: number) {
+    this.centre.copy(c);
+    this.radius = r;
+    let e = new THREE.Vector3(c.z, 0, -c.x);
+    if (e.lengthSq() < 1e-8) e = new THREE.Vector3(1, 0, 0);
+    e.normalize();
+    const n = new THREE.Vector3().crossVectors(c, e);
+    this.u.uShC.value.copy(c); this.u.uShE.value.copy(e); this.u.uShN.value.copy(n);
+    this.u.uShR.value = r;
+    this.shadowMat.uniforms.uR.value = r;
+    const cam = this.cam;
+    cam.left = -r; cam.right = r; cam.top = r; cam.bottom = -r;
+    cam.position.copy(c).multiplyScalar(1.1);
+    cam.up.copy(n);
+    cam.lookAt(0, 0, 0);
+    cam.far = 1.1;
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+    const src = this.source!;
+    src.updateWorldMatrix(true, false);
+    this.terrainCopy.geometry = src.geometry;
+    this.terrainCopy.material = this.heightMat;
+    this.terrainCopy.matrix.copy(src.matrixWorld);
+    this.terrainCopy.matrixWorld.copy(src.matrixWorld);
+    const prev = renderer.getRenderTarget(), prevClear = renderer.getClearColor(new THREE.Color()), prevAlpha = renderer.getClearAlpha();
+    renderer.setClearColor(0x000000, 1);
+    renderer.setRenderTarget(this.height);
+    renderer.clear();
+    renderer.render(this.heightScene, cam);
+    renderer.setRenderTarget(prev);
+    renderer.setClearColor(prevClear, prevAlpha);
+  }
+
+  private castShadows(renderer: THREE.WebGLRenderer, sun: THREE.Vector3) {
+    this.lastSun.copy(sun);
+    (this.shadowMat.uniforms.uSun.value as THREE.Vector3).copy(sun).normalize();
+    const prev = renderer.getRenderTarget();
+    renderer.setRenderTarget(this.shadow);
+    renderer.render(this.quadScene, this.quadCam);
+    renderer.setRenderTarget(prev);
+  }
+
+  /** The height map's material for a mesh whose vertices are placed by its own code. */
+  static heightMaterial(vertexHead: string, vertexBody: string, uniforms: Record<string, THREE.IUniform>): THREE.ShaderMaterial {
+    return new THREE.ShaderMaterial({
+      uniforms,
+      vertexShader: `${vertexHead}
+        varying float vH;
+        void main() {
+          ${vertexBody}
+          vec4 w = modelMatrix * vec4(transformed, 1.0);
+          vH = length(w.xyz) - 1.0;
+          gl_Position = projectionMatrix * viewMatrix * w;
+        }`,
+      fragmentShader: heightFragment,
+    });
+  }
+
+  dispose() {
+    this.height.dispose(); this.shadow.dispose();
+    this.heightMat.dispose(); this.shadowMat.dispose();
+  }
+}
