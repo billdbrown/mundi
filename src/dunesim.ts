@@ -26,6 +26,8 @@ export interface DuneOptions {
   sweeps: number;        // slab moves per cell, in total
   hop: number;           // hop length, cells
   bare?: number;         // chance a slab sticks on bare ground (0.4); lower gathers sand into piles
+  /** Extra smoothing along this axis only ('x' or 'y'), or both: see the end of simulateDunes. */
+  along?: 'x' | 'y' | 'xy';
   seed: number;
 }
 
@@ -122,6 +124,22 @@ export function simulateDunes(o: DuneOptions): Float32Array {
       g[y * n + x] = (4 * f[at(x, y)] + f[at(x + 1, y)] + f[at(x - 1, y)] + f[at(x, y + 1)] + f[at(x, y - 1)]) / 8;
     }
     f = g;
+  }
+  // Sand moves along grid rows, so neighbouring rows drift a little out of step and leave fine
+  // streaks running downwind across every slope (ribs, once the dunes are geometry). Smoothing
+  // along the crests removes them without softening the slip faces, which are steep across.
+  const ax = o.along ?? 'xy';
+  for (let pass = 0; pass < 16; pass++) {
+    const g = new Float32Array(N);
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      const sx = ax === 'y' ? 0 : 1, sy = ax === 'x' ? 0 : 1;
+      let sum = 2 * f[at(x, y)], w = 2;
+      if (sx) { sum += f[at(x + 1, y)] + f[at(x - 1, y)]; w += 2; }
+      if (sy) { sum += f[at(x, y + 1)] + f[at(x, y - 1)]; w += 2; }
+      g[y * n + x] = sum / w;
+    }
+    f = g;
+    if (ax === 'xy' && pass >= 4) break;   // network dunes: less, all ways
   }
   return f;
 }

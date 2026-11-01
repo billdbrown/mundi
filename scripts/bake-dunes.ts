@@ -14,15 +14,15 @@ import { simulateDunes } from '../src/dunesim.ts';
 
 const SIZE = 256, D = Math.PI / 180;
 const kinds = [
-  { name: 'barchan', sand: 0.8, winds: [0], bare: 0.08, sweeps: 600 },
-  { name: 'transverse', sand: 5, winds: [0], sweeps: 600 },
-  { name: 'linear', sand: 2.5, winds: [60 * D, -60 * D], bare: 0.25, sweeps: 500 },
-  { name: 'network', sand: 5, winds: [0, 120 * D, 240 * D], bare: 0.3, sweeps: 500 },
+  { name: 'barchan', sand: 0.8, winds: [0], bare: 0.08, sweeps: 600, along: 'y' as const },
+  { name: 'transverse', sand: 5, winds: [0], sweeps: 600, along: 'y' as const },
+  { name: 'linear', sand: 2.5, winds: [60 * D, -60 * D], bare: 0.25, sweeps: 500, along: 'x' as const },
+  { name: 'network', sand: 5, winds: [0, 120 * D, 240 * D], bare: 0.3, sweeps: 500, along: 'xy' as const },
 ];
 const out = new Uint16Array(SIZE * SIZE * 4);
 kinds.forEach((k, ch) => {
   const t = performance.now();
-  const h = simulateDunes({ size: SIZE, sand: k.sand, winds: k.winds, sweeps: k.sweeps, hop: 3, bare: k.bare, seed: 11 + ch });
+  const h = simulateDunes({ size: SIZE, sand: k.sand, winds: k.winds, sweeps: k.sweeps, hop: 3, bare: k.bare, along: k.along, seed: 11 + ch });
   let max = 0;
   for (let i = 0; i < h.length; i++) { out[i * 4 + ch] = DataUtils.toHalfFloat(h[i]); max = Math.max(max, h[i]); }
   console.log(`${k.name}: ${((performance.now() - t) / 1000).toFixed(1)} s, max height ${max.toFixed(2)} cells`);
