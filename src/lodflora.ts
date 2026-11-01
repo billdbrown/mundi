@@ -12,7 +12,7 @@ import { B, landBiome } from './biomes.ts';
 import { WATER_LAND, WATER_OCEAN, type World } from './world.ts';
 import type { SurfaceData } from './surface.ts';
 import { FLORA, ICEBERG, CACTUS, ROCK, treeGeometry, treeMaterial } from './flora.ts';
-import { groveField, groveFreq, forestMask, openMask } from './groves.ts';
+import { groveField, groveFreq, forestMask, openMask, REF_SPACING } from './groves.ts';
 
 /** Biomes that are forest (trees with clearings) and open country (trees only in groves). */
 const FOREST = new Set<number>([B.TAIGA, B.FOREST, B.TEMPERATE_RAIN, B.RAINFOREST, B.DRY_FOREST]);
@@ -173,14 +173,16 @@ export class LodFlora {
     const hit = this.cache.get(c);
     if (hit) return hit;
     const w = this.world!, g = w.grid, P = g.centers;
-    const spacing = Math.sqrt((4 * Math.PI) / g.count);
+    // Plants are sized and spaced in fixed ground units; a cell's share scales with its area.
+    const spacing = REF_SPACING;
+    const area = (4 * Math.PI) / g.count / (REF_SPACING * REF_SPACING);
     const rng = makeRng(w.params.seed * 7919 + c * 31 + 1);
     const out: number[] = [];
 
     if (w.water[c] === WATER_OCEAN) {
       // Icebergs on cold open sea near the ice.
       if (w.biome[c] !== B.SEA_ICE && w.temperature[c] < 0.2) {
-        const n = Math.floor(rng() * 4);
+        const n = Math.floor(rng() * 4 * area + rng());
         for (let i = 0; i < n; i++) {
           const pt = this.randomPoint(c, rng, true);
           if (!pt) continue;
@@ -207,7 +209,7 @@ export class LodFlora {
         const gf = groveFreq(g.count);
         const riverThin = w.river[c] ? 0.85 : 1;   // the channel itself is kept clear (inWater)
         for (const [kind, col, density, size = 1] of spec) {
-          const n = Math.round(density * DENSITY * groves * riverThin * (0.85 + 0.3 * rng()));
+          const n = Math.round(density * DENSITY * groves * riverThin * area * (0.85 + 0.3 * rng()));
           const shaped = (forest || open) && kind !== ROCK && kind !== CACTUS;
           for (let i = 0; i < n; i++) {
             const pt = this.randomPoint(c, rng, false);

@@ -491,8 +491,10 @@ function buildSmooth(inp: SurfaceInput): Surface {
   const k = Math.max(2, Math.min(6, Math.round(Math.sqrt(850000 / (N * 6)))));
   // Noise scales are tied to the vertex spacing: the finest octave spans about three vertices.
   // Finer than that, neighbouring vertices get unrelated heights and the surface turns to spikes.
-  const freq = 0.5 / spacing;
-  const ridgeBase = 0.45 / spacing;
+  // (Vertex spacing is the cell spacing over k; tuned at k = 3.)
+  const vSpacing = spacing / k;
+  const freq = 0.5 / (3 * vSpacing);
+  const ridgeBase = 0.45 / (3 * vSpacing);
   /** Ridged multi-octave noise, about 0..1: sharp crests where the noise crosses zero. */
   const ridged = (dx: number, dy: number, dz: number) => {
     let sum = 0, amp = 0.5, f = ridgeBase, norm = 0;

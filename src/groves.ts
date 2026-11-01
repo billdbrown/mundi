@@ -22,8 +22,15 @@ const WAVES: [number, number, number, number, number, number][] = Array.from({ l
 });
 const NORM = WAVES.reduce((s, w) => s + w[5], 0);
 
-/** Grove frequency for a world with N cells (radians⁻¹). */
-export const groveFreq = (N: number) => 7 / Math.sqrt((4 * Math.PI) / N);
+/**
+ * Ground distances that should not change with the cell count (tree size and density, grove
+ * size, mesh noise) are given in multiples of this: the cell spacing at 16,002 cells (detail 40),
+ * which they were tuned at. About 0.028 radians.
+ */
+export const REF_SPACING = Math.sqrt((4 * Math.PI) / 16002);
+
+/** Grove frequency (radians⁻¹). The same on every world, whatever its cell count. */
+export const groveFreq = (_N?: number) => 7 / REF_SPACING;
 
 /** About −1..1; high in groves, low in clearings. p is a point near the unit sphere. */
 export function groveField(x: number, y: number, z: number, f: number): number {
