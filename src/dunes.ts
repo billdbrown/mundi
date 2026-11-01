@@ -117,7 +117,14 @@ export interface PatchUniforms {
   uCapA: { value: THREE.Texture | null };
   uCapB: { value: THREE.Texture | null };
   /** How far the patch moved the ground (see LIFT_GLSL); 1 while the patch is drawn. */
-  uCapL: { value: THREE.Texture | null };
+  /**
+   * The patch's relief, worked out once per recentre, one texel per grid vertex (see
+   * PATCH_BAKE_GLSL): 0 lift from dunes, lift from erosion (before its distance fade), dune
+   * fade; 1 dune slope; 2 erosion slope.
+   */
+  uBake0: { value: THREE.Texture | null };
+  uBake1: { value: THREE.Texture | null };
+  uBake2: { value: THREE.Texture | null };
   /** Where rivers run, seen from above: the patch keeps flat floodplains there. */
   uCapR: { value: THREE.Texture | null };
   uPatchOn: { value: number };
@@ -125,43 +132,50 @@ export interface PatchUniforms {
 /** One set, shared by the patch and by whatever must follow its ground (trees, rivers). */
 export const patchUniforms: PatchUniforms = {
   uPatchC: { value: new THREE.Vector3(0, 0, 1) }, uPatchE: { value: new THREE.Vector3(1, 0, 0) }, uPatchN: { value: new THREE.Vector3(0, 1, 0) },
-  uCapA: { value: null }, uCapB: { value: null }, uCapL: { value: null }, uCapR: { value: null }, uPatchOn: { value: 0 },
+  uCapA: { value: null }, uCapB: { value: null }, uBake0: { value: null }, uBake1: { value: null }, uBake2: { value: null }, uCapR: { value: null }, uPatchOn: { value: 0 },
 };
 export const PATCH_N = 288;          // vertices along a side
 export const PATCH_A = 0.15;         // grid spacing at the centre, relative to an even grid
 export const PATCH_R = 0.05;         // half-width, radians (~320 km on an Earth-sized world)
 export const CAPTURE_SIZE = 512;     // texels along a side of the patch's captures
 
-/**
- * Vertex code for the patch (needs NOISE_GLSL, EROSION_GLSL and DUNES_GLSL before it). Each
- * vertex's position is a point (x, y) in the tangent plane at the patch centre; the terrain
- * under it comes from a capture of the terrain mesh seen from straight above (height, normal,
- * colour, climate). The dunes, the rolling hills and the gully octaves the grid is fine enough
- * for raise it, by the same rules as the terrain shader; the rest stays shading there.
- */
-export const PATCH_GLSL = /* glsl */`
+/** Shared by both patch programs: the terrain under a grid vertex, from the captures. */
+const PATCH_BASE_GLSL = /* glsl */`
   uniform vec3 uPatchC, uPatchE, uPatchN;
-  uniform sampler2D uCapA, uCapB, uCapR;
+  uniform sampler2D uCapA, uCapB;
+  vec4 capA, capB;
+  vec3 base, up, n0;
+  vec2 capUv;
+  void patchBase(vec2 lat) {
+    capUv = lat / (2.0 * ${PATCH_R}) + 0.5;
+    capA = texture(uCapA, capUv);
+    capB = texture(uCapB, capUv);
+    // capA: height above the sea (x50), normal east and north (patch-centre frame), moisture.
+    // capB: ground colour, temperature.
+    float rad = 1.0 + capA.x / 50.0;
+    base = uPatchC * sqrt(max(rad * rad - dot(lat, lat), 0.0)) + uPatchE * lat.x + uPatchN * lat.y;
+    up = normalize(base);
+    n0 = normalize(uPatchE * capA.y + uPatchN * capA.z + uPatchC * sqrt(max(1.0 - dot(capA.yz, capA.yz), 0.0)));
+  }
+`;
+
+/**
+ * The patch's relief, baked once per recentre (needs NOISE_GLSL, EROSION_GLSL, DUNES_GLSL
+ * before it): for the grid vertex at lat, the dunes, the rolling hills and the gully octaves
+ * the grid is fine enough for, by the same rules as the terrain shader. The patch's drawing
+ * shaders only read the results (PATCH_GLSL). Run in them directly, this made the patch's
+ * colour shader take ~13 s to compile on Windows, stalling the first descent into a world.
+ */
+export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
+  uniform sampler2D uCapR;
   uniform float uRelief;
-  // 1 when rendering the lift map: erosion at full strength, whatever the camera height.
-  uniform float uLiftPass;
-  varying float vDuneGeo, vSpacing, vEdge;
-  varying vec3 vTerrN, vBase;
-  vec3 pSurf, pNorm, pCol;
-  vec2 pClim;
-  float pLiftDune, pLiftEro;   // for the lift map: dune lift, erosion lift before its distance fade
-  void patchSample(vec2 lat) {
+  vec4 bake0, bake1, bake2;   // see PatchUniforms.uBake0..2
+  void patchBake(vec2 lat) {
     const float R = ${PATCH_R};
-    vec2 uv = lat / (2.0 * R) + 0.5;
-    vec4 a = texture(uCapA, uv), b = texture(uCapB, uv);
-    // a: height above the sea (x50), normal east and north (patch-centre frame), moisture.
-    // b: ground colour, temperature.
-    float rad = 1.0 + a.x / 50.0;
-    vec3 base = uPatchC * sqrt(max(rad * rad - dot(lat, lat), 0.0)) + uPatchE * lat.x + uPatchN * lat.y;
-    vec3 up = normalize(base);
-    vec3 n0 = normalize(uPatchE * a.y + uPatchN * a.z + uPatchC * sqrt(max(1.0 - dot(a.yz, a.yz), 0.0)));
+    patchBase(lat);
+    vec4 a = capA, b = capB;
     vec3 east = normalize(vec3(up.z, 0.0, -up.x)), north = cross(up, east);
-    float hAbove = rad - 1.0;
+    float hAbove = length(base) - 1.0;
     float highland = smoothstep(0.12, 0.85, hAbove / uRelief);
     // Grid spacing here, and the fade to plain terrain at the patch edge.
     float s = max(abs(lat.x), abs(lat.y)) / R;
@@ -178,25 +192,20 @@ export const PATCH_GLSL = /* glsl */`
       if (k > 0.0) d = dunes(base, w, raw);
     }
     float hk = k * geo;
-    float lift = raw * DUNE_CELL * hk;
-    vec3 grad = (east * d.z + north * d.w) * hk;
 
-    // Erosion, as in the terrain shader (sky.ts): hills and the gully octaves the grid carries.
-    // Worked out at full strength, then faded with distance from the camera, so the lift map
-    // (which trees and rivers read) can apply the same fade itself.
-    pLiftDune = lift;
-    pLiftEro = 0.0;
+    // Erosion, as in the terrain shader (sky.ts), at full strength: the drawing shaders fade it
+    // with distance from the camera.
+    float liftEro = 0.0;
     vec3 eroG = vec3(0.0);
-    float farDist = uLiftPass > 0.5 ? 1.0 : 1.0 - smoothstep(0.08, 0.22, length(cameraPosition - base));
-    float eroFar = uErosion * edge * (farDist > 0.0 ? 1.0 : 0.0);
+    float eroFar = uErosion * edge;
     // Rivers run on flat valley floors: no hills or gullies within a few km of one. (Relief
     // crossing a river also rose between the river ribbon's sparse points and hid the water.)
     if (eroFar > 0.0) {
-      float t = 1.0 / ${CAPTURE_SIZE}.0, river = texture(uCapR, uv).r;
+      float t = 1.0 / ${CAPTURE_SIZE}.0, river = texture(uCapR, capUv).r;
       for (int i = 0; i < 8; i++) {
         float ang = float(i) * 0.785398;
         vec2 o = vec2(cos(ang), sin(ang)) * t;
-        river = max(river, max(texture(uCapR, uv + o * 2.0).r, texture(uCapR, uv + o * 4.0).r * 0.6));
+        river = max(river, max(texture(uCapR, capUv + o * 2.0).r, texture(uCapR, capUv + o * 4.0).r * 0.6));
       }
       eroFar *= 1.0 - river;
     }
@@ -211,24 +220,43 @@ export const PATCH_GLSL = /* glsl */`
         vec4 hl = hills(base, up, smoothstep(0.02, 0.3, hAbove / uRelief)) * (1.0 - iceK);
         macro += hl.yzw;
         float eroK = smoothstep(0.0, 0.07, length(macro)) * (1.0 - iceK) * eroFar;
-        pLiftEro += hl.x * eroFar;
+        liftEro += hl.x * eroFar;
         eroG += hl.yzw * eroFar;
         if (eroK > 0.0) {
           Ero er = erosionSplit(base, up, macro, 0.0, spacing);
-          pLiftEro += er.geoH * eroK;
+          liftEro += er.geoH * eroK;
           eroG += er.geo * eroK;
         }
       }
     }
-    lift += pLiftEro * farDist;
-    grad += eroG * farDist;
-    pSurf = base + up * lift;
-    pNorm = normalize(n0 - grad);
-    pCol = b.rgb;
-    pClim = vec2(a.w, b.w);
-    vDuneGeo = geo;
-    vSpacing = spacing;
-    vEdge = edge;
+    bake0 = vec4(raw * DUNE_CELL * hk, liftEro, geo, 0.0);
+    bake1 = vec4((east * d.z + north * d.w) * hk, 0.0);
+    bake2 = vec4(eroG, 0.0);
+  }
+`;
+
+/**
+ * Vertex code for the patch's drawing shaders: the terrain under the vertex, raised by the baked
+ * relief (erosion faded with distance from the camera, as in the terrain shader).
+ */
+export const PATCH_GLSL = PATCH_BASE_GLSL + /* glsl */`
+  uniform sampler2D uBake0, uBake1, uBake2;
+  varying float vDuneGeo;
+  varying vec3 vTerrN, vBase, vEroGeo;
+  vec3 pSurf, pNorm, pCol;
+  vec2 pClim;
+  void patchSample(vec2 lat) {
+    patchBase(lat);
+    ivec2 ij = ivec2(gl_VertexID % ${PATCH_N}, gl_VertexID / ${PATCH_N});
+    vec4 b0 = texelFetch(uBake0, ij, 0), b1 = texelFetch(uBake1, ij, 0), b2 = texelFetch(uBake2, ij, 0);
+    float farDist = 1.0 - smoothstep(0.08, 0.22, length(cameraPosition - base));
+    pSurf = base + up * (b0.x + b0.y * farDist);
+    pNorm = normalize(n0 - b1.xyz - b2.xyz * farDist);
+    pCol = capB.rgb;
+    pClim = vec2(capA.w, capB.w);
+    vDuneGeo = b0.z;
+    // The erosion slope this vertex carries as relief: the pixel shader shades the rest.
+    vEroGeo = b2.xyz * farDist;
     vTerrN = n0;
     vBase = base;
   }
@@ -236,17 +264,26 @@ export const PATCH_GLSL = /* glsl */`
 
 /**
  * For things that sit on the ground (trees, rivers): how far the patch has raised or lowered
- * it under a point p, from the lift map the patch renders when it recentres.
+ * it under a point p, from the baked relief (the grid's spacing mapping inverted to find p's
+ * place in it).
  */
 export const LIFT_GLSL = /* glsl */`
   uniform vec3 uPatchC, uPatchE, uPatchN;
-  uniform sampler2D uCapL;
+  uniform sampler2D uBake0;
   uniform float uPatchOn;
+  float gridT(float x) {
+    // Inverse of x = R t (a + (1 - a)|t|), the grid's spacing (dunepatch.ts).
+    const float A = ${PATCH_A};
+    float ax = min(abs(x) / ${PATCH_R}, 1.0);
+    return sign(x) * (-A + sqrt(A * A + 4.0 * (1.0 - A) * ax)) / (2.0 * (1.0 - A));
+  }
   float patchLift(vec3 p) {
     if (uPatchOn < 0.5 || dot(normalize(p), uPatchC) < 0.9) return 0.0;
-    vec2 uv = vec2(dot(p, uPatchE), dot(p, uPatchN)) / (2.0 * ${PATCH_R}) + 0.5;
-    if (uv.x <= 0.0 || uv.y <= 0.0 || uv.x >= 1.0 || uv.y >= 1.0) return 0.0;
-    vec2 l = texture(uCapL, uv).xy;
+    vec2 lat = vec2(dot(p, uPatchE), dot(p, uPatchN));
+    if (abs(lat.x) >= ${PATCH_R} || abs(lat.y) >= ${PATCH_R}) return 0.0;
+    vec2 t = vec2(gridT(lat.x), gridT(lat.y)) * 0.5 + 0.5;            // 0..1 across the grid
+    vec2 uv = (t * ${PATCH_N - 1}.0 + 0.5) / ${PATCH_N}.0;           // texel centres
+    vec2 l = texture(uBake0, uv).xy;
     return l.x + l.y * (1.0 - smoothstep(0.08, 0.22, length(cameraPosition - p)));
   }
 `;

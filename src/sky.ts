@@ -240,9 +240,6 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           varying vec2 vCiv;
         #endif
         #ifdef DUNE_PATCH
-          ${NOISE_GLSL}
-          ${EROSION_GLSL}
-          ${DUNES_GLSL}
           ${PATCH_GLSL}
         #endif`)
       .replace('#include <color_vertex>', `#include <color_vertex>
@@ -310,8 +307,8 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         }
         // Dunes: simulated tiles (dunes.ts).
         #ifdef DUNE_PATCH
-          varying float vDuneGeo, vSpacing, vEdge;
-          varying vec3 vTerrN, vBase;
+          varying float vDuneGeo;
+          varying vec3 vTerrN, vBase, vEroGeo;
         #endif
 ` + EROSION_GLSL + DUNES_GLSL)
       .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
@@ -381,22 +378,16 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
             macro += hg;
             // Strength follows the slope smoothly: flats stay flat, and no hard edge where it starts.
             eroK = smoothstep(0.0, 0.07, length(macro)) * (1.0 - iceK) * uErosion * eroFar;
+            eroGrad = hg * uErosion * eroFar;
+            if (eroK > 0.0) {
+              vec4 er = erosion(eroP, up, macro, foot);
+              eroH = er.x;
+              eroGrad += er.yzw * eroK;
+            }
+            // On the patch the hills and coarse gullies are relief already (in the normal): shade
+            // only what its vertices didn't raise. (Fades back in at the patch edge with them.)
             #ifdef DUNE_PATCH
-              // Hills and coarse gullies are relief on the patch; shading only where it hands
-              // back to the plain terrain at its edge.
-              eroGrad = hg * uErosion * eroFar * (1.0 - vEdge);
-              if (eroK > 0.0) {
-                Ero er = erosionSplit(eroP, up, macro, foot, vSpacing);
-                eroH = er.h;
-                eroGrad += (er.shade + er.geo * (1.0 - vEdge)) * eroK;
-              }
-            #else
-              eroGrad = hg * uErosion * eroFar;
-              if (eroK > 0.0) {
-                vec4 er = erosion(eroP, up, macro, foot);
-                eroH = er.x;
-                eroGrad += er.yzw * eroK;
-              }
+              eroGrad -= vEroGeo;
             #endif
           }
         }

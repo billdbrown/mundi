@@ -18,7 +18,7 @@
  */
 import * as THREE from 'three';
 import { makeTerrainMaterial, NOISE_GLSL, type CloudUniforms } from './sky.ts';
-import { PATCH_N, PATCH_A, PATCH_R, CAPTURE_SIZE, DUNES_GLSL, PATCH_GLSL, patchUniforms, type PatchUniforms } from './dunes.ts';
+import { PATCH_N, PATCH_A, PATCH_R, CAPTURE_SIZE, DUNES_GLSL, PATCH_GLSL, PATCH_BAKE_GLSL, patchUniforms, type PatchUniforms } from './dunes.ts';
 import { EROSION_GLSL } from './erosion.ts';
 
 const CAPTURE = CAPTURE_SIZE;
@@ -54,9 +54,10 @@ export class DunePatch {
   private u: PatchUniforms;
   private capA: THREE.WebGLRenderTarget;
   private capB: THREE.WebGLRenderTarget;
-  /** Lift map: how far the patch moves the ground, for trees and rivers to follow. */
-  private capL: THREE.WebGLRenderTarget;
-  private liftScene = new THREE.Scene();
+  /** The baked relief, one texel per grid vertex (PatchUniforms.uBake0..2). */
+  private bake: THREE.WebGLRenderTarget[];
+  private bakeScene = new THREE.Scene();
+  private bakeMat: THREE.ShaderMaterial;
   /** River mask: rivers and streams drawn from above, white on black. */
   private capR: THREE.WebGLRenderTarget;
   private riverScene = new THREE.Scene();
@@ -74,12 +75,14 @@ export class DunePatch {
     const opts = { type: THREE.HalfFloatType, format: THREE.RGBAFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true };
     this.capA = new THREE.WebGLRenderTarget(CAPTURE, CAPTURE, opts);
     this.capB = new THREE.WebGLRenderTarget(CAPTURE, CAPTURE, opts);
-    this.capL = new THREE.WebGLRenderTarget(CAPTURE, CAPTURE, { ...opts, depthBuffer: false });
+    this.bake = [0, 1, 2].map(() => new THREE.WebGLRenderTarget(PATCH_N, PATCH_N, { ...opts, depthBuffer: false }));
     this.capR = new THREE.WebGLRenderTarget(CAPTURE, CAPTURE, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
     this.u = patchUniforms;
     this.u.uCapA.value = this.capA.texture;
     this.u.uCapB.value = this.capB.texture;
-    this.u.uCapL.value = this.capL.texture;
+    this.u.uBake0.value = this.bake[0].texture;
+    this.u.uBake1.value = this.bake[1].texture;
+    this.u.uBake2.value = this.bake[2].texture;
     this.u.uCapR.value = this.capR.texture;
     const uniforms = { uE: { value: new THREE.Vector3() }, uN: { value: new THREE.Vector3() } };
     this.matA = new THREE.ShaderMaterial({ vertexShader: captureVertex, fragmentShader: captureFragment('A'), uniforms, vertexColors: true });
@@ -124,14 +127,8 @@ export class DunePatch {
     pre.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, cloud, this.u);
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', `#include <common>
-${NOISE_GLSL}
-${EROSION_GLSL}
-${DUNES_GLSL}
-${PATCH_GLSL}`)
-        .replace('#include <begin_vertex>', `#include <begin_vertex>
-patchSample(position.xy);
-transformed = pSurf;`);
+        .replace('#include <common>', `#include <common>\n${PATCH_GLSL}`)
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\npatchSample(position.xy);\ntransformed = pSurf;');
     };
     pre.customProgramCacheKey = () => 'dune-patch-depth';
     this.depth = new THREE.Mesh(geo, pre);
@@ -141,26 +138,29 @@ transformed = pSurf;`);
     this.mesh.add(this.depth, this.colour);
     this.mesh.visible = false;
 
-    // The lift map: the same grid, each vertex drawn at its own place in the map (its tangent-
-    // plane position scaled to the square), writing how far it moves the ground.
-    const lift = new THREE.ShaderMaterial({
-      uniforms: { ...cloud, ...this.u, uLiftPass: { value: 1 } },
-      vertexShader: `${NOISE_GLSL}
-${EROSION_GLSL}
-${DUNES_GLSL}
-${PATCH_GLSL}
-        varying vec2 vLift;
+    // The bake: each grid vertex as one point, at its own texel, writing its relief. Run once per
+    // recentre (three passes, one per target), so the drawing shaders stay small.
+    this.bakeMat = new THREE.ShaderMaterial({
+      uniforms: { ...cloud, ...this.u, uOut: { value: 0 } },
+      vertexShader: `${NOISE_GLSL}\n${EROSION_GLSL}\n${DUNES_GLSL}\n${PATCH_BAKE_GLSL}
+        varying vec4 vOut0, vOut1, vOut2;
         void main() {
-          patchSample(position.xy);
-          vLift = vec2(pLiftDune, pLiftEro);
-          gl_Position = vec4(position.xy / ${PATCH_R}, 0.0, 1.0);
+          patchBake(position.xy);
+          vOut0 = bake0; vOut1 = bake1; vOut2 = bake2;
+          vec2 ij = vec2(float(gl_VertexID % ${PATCH_N}), float(gl_VertexID / ${PATCH_N}));
+          gl_Position = vec4((ij + 0.5) / ${PATCH_N}.0 * 2.0 - 1.0, 0.0, 1.0);
+          gl_PointSize = 1.0;
         }`,
-      fragmentShader: 'varying vec2 vLift; void main() { gl_FragColor = vec4(vLift, 0.0, 1.0); }',
+      fragmentShader: `uniform int uOut;
+        varying vec4 vOut0, vOut1, vOut2;
+        void main() { gl_FragColor = uOut == 0 ? vOut0 : uOut == 1 ? vOut1 : vOut2; }`,
       depthTest: false, depthWrite: false,
     });
-    const liftMesh = new THREE.Mesh(geo, lift);
-    liftMesh.frustumCulled = false;
-    this.liftScene.add(liftMesh);
+    const points = new THREE.BufferGeometry();
+    points.setAttribute('position', geo.getAttribute('position'));
+    const bakePts = new THREE.Points(points, this.bakeMat);
+    bakePts.frustumCulled = false;
+    this.bakeScene.add(bakePts);
   }
 
   /** The rivers and streams, so the patch keeps flat floodplains along them. */
@@ -188,9 +188,11 @@ ${PATCH_GLSL}
   /**
    * Each frame: centre is the direction of the point the view is centred on, dist the camera's
    * distance from the planet's centre. Captures the terrain again when the view has moved.
+   * wait: stay hidden until the shaders are compiled (false for screenshots, which would
+   * otherwise come out with or without the patch depending on timing).
    */
-  update(renderer: THREE.WebGLRenderer, centre: THREE.Vector3, dist: number, active: boolean) {
-    const on = active && !!this.source && this.source.visible && dist < PATCH_MAX_DIST;
+  update(renderer: THREE.WebGLRenderer, centre: THREE.Vector3, dist: number, active: boolean, wait = true) {
+    const on = (this.ready || !wait) && active && !!this.source && this.source.visible && dist < PATCH_MAX_DIST;
     this.mesh.visible = on;
     this.u.uPatchOn.value = on ? 1 : 0;
     if (!on) return;
@@ -233,15 +235,47 @@ ${PATCH_GLSL}
     renderer.setRenderTarget(this.capR);
     renderer.clear();
     renderer.render(this.riverScene, this.capCam);
-    renderer.setRenderTarget(this.capL);
-    renderer.clear();
-    renderer.render(this.liftScene, this.capCam);
+    this.bake.forEach((target, k) => {
+      this.bakeMat.uniforms.uOut.value = k;
+      renderer.setRenderTarget(target);
+      renderer.clear();
+      renderer.render(this.bakeScene, this.capCam);
+    });
     renderer.setRenderTarget(prevTarget);
     renderer.setClearColor(prevClear, prevAlpha);
   }
 
+  /**
+   * Compile the patch's shaders now, in the background where the browser supports it
+   * (KHR_parallel_shader_compile), instead of in the frame where the camera first gets low:
+   * the colour shader alone takes ~12 s to compile on Windows. The patch stays hidden until they
+   * are ready (the plain terrain shows meanwhile). Each is compiled against the kind of target
+   * and geometry it will really draw with, or three.js compiles a different variant.
+   * scene: for its lights and fog; target: where the main view renders (null: the screen).
+   */
+  prewarm(renderer: THREE.WebGLRenderer, camera: THREE.Camera, scene: THREE.Scene, target: THREE.WebGLRenderTarget | null): Promise<unknown> {
+    const prev = renderer.getRenderTarget();
+    const terrainGeo = this.source?.geometry ?? new THREE.PlaneGeometry();
+    const river = (this.riverScene.children[0] as THREE.Mesh | undefined)?.geometry;
+    const bare = new THREE.BufferGeometry();
+    bare.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
+    const offscreen = new THREE.Scene();
+    offscreen.add(new THREE.Mesh(terrainGeo, this.matA), new THREE.Mesh(terrainGeo, this.matB), new THREE.Mesh(river ?? bare, this.riverMat));
+    offscreen.add(this.bakeScene.children[0].clone());
+    renderer.setRenderTarget(this.capA);
+    const jobs = [renderer.compileAsync(offscreen, this.capCam)];
+    renderer.setRenderTarget(target);
+    jobs.push(renderer.compileAsync(this.mesh, camera, scene));
+    renderer.setRenderTarget(prev);
+    return Promise.all(jobs).then(() => { this.ready = true; }).finally(() => bare.dispose());
+  }
+  /** False until prewarm's shaders are compiled. */
+  private ready = false;
+
   dispose() {
-    this.capA.dispose(); this.capB.dispose(); this.capL.dispose(); this.capR.dispose();
+    this.capA.dispose(); this.capB.dispose(); this.capR.dispose();
+    for (const t of this.bake) t.dispose();
+    this.bakeMat.dispose();
     this.riverMat.dispose();
     this.matA.dispose(); this.matB.dispose();
     this.colour.geometry.dispose();

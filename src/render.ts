@@ -10,7 +10,7 @@ import { B } from './biomes.ts';
 import { hash01 } from './rng.ts';
 import { makeSimplex } from './noise.ts';
 import { SEA, RELIEF, surfaceQueries, type MeshData, type SurfaceData, type SurfaceQueries } from './surface.ts';
-import { buildForest, treeMaterial } from './flora.ts';
+import { buildForest, treeMaterial, treeGeometry } from './flora.ts';
 import { LodFlora, FADE_NEAR, FADE_FAR } from './lodflora.ts';
 import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere, makeStars, makeSky, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
 import type { CloudPixels } from './clouds.ts';
@@ -112,6 +112,24 @@ export class PlanetView {
   /** Centuries: the history being shown, its drawing, and whether borders are on. */
   private history: History | null = null;
   private civ!: CivLayer;
+  private prewarmed = false;
+  /**
+   * Shaders first needed near the ground (the ground patch, trees, the low sky) compile in the
+   * background once the first world is up, rather than stalling the first descent for seconds.
+   * Compiled against the target they'll draw into (the photo look renders off-screen first).
+   */
+  private prewarm() {
+    const r = this.renderer, prev = r.getRenderTarget();
+    const tree = new THREE.InstancedMesh(treeGeometry(0), treeMaterial, 1);
+    tree.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(3), 3);
+    tree.visible = false;
+    this.planet.add(tree);
+    const target = this.opts.look === 'photo' && this.composer ? this.composer.readBuffer : null;
+    r.setRenderTarget(target);
+    const jobs = [r.compileAsync(this.scene, this.camera), this.dunePatch.prewarm(r, this.camera, this.scene, target)];
+    r.setRenderTarget(prev);
+    Promise.all(jobs).catch(() => {}).finally(() => { this.planet.remove(tree); tree.dispose(); });
+  }
   /** Fine ground under the middle of the view, where dunes stand up as shapes (dunepatch.ts). */
   private dunePatch!: DunePatch;
   private civBorders = false;
@@ -707,7 +725,7 @@ export class PlanetView {
       this.virtualPos.copy(this.camera.position);
       this.applyTilt(d);
       // The patch centres on the point in the middle of the view: the untilted camera's nadir.
-      this.dunePatch.update(this.renderer, this.virtualPos, d, this.opts.mode === 'biome' && this.opts.style === 'smooth');
+      this.dunePatch.update(this.renderer, this.virtualPos, d, this.opts.mode === 'biome' && this.opts.style === 'smooth', this.frozen === null);
     }
 
     this.sun.getWorldPosition(this.sunDir).normalize();
@@ -790,6 +808,7 @@ export class PlanetView {
     this.faceCell = data.faces;
     this.planet.add(this.terrain);
     this.dunePatch.setTerrain(data.style === 'smooth' ? this.terrain : null);
+    if (!this.prewarmed && data.style === 'smooth') { this.prewarmed = true; setTimeout(() => this.prewarm(), 0); }
 
     if (data.water) {
       this.water = new THREE.Mesh(toGeometry(data.water), this.waterMat);
