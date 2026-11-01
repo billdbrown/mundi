@@ -705,7 +705,7 @@ export class PlanetView {
       const h = Math.max(probe!.heightAt(x, y, z, SEA, probe!.cellOf(x, y, z, cell)), SEA) + GLIFT;
       return [(x / l) * h, (y / l) * h, (z / l) * h];
     };
-    for (let c = 0; c < N; c++) {
+    for (let c = 0; c < N && !data.grid; c++) {
       const ks = g.corners[c], m = ks.length;
       for (let i = 0; i < m; i++) {
         const nb = g.neighbors[c][i];
@@ -728,7 +728,8 @@ export class PlanetView {
       }
     }
     const gg = new THREE.BufferGeometry();
-    gg.setAttribute('position', new THREE.Float32BufferAttribute(gl, 3));
+    // The worker drapes the grid on the smooth surface (exact mesh vertices); fall back otherwise.
+    gg.setAttribute('position', data.grid ? new THREE.BufferAttribute(data.grid, 3) : new THREE.Float32BufferAttribute(gl, 3));
     this.gridLines = new THREE.LineSegments(gg, makeGridMaterial(this.sunU));
     this.gridLines.renderOrder = 2;
     this.planet.add(this.gridLines);

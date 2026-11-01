@@ -28,6 +28,8 @@ interface Surface {
   cellTop: Float32Array;
   /** Height at each corner (smooth only). */
   cornerH: Float32Array | null;
+  /** Grid lines along the drawn surface, as segment pairs (smooth only). */
+  grid?: Float32Array;
 }
 
 /** Raw arrays for one mesh: what crosses from the worker to the page. */
@@ -51,6 +53,8 @@ export interface SurfaceData {
   trees: TreeData;
   cellTop: Float32Array;
   cornerH: Float32Array | null;
+  /** Grid lines draped on the drawn surface (smooth only). */
+  grid: Float32Array | null;
 }
 
 export interface BuildOptions {
@@ -81,7 +85,7 @@ export function buildSurfaceData(world: World, o: BuildOptions): SurfaceData {
   return {
     style: o.style, terrain: meshData(s.terrain), faces: s.faces,
     water: s.water ? meshData(s.water) : null, trees: packTrees(s.trees),
-    cellTop: s.cellTop, cornerH: s.cornerH,
+    cellTop: s.cellTop, cornerH: s.cornerH, grid: s.grid ?? null,
   };
 }
 
@@ -93,7 +97,7 @@ export function surfaceTransfer(d: SurfaceData): ArrayBuffer[] {
     if (!m) continue;
     add(m.position); add(m.normal); add(m.color); add(m.depth); add(m.index);
   }
-  add(d.faces); add(d.cellTop); add(d.cornerH);
+  add(d.faces); add(d.cellTop); add(d.cornerH); add(d.grid);
   for (const v of Object.values(d.trees)) add(v as ArrayBufferView);
   return [...out];
 }
@@ -705,7 +709,30 @@ function buildSmooth(inp: SurfaceInput): Surface {
     water.setIndex(windex);
   }
 
-  return { terrain, faces: Int32Array.from(faces), water, trees, cellTop: cellH, cornerH };
+  // Grid lines through the mesh's own vertices along each cell edge (corner, edge points,
+  // corner), so they lie exactly on the drawn ground; over water, at the water level.
+  const gp = terrain.getAttribute('position');
+  const gridOut: number[] = [];
+  const pushV = (v: number, lvl: number) => {
+    const x = gp.getX(v), y = gp.getY(v), z = gp.getZ(v), l = Math.hypot(x, y, z);
+    const r = Math.max(l, lvl) + 0.00035;
+    gridOut.push((x / l) * r, (y / l) * r, (z / l) * r);
+  };
+  for (let c = 0; c < N; c++) {
+    const ks = g.corners[c], m = ks.length;
+    for (let i = 0; i < m; i++) {
+      const nb = g.neighbors[c][i];
+      if (nb < c) continue;
+      const k0 = ks[i], k1 = ks[(i + 1) % m];
+      const lvl = Math.max(SEA, vLevel[c] > 0 && vLevel[nb] > 0 ? Math.min(vLevel[c], vLevel[nb]) : SEA);
+      const chain = [corner(k0)];
+      for (let j = 1; j < k; j++) chain.push(edgePoint(k0, k1, j));
+      chain.push(corner(k1));
+      for (let j = 0; j < chain.length - 1; j++) { pushV(chain[j], lvl); pushV(chain[j + 1], lvl); }
+    }
+  }
+
+  return { terrain, faces: Int32Array.from(faces), water, trees, cellTop: cellH, cornerH, grid: Float32Array.from(gridOut) };
 }
 
 // ---------------------------------------------------------------------------------------------
