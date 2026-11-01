@@ -18,10 +18,12 @@ export interface GameData {
   /** Bitmask of RES_* per cell. */
   resources: Uint8Array;
   sites: Site[];
+  /** How good each cell is to live on (−1: not at all). */
+  score: Float32Array;
 }
 
 const FOREST = new Set<number>([B.FOREST, B.TEMPERATE_RAIN, B.RAINFOREST, B.TAIGA, B.DRY_FOREST]);
-const FARMLAND: Partial<Record<number, number>> = {
+export const FARMLAND: Partial<Record<number, number>> = {
   [B.GRASSLAND]: 1, [B.FOREST]: 0.8, [B.DRY_FOREST]: 0.7, [B.SAVANNA]: 0.6, [B.TEMPERATE_RAIN]: 0.6,
   [B.RAINFOREST]: 0.5, [B.STEPPE]: 0.4, [B.BEACH]: 0.4, [B.TAIGA]: 0.3, [B.TUNDRA]: 0.1, [B.DESERT]: 0.1,
 };
@@ -124,7 +126,7 @@ export function gameData(w: World): GameData {
       ring = next;
     }
   }
-  return { continent, continents, resources, sites };
+  return { continent, continents, resources, sites, score };
 }
 
 /** Everything as plain JSON: one entry per cell, plus continents and sites. */

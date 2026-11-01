@@ -12,6 +12,7 @@ import { WATER_LAKE, WATER_OCEAN } from './world.ts';
 import type { GameData } from './gamedata.ts';
 import { nameMaker } from './gamedata.ts';
 import { B, BIOMES } from './biomes.ts';
+import { HISTORY_YEARS, popAt, realmAt, type History } from './civ.ts';
 
 export type Lens = 'earth' | 'map' | 'heat' | 'rain' | 'plates';
 
@@ -28,6 +29,10 @@ export interface App {
   onDrawn(f: () => void): void;
   busy(): boolean;
   renderer: PlanetView;
+  /** Centuries: this world's simulated history (computed once, in a worker). */
+  history(): Promise<History>;
+  /** Identifies the current world, so a history can be matched to it. */
+  historyKey(): string;
 }
 
 const LENSES: { id: Lens; label: string; icon: string; view: Partial<ViewOptions> }[] = [
@@ -118,11 +123,14 @@ export function mountShell(app: App) {
       <button class="link" id="advanced-toggle">Advanced settings</button>
     </aside>
     <section class="almanac" id="almanac"></section>
+    <section class="chronicle" id="chronicle" hidden><h3>Chronicle</h3><div id="chronicle-list"></div></section>
     <div class="chips" id="chips">${PRESETS.map((p) => `<button data-preset="${p.id}">${p.label}</button>`).join('')}</div>
     <div class="clock" id="clock">
       <button data-scale="day" title="Speed time up: a day passes in 24 seconds"><span class="ico">☀</span> Watch a day</button>
       <button data-scale="year" title="Speed time up: a year passes in 30 seconds"><span class="ico">❄</span> Watch a year</button>
+      <button data-scale="centuries" title="Watch 2,000 years of history: settlements, farms, roads and realms"><span class="ico">⌂</span> Watch centuries</button>
       <i class="yearbar" id="yearbar" hidden><b id="yearmark"></b></i>
+      <input type="range" class="timeline" id="timeline" min="0" max="${HISTORY_YEARS}" step="1" value="0" hidden title="Drag through history" />
       <span class="date" id="date"></span>
     </div>
     <div class="proj" id="proj">
@@ -193,26 +201,99 @@ export function mountShell(app: App) {
   // --- Clock: speed time up. A day runs the sun round (day and night); a year sweeps the
   // seasons (snow, sea ice, autumn colour). Clicking the running one pauses it. ---
   const RATES = { day: 1 / 24, year: 365 / 30 };   // days per second: a day in 24 s, a year in 30 s
-  let scale: 'day' | 'year' | null = null, everPlayed = false;
+  let scale: 'day' | 'year' | 'centuries' | null = null, everPlayed = false;
+  // Centuries: 2,000 years in about 70 seconds. The history arrives from a worker.
+  const CENTURY_RATE = HISTORY_YEARS / 70;
+  let history: History | null = null, historyFor = '', civYear = -1, loadingHistory = false;
   const applyClock = () => {
-    r.setClock(scale ? RATES[scale] : 0);
+    r.setClock(scale === 'day' || scale === 'year' ? RATES[scale] : 0);
     // Day/night only makes sense at day speed; at year speed it would strobe.
     app.setView({ light: scale === 'day' ? 'cycle' : 'follow' });
     root.querySelectorAll<HTMLButtonElement>('[data-scale]').forEach((b) => {
       const on = b.dataset.scale === scale;
       b.classList.toggle('on', on);
-      b.querySelector('.ico')!.textContent = on ? '❚❚' : b.dataset.scale === 'day' ? '☀' : '❄';
+      b.querySelector('.ico')!.textContent = on ? '❚❚' : ({ day: '☀', year: '❄', centuries: '⌂' } as Record<string, string>)[b.dataset.scale!];
     });
     $('clock').classList.toggle('running', scale !== null);
     $('yearbar').hidden = scale !== 'year';
+    $('timeline').hidden = civYear < 0;
+    showCiv();
   };
+  /** Push the current year to the view, and the chronicle and almanac to the page. */
+  const showCiv = () => {
+    const on = civYear >= 0 && !!history;
+    r.setCiv(on ? civYear : -1, on);
+    $('chronicle').hidden = !on;
+    $('almanac').style.display = on ? 'none' : '';
+    if (on) ($('timeline') as HTMLInputElement).value = String(Math.round(civYear));
+    renderChronicle();
+  };
+  let shownEvents = -1;
+  const renderChronicle = () => {
+    if (!history || civYear < 0) return;
+    const n = history.events.findIndex((e) => e.year > civYear);
+    const upto = n < 0 ? history.events.length : n;
+    if (upto === shownEvents) return;
+    shownEvents = upto;
+    const recent = history.events.slice(Math.max(0, upto - 7), upto);
+    $('chronicle-list').innerHTML = recent.length
+      ? recent.map((e) => `<p><b>${e.year}</b> ${e.text}</p>`).join('')
+      : '<p class="quiet">An empty world, waiting.</p>';
+  };
+  const startCenturies = async () => {
+    const key = app.historyKey();
+    if (!history || historyFor !== key) {
+      loadingHistory = true;
+      $('date').textContent = 'Writing 2,000 years of history…';
+      const h = await app.history();
+      loadingHistory = false;
+      if (app.historyKey() !== key || scale !== 'centuries') return;   // the world changed meanwhile
+      history = h; historyFor = key;
+      r.setHistory(h);
+      civYear = 0; shownEvents = -1;
+    } else if (civYear < 0 || civYear >= HISTORY_YEARS) {
+      civYear = 0; shownEvents = -1;
+    }
+    applyClock();
+  };
+  // A new world drops the old history.
+  const dropHistoryIfStale = () => {
+    if (history && historyFor !== app.historyKey()) {
+      history = null; historyFor = ''; civYear = -1;
+      r.setHistory(null);
+      if (scale === 'centuries') scale = null;
+      applyClock();
+    }
+  };
+  let lastT = performance.now();
+  const tickCiv = (now: number) => {
+    const dt = Math.min(0.1, (now - lastT) / 1000);
+    lastT = now;
+    if (scale === 'centuries' && history && civYear >= 0) {
+      civYear = Math.min(HISTORY_YEARS, civYear + dt * CENTURY_RATE);
+      if (civYear >= HISTORY_YEARS) { scale = null; applyClock(); }
+      else showCiv();
+    }
+    requestAnimationFrame(tickCiv);
+  };
+  requestAnimationFrame(tickCiv);
+  $('timeline').addEventListener('input', () => {
+    civYear = Number(($('timeline') as HTMLInputElement).value);
+    showCiv();
+  });
   root.querySelectorAll<HTMLButtonElement>('[data-scale]').forEach((b) => {
     b.onclick = () => {
-      const s = b.dataset.scale as 'day' | 'year';
+      const s = b.dataset.scale as 'day' | 'year' | 'centuries';
       scale = scale === s ? null : s;
       everPlayed ||= scale !== null;
+      if (scale === 'centuries') {
+        if (r.isMap() === false && app.lens() !== 'earth' && app.lens() !== 'map') applyLens('earth');
+        void startCenturies();
+        return;
+      }
       // Seasons and nightfall only show on the Earth view, not on the data maps.
       if (scale && app.lens() !== 'earth') applyLens('earth');
+      void loadingHistory;
       // Day and night need the globe: the flat map has no night side.
       if (scale === 'day' && r.isMap()) setProj(false);
       // Start the day at mid-morning where you are looking, so dusk arrives within seconds.
@@ -235,6 +316,20 @@ export function mountShell(app: App) {
     const sIdx = Math.floor((((doy - 355 + 365) % 365)) / 91.25) % 4;
     const date = `${month} ${Math.floor(doy % 30.42) + 1}`;
     let text: string;
+    if (civYear >= 0 && history && (scale === 'centuries' || scale === null)) {
+      const y = Math.round(civYear);
+      const live = history.settlements.filter((s) => s.founded <= y);
+      const realms = new Set(live.map((s) => realmAt(s, y)));
+      const people = live.reduce((sum, s) => sum + popAt(s, y), 0) * 10;
+      const ppl = people >= 1e6 ? `${(people / 1e6).toFixed(1)}M` : `${Math.round(people / 1000)}k`;
+      text = `Year ${y} · ${live.length} towns · ${realms.size} realm${realms.size === 1 ? '' : 's'} · ${ppl} people`;
+      if (scale === null) text = `Paused · ${text}`;
+      $('date').textContent = text;
+      $('yearmark').style.left = `${(doy / 365) * 100}%`;
+      requestAnimationFrame(tickDate);
+      return;
+    }
+    if (loadingHistory) { requestAnimationFrame(tickDate); return; }
     if (scale === 'day') {
       // Local time at the middle of the view, so the label agrees with what you see.
       const lh = r.localHour(), hh = Math.floor(lh);
@@ -305,7 +400,7 @@ export function mountShell(app: App) {
       </dl>`;
   };
 
-  app.onDrawn(() => { showName(); syncDials(); almanac(); });
+  app.onDrawn(() => { showName(); syncDials(); almanac(); dropHistoryIfStale(); });
   showName();
   syncDials();
   applyClock();

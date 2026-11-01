@@ -15,6 +15,8 @@ import { LodFlora, FADE_NEAR, FADE_FAR } from './lodflora.ts';
 import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere, makeStars, makeSky, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
 import type { CloudPixels } from './clouds.ts';
 import { groveFreq } from './groves.ts';
+import { CivLayer } from './civview.ts';
+import type { History } from './civ.ts';
 import { MERC_GLSL, MERC_DISCARD, MERC_MAX_Y, mercVertex, mercY, mercLat, setMercator } from './mercator.ts';
 import type { ViewMode, TerrainStyle } from './colors.ts';
 
@@ -104,6 +106,10 @@ export class PlanetView {
   /** Middle of the view (longitude, Mercator y) and half the view's height, in map units. */
   private map = { x: 0, y: 0, half: Math.PI };
   private graticule: THREE.LineSegments;
+  /** Centuries: the history being shown, its drawing, and whether borders are on. */
+  private history: History | null = null;
+  private civ!: CivLayer;
+  private civBorders = false;
   private sunU = { uSunDir: { value: new THREE.Vector3(0, 0, 1) } };
   private ambient: THREE.AmbientLight;
   private time = 0;
@@ -163,6 +169,8 @@ export class PlanetView {
     this.scene.fog = this.haze;
     this.graticule = makeGraticule();
     this.planet.add(this.graticule);
+    this.civ = new CivLayer(this.cloudU.uYear);
+    this.planet.add(this.civ.group);
     this.mapInput();
 
     // Photo look: render, grade (in linear light), then tone map and encode.
@@ -315,6 +323,34 @@ export class PlanetView {
     // Haze colour follows the sky at the horizon (dark at night); density grows as you descend.
     this.haze.color.setRGB(0.36, 0.48, 0.66).multiplyScalar(0.12 + 0.88 * day);
     this.haze.density = low * 1.6;
+  }
+
+  // --- Centuries ------------------------------------------------------------------------------
+
+  /** Show a history (null clears it). Drawn on the current surface, and again after rebuilds. */
+  setHistory(h: History | null) {
+    this.history = h;
+    this.buildCiv();
+  }
+  /** The year shown (−1 hides civilisation); borders on or off. */
+  setCiv(year: number, borders: boolean) {
+    this.cloudU.uYear.value = year;
+    this.civBorders = borders && year >= 0;
+  }
+  private buildCiv() {
+    const mat = this.terrain?.material as THREE.MeshStandardMaterial | undefined;
+    const on = !!(this.history && this.terrain && this.world && this.surface && this.opts.style === 'smooth');
+    if (on) this.civ.build(this.world!, this.history!, this.terrain!, this.faceCell, this.surface!);
+    else this.civ.dispose();
+    this.flora.setClearing(on ? this.civ.clearYear : null);
+    if (mat) {
+      const d = (mat.defines ??= {});
+      if (on !== ('USE_CIV' in d)) {
+        if (on) d.USE_CIV = ''; else delete d.USE_CIV;
+        mat.needsUpdate = true;
+      }
+    }
+    if (this.mapMode) setMercator(this.civ.group, true);
   }
 
   // --- Flat map -------------------------------------------------------------------------------
@@ -555,6 +591,9 @@ export class PlanetView {
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
 
     this.flora.update(this.camera.position, this.opts.trees && this.opts.mode === 'biome' && !this.mapMode);
+    const civOn = this.cloudU.uYear.value >= 0;
+    this.civ.group.visible = civOn;
+    if (civOn) this.civ.setVisibility(this.mapMode ? 2 : d, this.civBorders);
     const cam = this.mapMode ? this.mapCam : this.camera;
     if (this.opts.look === 'photo') {
       this.applyVisibility();
@@ -621,6 +660,7 @@ export class PlanetView {
 
     this.buildRivers(w, s, P, C);
     this.buildSites();
+    this.buildCiv();
     if (this.mapMode) setMercator(this.planet, true);
     this.applyVisibility();
     this.highlight(-1);

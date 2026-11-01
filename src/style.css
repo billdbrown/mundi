@@ -176,3 +176,16 @@ body.shell #info { border-radius: 12px; padding: 8px 11px; background: rgba(10,1
 .proj button.on { background: rgba(255,255,255,.13); color: #fff; }
 .proj .ico { display: inline-block; width: 1.1em; text-align: center; }
 @media (max-width: 720px) { .proj { top: 64px; } }
+
+/* Centuries */
+.clock .timeline { width: 150px; accent-color: #e0b04a; margin: 0 4px; }
+.chronicle { position: fixed; top: 120px; left: 26px; width: 290px; background: var(--glass); backdrop-filter: blur(10px);
+  border: 1px solid var(--edge); border-radius: 14px; padding: 12px 15px; font-size: 12px; line-height: 1.45; }
+.chronicle h3 { margin: 0 0 6px; font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.chronicle p { margin: 0 0 6px; color: var(--text); animation: chron-in .6s ease-out; }
+.chronicle p:last-child { margin-bottom: 0; }
+.chronicle p b { color: #e0b04a; font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 4px; }
+.chronicle .quiet { color: var(--muted); }
+@keyframes chron-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (max-width: 720px) { .chronicle { top: auto; bottom: 170px; left: 8px; right: 8px; width: auto; max-height: 30vh; overflow: hidden; }
+  .clock .timeline { width: 90px; } }

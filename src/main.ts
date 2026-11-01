@@ -3,6 +3,8 @@ import { DEFAULT_PARAMS, WATER_OCEAN, WATER_LAKE, type World, type WorldParams }
 import { BIOMES } from './biomes.ts';
 import { flyTo, orbit, type Spot } from './debug.ts';
 import type { BuildRequest, BuildResult } from './worker.ts';
+import type { HistoryRequest, HistoryResult } from './historyWorker.ts';
+import type { History } from './civ.ts';
 import { gameData, exportJSON, RESOURCE_NAMES, type GameData } from './gamedata.ts';
 import { mountShell, type Lens } from './shell.ts';
 
@@ -74,6 +76,27 @@ worker.onerror = (e) => {
   inFlight = false;
   $('panel').classList.remove('busy');
 };
+
+// --- Centuries: histories are simulated in their own worker (about a second), once per world. ---
+let historyWorker: Worker | null = null;
+let historyKey = '', historyPromise: Promise<History> | null = null, historyId = 0;
+function loadHistory(): Promise<History> {
+  const key = JSON.stringify(params);
+  if (historyPromise && key === historyKey) return historyPromise;
+  historyKey = key;
+  historyWorker ??= new Worker(new URL('./historyWorker.ts', import.meta.url), { type: 'module' });
+  const id = ++historyId, w = historyWorker;
+  historyPromise = new Promise((resolve) => {
+    const on = (e: MessageEvent<HistoryResult>) => {
+      if (e.data.id !== id) return;
+      w.removeEventListener('message', on);
+      resolve(e.data.history);
+    };
+    w.addEventListener('message', on);
+    w.postMessage({ id, params: { ...params } } satisfies HistoryRequest);
+  });
+  return historyPromise;
+}
 
 function showStats() {
   let ocean = 0, lakes = 0, rivers = 0;
@@ -288,6 +311,8 @@ const shell = mountShell({
   onDrawn: (f) => drawnListeners.push(f),
   busy: () => inFlight || queued,
   renderer: view,
+  history: loadHistory,
+  historyKey: () => JSON.stringify(params),
 });
 shell.applyLens(lens, false);
 view.setOptions(viewOpts);

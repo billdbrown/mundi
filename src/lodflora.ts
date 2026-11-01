@@ -28,8 +28,8 @@ export const LOD_DIST = 1 + FADE_FAR + 0.005;
 /** Plants per cell relative to the FLORA table's numbers. */
 const DENSITY = 36;
 const KINDS = 7;
-/** Floats per plant: x, y, z, size, spin, shade, kind, colour. */
-const STRIDE = 8;
+/** Floats per plant: x, y, z, size, spin, shade, kind, colour, cut year (0 = never). */
+const STRIDE = 9;
 const MAX_INSTANCES = 320000;
 
 export class LodFlora {
@@ -45,6 +45,14 @@ export class LodFlora {
   private lastCenter = 0;
   private lastKey = '';
   private relief = 0.035;
+  /** Centuries: the year each spot is cleared for farming (0 = never), or none. */
+  private clearing: ((x: number, y: number, z: number, cell: number) => number) | null = null;
+
+  setClearing(f: ((x: number, y: number, z: number, cell: number) => number) | null) {
+    this.clearing = f;
+    this.cache.clear();
+    this.lastKey = '';
+  }
 
   constructor(parent: THREE.Object3D) {
     parent.add(this.group);
@@ -113,7 +121,11 @@ export class LodFlora {
       let mesh = this.meshes[k];
       if (!mesh || mesh.instanceMatrix.count < need) {
         if (mesh) { this.group.remove(mesh); mesh.dispose(); }
-        mesh = new THREE.InstancedMesh(treeGeometry(k), treeMaterial, Math.max(16, Math.ceil(need * 1.3)));
+        const cap = Math.max(16, Math.ceil(need * 1.3));
+        // Own geometry per mesh, for the per-instance 'cut' attribute.
+        const geo = treeGeometry(k).clone();
+        geo.setAttribute('cut', new THREE.InstancedBufferAttribute(new Float32Array(cap), 1));
+        mesh = new THREE.InstancedMesh(geo, treeMaterial, cap);
         mesh.frustumCulled = false;
         this.meshes[k] = mesh;
         this.group.add(mesh);
@@ -136,6 +148,7 @@ export class LodFlora {
         mesh.setMatrixAt(j, m);
         color.setHex(a[i + 7]).multiplyScalar(a[i + 5]);
         mesh.setColorAt(j, color);
+        (mesh.geometry.getAttribute('cut') as THREE.InstancedBufferAttribute).setX(j, a[i + 8]);
       }
     }
     this.meshes.forEach((mesh, k) => {
@@ -143,6 +156,7 @@ export class LodFlora {
       mesh.count = Math.min(fill[k], mesh.instanceMatrix.count);
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      mesh.geometry.getAttribute('cut').needsUpdate = true;
     });
   }
 
@@ -163,7 +177,7 @@ export class LodFlora {
           const pt = this.randomPoint(c, rng, true);
           if (!pt) continue;
           const r = rng();
-          out.push(pt[0], pt[1], pt[2], spacing * (0.02 + 0.05 * r * r), rng() * Math.PI * 2, 0.92 + 0.08 * rng(), ICEBERG, 0xeef5fa);
+          out.push(pt[0], pt[1], pt[2], spacing * (0.02 + 0.05 * r * r), rng() * Math.PI * 2, 0.92 + 0.08 * rng(), ICEBERG, 0xeef5fa, 0);
         }
       }
     } else if (w.water[c] === WATER_LAND) {
@@ -189,7 +203,9 @@ export class LodFlora {
             }
             // Sizes skew small: plenty of young trees, a few big ones.
             const r = rng();
-            out.push(pt[0], pt[1], pt[2], spacing * size * (0.022 + 0.032 * r * r), rng() * Math.PI * 2, 0.8 + 0.32 * rng(), kind, col);
+            // Most trees go when the land is farmed; a few stay as hedgerow and field trees.
+            const cut = this.clearing && kind !== ROCK && kind !== CACTUS && rng() < 0.88 ? this.clearing(pt[0], pt[1], pt[2], c) : 0;
+            out.push(pt[0], pt[1], pt[2], spacing * size * (0.022 + 0.032 * r * r), rng() * Math.PI * 2, 0.8 + 0.32 * rng(), kind, col, cut);
           }
         }
       }

@@ -27,11 +27,13 @@ export interface CloudUniforms {
   uMapDist: { value: number };
   /** Frequency of the grove pattern (groves.ts), set per world. */
   uGrove: { value: number };
+  /** Centuries: the year shown (−1: no civilisation drawn). */
+  uYear: { value: number };
 }
 
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
-    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 } };
+    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uYear: { value: -1 } };
 }
 
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
@@ -134,11 +136,18 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         #ifdef USE_CLIMATE
           attribute vec2 climate;
           varying vec2 vClim;
+        #endif
+        #ifdef USE_CIV
+          attribute vec2 civ;
+          varying vec2 vCiv;
         #endif`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vCloudP = (modelMatrix * vec4(transformed, 1.0)).xyz;
         #ifdef USE_CLIMATE
           vClim = climate;
+        #endif
+        #ifdef USE_CIV
+          vCiv = civ;
         #endif`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;\n' + CLOUD_GLSL + NOISE_GLSL + /* glsl */`
@@ -155,6 +164,10 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         #ifdef USE_CLIMATE
           varying vec2 vClim;
           ${GROVE_GLSL}
+        #endif
+        #ifdef USE_CIV
+          varying vec2 vCiv;
+          uniform float uYear;
         #endif
         // --- Ground patterns, by climate. Each fades out once its features get smaller than a
         // few pixels (fwidth), so it adds detail up close without shimmering from orbit.
@@ -257,6 +270,45 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
             }
           }
         #endif
+        // Centuries: farmland (a patchwork of fields with hedges) and towns (blocks and streets),
+        // each from the year the history says it reached this spot.
+        float civTown = 0.0;
+        #ifdef USE_CIV
+          if (uYear >= 0.0 && hAbove > 0.0004) {
+            // Ragged edges: noise shifts when each spot is reached.
+            float farm = smoothstep(0.0, 40.0, uYear - vCiv.x + (vnoise(vCloudP * 500.0) - 0.5) * 260.0 + (vnoise(vCloudP * 2000.0) - 0.5) * 90.0);
+            civTown = smoothstep(0.0, 30.0, uYear - vCiv.y + (vnoise(vCloudP * 900.0) - 0.5) * 200.0 + (vnoise(vCloudP * 3000.0) - 0.5) * 80.0);
+            vec3 n = normalize(vCloudP);
+            float lat = asin(clamp(n.y, -1.0, 1.0));
+            vec2 geo = vec2(atan(n.x, n.z) * cos(lat), lat);
+            if (farm > 0.0) {
+              const float FIELD = 0.0011;     // ~7 km: exaggerated, like everything here
+              float ang = vnoise(vCloudP * 25.0) * 3.14159;
+              vec2 uv = mat2(cos(ang), sin(ang), -sin(ang), cos(ang)) * geo / FIELD;
+              uv.y += floor(uv.x) * 0.37;                 // staggered strips, not a chessboard
+              vec2 id = floor(uv), f = fract(uv);
+              float rnd = fract(sin(dot(id, vec2(12.9898, 78.233))) * 43758.5453);
+              vec3 crop = rnd < 0.3 ? vec3(0.10, 0.16, 0.04) : rnd < 0.55 ? vec3(0.36, 0.30, 0.12)
+                        : rnd < 0.75 ? vec3(0.20, 0.14, 0.08) : vec3(0.07, 0.12, 0.03);
+              float hedge = smoothstep(0.0, 0.07, min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y)));
+              vec3 fields = mix(crop * 0.55, crop * (0.85 + 0.3 * vnoise(vCloudP * 4000.0)), hedge);
+              // From afar, farmland is the land a little lighter and yellower, with a faint grain.
+              vec3 far = mix(diffuseColor.rgb, vec3(0.26, 0.25, 0.10), 0.45) * (0.85 + 0.3 * vnoise(vCloudP * 400.0));
+              diffuseColor.rgb = mix(diffuseColor.rgb, mix(far, fields, aaFade(FIELD * 0.3, foot)), farm * 0.75);
+            }
+            if (civTown > 0.0) {
+              const float BLOCK = 0.0005;
+              vec2 uv = geo / BLOCK;
+              vec2 f = fract(uv), id = floor(uv);
+              float rnd = fract(sin(dot(id, vec2(39.3468, 11.135))) * 43758.5453);
+              float street = 1.0 - smoothstep(0.0, 0.1, min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y)));
+              vec3 roofs = mix(vec3(0.30, 0.13, 0.08), vec3(0.32, 0.30, 0.27), rnd);
+              vec3 town = mix(roofs, vec3(0.42, 0.40, 0.36), street);
+              vec3 far = vec3(0.27, 0.21, 0.17);
+              diffuseColor.rgb = mix(diffuseColor.rgb, mix(far, town, aaFade(BLOCK * 0.4, foot)), civTown * 0.8);
+            }
+          }
+        #endif
         if (uSeason != 0.0 && hAbove > 0.0006) {
           vec3 sn = normalize(vCloudP);
           // Winter browns the mid-latitude vegetation of the cold hemisphere.
@@ -266,6 +318,15 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.12, 0.98, 0.7) * l, green * winter * 0.55);
         }
         diffuseColor.rgb *= cloudShade(vCloudP);`)
+      .replace('#include <emissivemap_fragment>', /* glsl */`#include <emissivemap_fragment>
+        // Town lights on the night side.
+        #if defined(USE_CIV) && !defined(MERCATOR)
+          if (civTown > 0.0) {
+            float night = 1.0 - smoothstep(-0.12, 0.08, dot(normalize(vCloudP), uCloudSun));
+            float spark = smoothstep(0.35, 0.9, vnoise(vCloudP * 6000.0));
+            totalEmissiveRadiance += vec3(1.0, 0.72, 0.38) * civTown * night * (0.25 + 1.6 * spark);
+          }
+        #endif`)
       .replace('#include <normal_fragment_maps>', /* glsl */`#include <normal_fragment_maps>
         // World-space vectors into view space (on the map, view space is east/north/up).
         #ifdef MERCATOR
@@ -354,15 +415,18 @@ export function applyCloudShadow(
 ) {
   // With `fade`, each instance grows from nothing at uFadeFar to full size at uFadeNear
   // (scaled about its base, so it rises out of the ground) instead of popping in.
+  // Centuries: a plant with a 'cut' year (0 = never) is gone once the shown year passes it,
+  // cleared for fields and towns.
   const grow = fade ? `
         #ifdef USE_INSTANCING
           vec4 fadeO = modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
           transformed *= 1.0 - smoothstep(uFadeNear, uFadeFar, length(cameraPosition - fadeO.xyz));
+          if (cut > 0.5 && uYear >= 0.0) transformed *= 1.0 - smoothstep(cut, cut + 25.0, uYear);
         #endif` : '';
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u, sun ?? {}, fade ?? {});
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;' + (fade ? '\nuniform float uFadeNear, uFadeFar;' : ''))
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;' + (fade ? '\nuniform float uFadeNear, uFadeFar, uYear;\nattribute float cut;' : ''))
       .replace('#include <begin_vertex>', `#include <begin_vertex>${grow}
         vec4 cloudP = vec4(transformed, 1.0);
         #ifdef USE_INSTANCING
