@@ -346,6 +346,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         #endif
         float eroH = 0.0, eroK = 0.0;
         vec3 eroGrad = vec3(0.0);
+        float poolK = 0.0;   // standing water in marshes: shiny (roughness, below)
         if (uErosion > 0.0 && eroHA > 0.0001 && camDist < 0.22 && iceK < 0.99) {
           #if defined(DUNE_PATCH)
             vec3 wN = normalize(vTerrN);
@@ -476,6 +477,32 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
             if (grassW > 0.0) {
               diffuseColor.rgb *= mix(1.0, 0.82, grassW * smoothstep(0.25, 0.7, gv) * smoothstep(0.3, 0.45, moist) * (1.0 - smoothstep(0.18, 0.45, camDist)));
             }
+            // Wetlands: on low, flat, wet ground (and on big rivers' floodplains even in drier
+            // country, like the Sudd; and on low coasts), reed beds broken by pools of standing
+            // water that catch the sun.
+            {
+              #ifdef MERCATOR
+                vec3 wNw = normalize(normalize(vNormal) * mercFrame(vCloudP));
+              #else
+                vec3 wNw = normalize((vec4(vNormal, 0.0) * viewMatrix).xyz);
+              #endif
+              float level = smoothstep(0.965, 0.99, dot(wNw, normalize(vCloudP)));
+              float low = smoothstep(0.0045, 0.0012, hAbove);
+              float riverWet = smoothstep(0.08, 0.35, groundRiver(vCloudP).y) * smoothstep(0.2, 0.45, moist);
+              float coastWet = smoothstep(0.0009, 0.0004, hAbove) * smoothstep(0.35, 0.55, moist);
+              float wet = max(max(smoothstep(0.45, 0.62, moist) * low, riverWet * low * 1.2), coastWet) * level * (1.0 - iceK);
+              // Broad patches: not every wet lowland is marsh.
+              wet *= smoothstep(-0.25, 0.35, snoise(vCloudP * 22.0 + 17.0) + 0.5 * snoise(vCloudP * 70.0));
+              if (wet > 0.01) {
+                vec3 reed = mix(vec3(0.2, 0.2, 0.09), vec3(0.13, 0.17, 0.07), smoothstep(0.4, 0.7, temp));
+                float rn = snoise01(vCloudP * 1500.0) * 0.6 + snoise01(vCloudP * 4500.0) * 0.4;
+                diffuseColor.rgb = mix(diffuseColor.rgb, reed * (0.8 + 0.4 * rn), wet * 0.75);
+                // Pools: ragged, thresholded simplex at two scales (value noise showed its grid).
+                float pn = snoise(vCloudP * 380.0) * 0.6 + snoise(vCloudP * 1100.0 + 3.0) * 0.3 + snoise(vCloudP * 3200.0 + 7.0) * 0.1;
+                poolK = smoothstep(0.18, 0.26, pn + 0.35 * (wet - 0.6)) * wet * aaFade(0.003, foot);
+                diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.035, 0.055, 0.065), poolK * 0.9);
+              }
+            }
             // Tundra: frost polygons, a net of dark cracks with the odd meltwater pond.
             float tundraW = smoothstep(0.08, 0.16, temp) * smoothstep(0.34, 0.24, temp) * lowland;
             if (tundraW > 0.0) {
@@ -588,6 +615,8 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.12, 0.98, 0.7) * l, green * winter * 0.55);
         }
         diffuseColor.rgb *= cloudShade(vCloudP);`)
+      .replace('#include <roughnessmap_fragment>', /* glsl */`#include <roughnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, 0.12, poolK);`)
       .replace('#include <emissivemap_fragment>', /* glsl */`#include <emissivemap_fragment>
         // Town lights on the night side.
         #if defined(USE_CIV) && !defined(MERCATOR)
