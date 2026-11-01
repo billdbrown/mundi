@@ -5,11 +5,12 @@ import { hash01 } from './rng.ts';
 import { MERC_GLSL, MERC_DISCARD, mercVertex, patchShaderChunks } from './mercator.ts';
 import { GROVE_GLSL } from './groves.ts';
 import { EROSION_GLSL } from './erosion.ts';
+import { DUNES_GLSL, makeDuneUniforms, type DuneUniforms } from './dunes.ts';
 
 patchShaderChunks();
 
 /** Uniforms shared by every material that receives cloud shadows. */
-export interface CloudUniforms {
+export interface CloudUniforms extends DuneUniforms {
   uCloudMap: { value: THREE.Texture | null };
   uCloudRot: { value: number };
   uCloudShadow: { value: number };
@@ -40,7 +41,7 @@ export interface CloudUniforms {
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
     uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uErosion: { value: 1 }, uYear: { value: -1 },
-    uWeather: { value: 0 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) } };
+    uWeather: { value: 0 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, ...makeDuneUniforms() };
 }
 
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
@@ -279,45 +280,9 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
           }
           return sqrt(d2) - sqrt(d1);
         }
-        /**
-         * Dunes: crests roughly north-south, across the east-west trade winds, with a long gentle
-         * windward slope and a short steep lee face. Wavering, and broken into fields with flat
-         * sand between them. About 7 km apart (exaggerated, as everything here is).
-         */
+        // Dunes (dunes.ts): simulated tiles. DUNE is the spacing of transverse ridges, for fading.
         const float DUNE = 0.0011;
-        /** One dune train: asymmetric profile of phase f (long windward slope, short lee face). */
-        float duneProfile(float f) {
-          float prof = f < 0.72 ? f / 0.72 : (1.0 - f) / 0.28;
-          return prof * prof * (3.0 - 2.0 * prof);
-        }
-        /** x: height 0..1. y: how much of a lee (slip) face this is, for shading. */
-        vec2 duneField(vec3 p) {
-          vec3 n = normalize(p);
-          float lon = atan(n.x, n.z), lat = asin(clamp(n.y, -1.0, 1.0));
-          vec2 g = vec2(lon * cos(lat), lat);
-          // Sinuous crests: phase warped at two scales, so crests wind, fork and rejoin.
-          // (Gentle: much more and the crests curl into fingerprint whorls.)
-          float warp = snoise(p * 70.0) * 0.6 + snoise(p * 300.0 + 9.0) * 0.12;
-          // Fixed orientation, across the trade winds (any spatially varying rotation of a phase
-          // this large turns into rings far from the origin).
-          float u = g.x / DUNE + warp;
-          float f = fract(u);
-          // Each crest breaks into sections along its length (barchanoid ridges).
-          float along = snoise(vec3(floor(u) * 1.7, g.y / DUNE * 0.22, 0.5));
-          float seg = smoothstep(-0.55, 0.05, along);
-          float h1 = duneProfile(f) * mix(0.35, 1.0, seg);
-          // A weaker second train at an angle, from a secondary wind: star and network dunes.
-          float v = (g.y * 0.9 - g.x * 0.45) / (DUNE * 1.7) + snoise(p * 90.0 + 3.0) * 0.4;
-          float h2 = duneProfile(fract(v)) * 0.3 * smoothstep(0.0, 0.5, snoise(p * 30.0 + 5.0));
-          // Fields of dunes with flat sand corridors between them.
-          // Sand seas: most of a hot desert, with flat gravel plains between.
-          float field = smoothstep(-0.55, 0.05, snoise(p * 40.0) + 0.25 * snoise(p * 160.0));
-          float h = max(h1, h2) * field;
-          float lee = (f > 0.72 ? smoothstep(0.72, 0.8, f) : 0.0) * (h1 >= h2 ? 1.0 : 0.0) * field * mix(0.35, 1.0, seg);
-          return vec2(h, lee);
-        }
-        float duneH(vec3 p) { return duneField(p).x; }
-` + EROSION_GLSL)
+` + EROSION_GLSL + DUNES_GLSL)
       .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
         float hAbove = length(vCloudP) - 1.0;
         #ifdef MERCATOR
@@ -337,6 +302,8 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         diffuseColor.rgb *= mix(1.0, 0.74 + 0.52 * ln, (0.45 + 0.55 * highland) * farFade * (1.0 - 0.75 * iceK));
         float foot = length(fwidth(vCloudP));
         float desertW = 0.0;
+        vec4 duneS = vec4(0.0);   // dunes(): height, slip face, slope east, north
+        float duneK = 0.0;
         // Erosion (erosion.ts): gullies running down the meshed slope, branching as they go.
         // eroH says how deep in a gully this is; eroGrad bends the normal (below).
         float eroH = 0.0, eroK = 0.0;
@@ -353,13 +320,18 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
           float eroFar = 1.0 - smoothstep(0.08, 0.22, camDist);
           float cz = max(dot(wN, up), 0.3);
           vec3 macro = -(wN - up * dot(wN, up)) / cz;
-          // Sand seas are flat between their dunes; rocky desert keeps a few dry channels (wadis).
+          // Sand seas are flat between their dunes; rocky desert keeps some dry channels (wadis).
           #ifdef USE_CLIMATE
             float sandE = smoothstep(0.24, 0.12, vClim.x) * smoothstep(0.4, 0.55, vClim.y) * (1.0 - highland);
           #else
             float sandE = 0.0;
           #endif
-          eroFar *= 1.0 - 0.85 * sandE;
+          // In the sand seas themselves (the same mask as the desert colours) dunes cover
+          // everything: no erosion at all, which also saves its cost there.
+          if (sandE > 0.0) {
+            float sea = smoothstep(-0.55, 0.05, snoise(vCloudP * 40.0) + 0.25 * snoise(vCloudP * 160.0));
+            eroFar *= 1.0 - sandE * mix(0.6, 1.0, smoothstep(0.2, 0.5, sea));
+          }
           // Comes in over the first stretch above the shore rather than at a contour (it ended in
           // a hard line along every coast), the line itself wavering.
           eroFar *= smoothstep(0.0001, 0.001, hAbove + 0.0004 * snoise(vCloudP * 150.0));
@@ -389,8 +361,9 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
             // (hamada; the Tibesti, the Ahaggar), pale gravel plains (reg) between the sand seas,
             // and the sand seas themselves a warmer orange. Highland is included, unlike dunes.
             float aridW = smoothstep(0.24, 0.12, moist) * smoothstep(0.4, 0.55, temp);
+            float seaMask = 0.0;
             if (aridW > 0.0) {
-              float seaMask = smoothstep(-0.55, 0.05, snoise(vCloudP * 40.0) + 0.25 * snoise(vCloudP * 160.0));
+              seaMask = smoothstep(-0.55, 0.05, snoise(vCloudP * 40.0) + 0.25 * snoise(vCloudP * 160.0));
               float plateau = smoothstep(0.08, 0.3, hAbove / uRelief + 0.08 * snoise(vCloudP * 50.0 + 2.0));
               vec3 wq = vCloudP * 6.0 + vec3(snoise(vCloudP * 11.0), snoise(vCloudP * 11.0 + 4.0), 0.0) * 0.5;
               float rockyN = smoothstep(0.15, 0.85, snoise(wq + 7.0) + 0.35 * snoise(vCloudP * 30.0)) * 0.7;
@@ -409,12 +382,23 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
               float pn = 0.6 * snoise(vCloudP * 9.0) + 0.3 * snoise(vCloudP * 31.0 + 4.0) + 0.1 * snoise(vCloudP * 140.0);
               float pan = smoothstep(0.42, 0.5, pn) * (1.0 - smoothstep(0.03, 0.09, hAbove / uRelief));
               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.80, 0.77, 0.70), pan * desertW * 0.85);
-              // Crests are bright, loose orange sand; corridors between are flatter, paler and
-              // greyer; slip faces sit in their own shade whatever the light.
-              vec2 dn = duneField(vCloudP);
-              float dk = desertW * aaFade(DUNE * 0.6, foot);
-              vec3 sand = mix(diffuseColor.rgb * vec3(1.0, 0.97, 0.92), diffuseColor.rgb * vec3(1.12, 1.0, 0.82), dn.x);
-              diffuseColor.rgb = mix(diffuseColor.rgb, sand * (0.86 + 0.24 * dn.x) * (1.0 - 0.32 * dn.y), dk);
+              // Which dunes (Wasson & Hyde): where sand is thin, at the edges of the sand seas,
+              // barchans; in the seas, transverse ridges under a steady wind, network dunes where
+              // the winds vary (the horse latitudes, ~20-35°), and linear ridges in the less dry
+              // margins (as in the Kalahari and Australia).
+              float core = smoothstep(0.35, 0.75, seaMask);
+              float varied = smoothstep(0.33, 0.55, abs(asin(clamp(normalize(vCloudP).y, -1.0, 1.0))));
+              float semi = smoothstep(0.1, 0.19, moist);
+              vec4 dw = vec4(smoothstep(0.04, 0.3, seaMask) * (1.0 - core),
+                             core * (1.0 - varied) * (1.0 - semi), core * (1.0 - varied) * semi, core * varied);
+              duneK = desertW * aaFade(DUNE * 0.6, foot) * min(1.0, dw.x + dw.y + dw.z + dw.w);
+              if (duneK > 0.0) {
+                duneS = dunes(vCloudP, dw / max(1e-4, dw.x + dw.y + dw.z + dw.w));
+                // Crests are bright, loose orange sand; the flats between are paler and greyer;
+                // slip faces sit in their own shade whatever the light.
+                vec3 sand = mix(diffuseColor.rgb * vec3(1.0, 0.97, 0.92), diffuseColor.rgb * vec3(1.12, 1.0, 0.82), duneS.x);
+                diffuseColor.rgb = mix(diffuseColor.rgb, sand * (0.88 + 0.22 * duneS.x) * (1.0 - 0.3 * duneS.y), duneK);
+              }
             }
             // Grass and steppe: mottled, sun-bleached patches over a few kilometres.
             float grassW = smoothstep(0.12, 0.25, moist) * smoothstep(0.62, 0.42, moist) * smoothstep(0.25, 0.4, temp) * lowland;
@@ -570,16 +554,11 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         }
         if (uErosion > 0.0) normal = normalize(normal - TOVIEW(eroGrad));
         // Dunes catch the light on their windward slopes and shade their lee faces.
-        if (desertW > 0.0) {
-          float k = desertW * aaFade(DUNE * 0.6, foot);
-          if (k > 0.0) {
-            vec3 up = normalize(vCloudP);
-            vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
-            vec3 t2 = cross(up, t1);
-            float e = DUNE * 0.08, h0 = duneH(vCloudP);
-            vec3 grad = (t1 * (duneH(vCloudP + t1 * e) - h0) + t2 * (duneH(vCloudP + t2 * e) - h0)) / e;
-            normal = normalize(normal - TOVIEW(grad * DUNE * 0.45 * k));
-          }
+        if (duneK > 0.0) {
+          vec3 up = normalize(vCloudP);
+          vec3 east = normalize(vec3(up.z, 0.0, -up.x));
+          vec3 north = cross(up, east);
+          normal = normalize(normal - TOVIEW((east * duneS.z + north * duneS.w) * duneK));
         }
         // Rock strata: bands across steep high ground, as layered rock shows in cliffs.
         if (highland > 0.0 && hAbove > 0.0) {

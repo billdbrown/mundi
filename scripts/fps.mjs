@@ -3,7 +3,8 @@
  * Each frame reads a pixel back, which waits for the GPU, so times include fragment work.
  * Also reports main-thread time spent in the view's frame() (JavaScript, not GPU).
  *
- *   node scripts/fps.mjs            (W, H, DPR env to change the screen; default 1440x900 @2)
+ *   node scripts/fps.mjs            (W, H, DPR env to change the screen; default 1440x900 @2;
+ *                                    SPOT=desert|coast|... to measure over a debug spot)
  */
 import { chromium } from 'playwright-core';
 const W = Number(process.env.W ?? 1440), H = Number(process.env.H ?? 900), DPR = Number(process.env.DPR ?? 2);
@@ -33,7 +34,7 @@ const configs = {
 };
 const reset = (v) => { v.cloudU.uErosion.value = 1; v.setOptions({ trees: true, clouds: true }); v.renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); window.dispatchEvent(new Event('resize')); };
 for (const alt of [1.012, 1.04, 1.2, 2.5]) {
-  await page.evaluate((a) => window.mundi.orbit(-90.6, 4.9, a), alt);
+  await page.evaluate(([a, spot]) => spot ? window.mundi.flyTo(spot, a) : window.mundi.orbit(-90.6, 4.9, a), [alt, process.env.SPOT ?? '']);
   await page.waitForTimeout(2500);
   const row = [];
   for (const [name, fn] of Object.entries(configs)) {
