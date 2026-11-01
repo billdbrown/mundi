@@ -29,11 +29,15 @@ export interface CloudUniforms {
   uGrove: { value: number };
   /** Centuries: the year shown (−1: no civilisation drawn). */
   uYear: { value: number };
+  /** Weather time in days, and the active storms (weather.ts). */
+  uWeather: { value: number };
+  uStorms: { value: THREE.Vector4[] };
 }
 
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
-    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uYear: { value: -1 } };
+    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uYear: { value: -1 },
+    uWeather: { value: 0 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) } };
 }
 
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
@@ -60,8 +64,9 @@ export const NOISE_GLSL = /* glsl */`
  */
 const CLOUD_GLSL = /* glsl */`
   uniform sampler2D uCloudMap;
-  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uHeat, uRelief, uSnow, uMapDist;
+  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uHeat, uRelief, uSnow, uMapDist, uWeather;
   uniform vec3 uCloudSun;
+  uniform vec4 uStorms[8];
   /**
    * Seasons. The generator's annual-mean temperature for a point (the same formula as the
    * per-vertex snow), and that temperature shifted by the season: the tilt warms one hemisphere
@@ -96,6 +101,64 @@ const CLOUD_GLSL = /* glsl */`
     float b = cnNoise(d * 19.0 - vec3(0.050, 0.035, 0.045) * t) - 0.5;
     return raw + a * 0.15 + b * 0.06;   // gentle, so the painted cell and streak patterns survive
   }
+  /**
+   * Prevailing winds, as eastward angular speed (radians a day) by latitude: trade winds blow
+   * west near the equator, westerlies east at mid-latitudes, polar easterlies west again.
+   * About three times real speeds, so a day's motion reads from orbit.
+   */
+  float windEast(float lat) { return -0.3 * cos(6.0 * lat) * smoothstep(1.5, 1.15, abs(lat)); }
+  /** Spiral cloud bands of the active storms at direction d (world frame). */
+  float stormCover(vec3 d) {
+    float s = 0.0;
+    for (int i = 0; i < 8; i++) {
+      vec4 S = uStorms[i];
+      if (S.w <= 0.001) continue;
+      float R = abs(S.z);
+      vec3 c = vec3(cos(S.y) * sin(S.x), sin(S.y), cos(S.y) * cos(S.x));
+      float cd = dot(d, c);
+      if (cd < cos(R * 2.6)) continue;
+      float r = acos(clamp(cd, -1.0, 1.0)) / R;
+      vec3 e = normalize(cross(vec3(0.0, 1.0, 0.0), c)), n = cross(c, e);
+      float az = atan(dot(d, n), dot(d, e));
+      float spin = sign(S.y);                       // cyclones turn the other way in the south
+      bool tropical = S.z < 0.0;
+      float arms = tropical ? 3.0 : 2.0, tight = tropical ? 2.6 : 1.6;
+      float band = 0.5 + 0.5 * sin(arms * az + spin * tight * log(max(r, 0.12)) * 3.0);
+      float body = exp(-r * r * (tropical ? 1.6 : 1.1));
+      float v = body * mix(0.45, 1.0, band) * mix(0.75, 1.15, cnNoise(d * 60.0 + float(i)));
+      if (tropical) v = max(v, exp(-r * r * 9.0) * 1.1) * smoothstep(0.05, 0.13, r);   // dense core, clear eye
+      else v = max(v * (0.75 + 0.35 * cos(az * spin - 1.2)), exp(-r * r * 5.0) * 0.85);  // comma tail, solid middle
+      s = max(s, v * S.w);
+    }
+    return s;
+  }
+  /**
+   * Cloud cover at direction d (world frame), carried by the wind bands. Two copies of the
+   * pattern are advected and cross-faded half a cycle apart (the flow-map trick), so moving
+   * cloud never smears into ever-longer streaks.
+   */
+  float coverAt(vec3 d, float lod) {
+    float lat = asin(clamp(d.y, -1.0, 1.0));
+    float phi = atan(d.z, -d.x);
+    float w = windEast(lat), T = 0.5;
+    float p0 = fract(uWeather / T), p1 = fract(uWeather / T + 0.5);
+    float c0, c1;
+    {
+      float o = w * p0 * T, co = cos(o), so = sin(o);
+      vec3 q = vec3(d.x * co - d.z * so, d.y, d.x * so + d.z * co);
+      float raw = textureLod(uCloudMap, vec2((phi + o) / 6.2831853, 0.5 + lat / 3.14159265), lod).a;
+      c0 = cloudCover(raw, q, uCloudTime);
+    }
+    {
+      float o = w * p1 * T, co = cos(o), so = sin(o);
+      vec3 q = vec3(d.x * co - d.z * so, d.y, d.x * so + d.z * co);
+      float raw = textureLod(uCloudMap, vec2((phi + o) / 6.2831853, 0.5 + lat / 3.14159265), lod).a;
+      c1 = cloudCover(raw, q, uCloudTime + 37.0);
+    }
+    float cover = mix(c0, c1, abs(1.0 - 2.0 * p0));
+    float st = stormCover(d);
+    return max(cover, st) + 0.12 * st;
+  }
   // Wide ramp: thin cloud is translucent, only the cores are opaque.
   float cloudAlpha(float cover) { return smoothstep(0.47, 0.86, cover); }
   float cloudShade(vec3 p) {
@@ -109,13 +172,7 @@ const CLOUD_GLSL = /* glsl */`
       float mu = max(dot(n, uCloudSun), 0.25);
       vec3 d = normalize(n + (uCloudSun - n * dot(n, uCloudSun)) * (0.019 / mu));
     #endif
-    float c = cos(uCloudRot), s = sin(uCloudRot);
-    vec3 q = vec3(d.x * c - d.z * s, d.y, d.x * s + d.z * c);
-    float theta = acos(clamp(q.y, -1.0, 1.0));
-    float phi = atan(q.z, -q.x);
-    if (phi < 0.0) phi += 6.2831853;
-    float raw = textureLod(uCloudMap, vec2(phi / 6.2831853, 1.0 - theta / 3.14159265), 1.5).a;
-    return 1.0 - uCloudShadow * cloudAlpha(cloudCover(raw, q, uCloudTime));
+    return 1.0 - uCloudShadow * cloudAlpha(coverAt(d, 1.5));
   }
 `;
 
@@ -646,7 +703,11 @@ export function makeClouds(u: CloudUniforms): THREE.Group {
       .replace('#include <common>', '#include <common>\nvarying vec3 vCloudLocal;\n' + CLOUD_GLSL)
       .replace('#include <map_fragment>', `#include <map_fragment>
         #ifdef USE_MAP
-          float cover = cloudCover(texture2D(map, vMapUv).a, normalize(vCloudLocal), uCloudTime);
+          // Mip level from screen-space change, as texture2D would pick (textureLod needs it given).
+          vec2 tsz = vec2(textureSize(map, 0));
+          vec2 duv = max(abs(dFdx(vMapUv)), abs(dFdy(vMapUv))) * tsz;
+          float lod = clamp(log2(max(min(duv.x, 32.0), duv.y)), 0.0, 8.0);
+          float cover = coverAt(normalize(vCloudLocal), lod);
           // Texture inside the cloud: lumpy tops catch more or less light; thick cores grey.
           vec3 cd = normalize(vCloudLocal);
           float lumps = cnNoise(cd * 90.0) * 0.6 + cnNoise(cd * 260.0) * 0.4;

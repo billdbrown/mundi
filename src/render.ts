@@ -16,6 +16,7 @@ import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere,
 import type { CloudPixels } from './clouds.ts';
 import { groveFreq } from './groves.ts';
 import { CivLayer } from './civview.ts';
+import { Weather } from './weather.ts';
 import type { History } from './civ.ts';
 import { MERC_GLSL, MERC_DISCARD, MERC_MAX_Y, mercVertex, mercY, mercLat, setMercator } from './mercator.ts';
 import type { ViewMode, TerrainStyle } from './colors.ts';
@@ -110,6 +111,9 @@ export class PlanetView {
   private history: History | null = null;
   private civ!: CivLayer;
   private civBorders = false;
+  /** Weather: storm schedule for this world, and weather time in days. */
+  private weather?: Weather;
+  private weatherDays = 4;   // a few days in, so storms are already about at load
   private sunU = { uSunDir: { value: new THREE.Vector3(0, 0, 1) } };
   private ambient: THREE.AmbientLight;
   private time = 0;
@@ -214,6 +218,7 @@ export class PlanetView {
   setData(world: World, data: SurfaceData) {
     this.cloudU.uHeat.value = world.params.heat;
     this.cloudU.uGrove.value = groveFreq(world.grid.count);
+    if (this.world !== world) this.weather = new Weather(world);
     this.cloudU.uRelief.value = RELIEF * this.opts.relief;
     this.world = world;
     this.rebuild(data);
@@ -570,14 +575,19 @@ export class PlanetView {
     const fade = THREE.MathUtils.clamp((d - 1.3) / 1.0, 0, 1);
     const [deck, cirrus] = this.clouds.children as THREE.Mesh[];
     for (const m of [deck, cirrus]) (m.material as THREE.MeshStandardMaterial).opacity = m.userData.baseOpacity * fade;
-    deck.rotation.y += dt * 0.006;
+    // The deck stays put; the wind bands move its clouds (coverAt). Weather time runs with the
+    // Day clock; otherwise (idle, or the Year clock, which would strobe) it drifts slowly.
+    deck.rotation.y = 0;
     cirrus.rotation.y += dt * 0.011;
+    this.weatherDays += dt * (this.clockRate > 0 && this.clockRate <= 1 ? this.clockRate : 0.01);
     if (this.frozen !== null) {
       this.waterMat.uniforms.uTime.value = this.frozen;
-      deck.rotation.y = this.frozen * 0.006;
       cirrus.rotation.y = this.frozen * 0.011;
+      this.weatherDays = 4 + this.frozen * 0.01;
     }
-    this.cloudU.uCloudRot.value = deck.rotation.y;
+    this.cloudU.uCloudRot.value = 0;
+    this.cloudU.uWeather.value = this.weatherDays;
+    this.weather?.update(this.weatherDays, this.cloudU.uStorms.value);
     this.cloudU.uCloudTime.value = this.time;
     this.cloudU.uCloudSun.value.copy(this.sunDir);
     // In the photo look rivers are invisible from orbit, as in reality, and fade in on descent;
