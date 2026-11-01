@@ -371,11 +371,15 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
               // (the grove waves, seen together from afar, lined up into chevrons).
               float groveNear = 1.0 - smoothstep(0.18, 0.45, camDist);
               float broad = smoothstep(-0.4, 0.5, snoise(vCloudP * 60.0) + 0.5 * snoise(vCloudP * 170.0 + 2.0));
-              float inGrove = mix(mix(0.45, 0.85, broad), smoothstep(-0.35, 0.25, gv), groveNear);
+              // Wetter forest has fewer clearings (matches the offsets in lodflora.ts).
+              float closed = smoothstep(0.6, 0.72, moist) * mix(0.35, 0.5, smoothstep(0.65, 0.75, temp));
+              float inGrove = mix(mix(0.45 + closed, 0.85 + closed * 0.3, broad), smoothstep(-0.35, 0.25, gv + closed), groveNear);
               float crowns = snoise01(vCloudP * 3200.0) * 0.6 + snoise01(vCloudP * 9000.0) * 0.4;
               diffuseColor.rgb *= mix(1.0, 0.68, forestW * inGrove);
               diffuseColor.rgb *= mix(1.0, 0.75 + 0.35 * crowns, forestW * inGrove * aaFade(0.0003, foot));
-              diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.18, 1.12, 0.82), forestW * (1.0 - inGrove) * 0.55);
+              // Clearings: sun-bleached grass in warm forest, moss and bog in cold forest.
+              vec3 glade = mix(vec3(0.82, 0.98, 0.8), vec3(1.18, 1.12, 0.82), smoothstep(0.35, 0.55, temp));
+              diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * glade, forestW * (1.0 - inGrove) * 0.55);
             }
             if (grassW > 0.0) {
               diffuseColor.rgb *= mix(1.0, 0.82, grassW * smoothstep(0.25, 0.7, gv) * smoothstep(0.3, 0.45, moist) * (1.0 - smoothstep(0.18, 0.45, camDist)));

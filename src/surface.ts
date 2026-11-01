@@ -160,7 +160,7 @@ const CLIMATE_M = [0.08, 0.24, 0.4, 0.56, 0.78];
 const CLIMATE_T = [0.1, 0.3, 0.55, 0.82];
 const CLIMATE_PALETTE = [
   [0x8a8068, 0x7c7a60, 0x6b6c4e, 0x5d6445, 0x545e42],   // tundra
-  [0x9d9278, 0x8c8a6a, 0x4f5b3a, 0x34442a, 0x2c3b26],   // boreal
+  [0x8a8466, 0x6f7552, 0x4d5a38, 0x34442a, 0x2c3b26],   // boreal: moss and heath, not sand
   [0xc4a582, 0xab9e72, 0x7b8a49, 0x4a642c, 0x34542b],   // temperate
   [0xd99b6a, 0xbf9862, 0x8f8a4a, 0x52682b, 0x2a5222],   // tropical
 ].map((row) => row.map((hex) => new THREE.Color(hex)));

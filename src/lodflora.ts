@@ -217,7 +217,9 @@ export class LodFlora {
             }
             if (shaped) {
               const gv = groveField(pt[0], pt[1], pt[2], gf);
-              if (rng() > (forest ? forestMask(gv) : openMask(gv))) continue;
+              // Rainforest canopy is nearly closed; temperate forest has glades; taiga has bogs.
+              const off = b === B.RAINFOREST ? 0.5 : b === B.TEMPERATE_RAIN ? 0.35 : b === B.TAIGA ? 0.1 : 0;
+              if (rng() > (forest ? forestMask(gv + off) : openMask(gv))) continue;
             }
             // Sizes skew small: plenty of young trees, a few big ones.
             const r = rng();
