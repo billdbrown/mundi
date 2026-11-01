@@ -325,10 +325,13 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         float detailFade = 1.0 - smoothstep(0.25, 1.4, camDist);
         float highland = smoothstep(0.12, 0.85, hAbove / uRelief);
         float rn = rockNoise(vCloudP);
-        diffuseColor.rgb *= mix(1.0, 0.82 + 0.36 * rn, (0.35 + 0.65 * highland) * detailFade);
+        // Ice sheets (white ground) are smooth: little rock grain, a faint blue in their shading.
+        float iceK = smoothstep(0.6, 0.8, min(diffuseColor.r, min(diffuseColor.g, diffuseColor.b)));
+        diffuseColor.rgb *= mix(1.0, 0.82 + 0.36 * rn, (0.35 + 0.65 * highland) * detailFade * (1.0 - 0.8 * iceK));
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.95, 0.98, 1.03), iceK);
         float farFade = smoothstep(0.12, 0.8, camDist) * step(0.0005, hAbove);
         float ln = landNoise(vCloudP);
-        diffuseColor.rgb *= mix(1.0, 0.74 + 0.52 * ln, (0.45 + 0.55 * highland) * farFade);
+        diffuseColor.rgb *= mix(1.0, 0.74 + 0.52 * ln, (0.45 + 0.55 * highland) * farFade * (1.0 - 0.75 * iceK));
         float foot = length(fwidth(vCloudP));
         float desertW = 0.0;
         #ifdef USE_CLIMATE
@@ -496,7 +499,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
           vec3 t2 = cross(up, t1);
           float e = 0.0003;
           vec3 grad = t1 * (rockNoise(vCloudP + t1 * e) - rn) + t2 * (rockNoise(vCloudP + t2 * e) - rn);
-          float amp = (0.15 + 0.6 * highland) * detailFade;
+          float amp = (0.15 + 0.6 * highland) * detailFade * (1.0 - 0.7 * iceK);
           normal = normalize(normal - TOVIEW(grad * amp));
         }
         // Dunes catch the light on their windward slopes and shade their lee faces.
@@ -528,7 +531,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
           vec3 t2 = cross(up, t1);
           float e = 0.002;
           vec3 grad = t1 * (landNoise(vCloudP + t1 * e) - ln) + t2 * (landNoise(vCloudP + t2 * e) - ln);
-          float amp = (1.0 + 3.0 * highland) * farFade;
+          float amp = (1.0 + 3.0 * highland) * farFade * (1.0 - 0.6 * iceK);
           normal = normalize(normal - TOVIEW(grad * amp));
         }
         // Bare rock, per pixel, where the detailed surface (normal included) is steep on high

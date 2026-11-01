@@ -561,6 +561,8 @@ function buildSmooth(inp: SurfaceInput): Surface {
     const crags = e > 0.12
       ? 0.55 * relief * Math.pow(e, 1.1) * Math.max(-0.16, eroded(dx, dy, dz)) * Math.min(1, (e - 0.12) / 0.15)
       : 0;
+    // Ice sheets bury their relief: smooth domes, the odd nunatak.
+    if (w.biome[owner] === B.ICE) return h + gentle * inp.relief * 0.35 + crags * 0.2;
     return h + gentle * inp.relief + crags;
   };
 
