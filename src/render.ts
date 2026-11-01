@@ -142,6 +142,8 @@ export class PlanetView {
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
+    // How quickly a flung globe stops. The default 0.05 coasted too long; 0.1 halves the glide.
+    this.controls.dampingFactor = 0.1;
     this.controls.enablePan = false;
     this.controls.minDistance = 1.006;   // raised over high ground each frame (applyTilt)
     this.controls.maxDistance = 7;
