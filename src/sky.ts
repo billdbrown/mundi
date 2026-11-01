@@ -742,6 +742,42 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           float streak = vnoise(q) * 0.5 + vnoise(R * q * 2.1) * 0.3 + vnoise(R * R * q * 4.3) * 0.2;
           float lie = (1.0 - 0.9 * smoothstep(0.08, 0.3, slope)) * smoothstep(0.25, 0.65, streak + snow * 0.35);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.95, 0.98), clamp(snow * lie, 0.0, 1.0) * 0.95);
+          // Glaciers: ice fills the high valleys and flows down them, past the snow line, as
+          // tongues streaked along the flow with dark lines of rock debris (moraines). Valleys
+          // from the shadow height map: ground lower than the ring around it.
+          float gfade;
+          vec2 guv = groundUv(vCloudP, gfade);
+          if (gfade > 0.0 && st < line + 0.13 && hAbove / uRelief > 0.15) {
+            float rr = 0.0015 / (2.0 * uShR);
+            float hc = texture(uShH, guv).r / 50.0, ring = 0.0, ring2 = 0.0;
+            for (int i = 0; i < 6; i++) {
+              vec2 o = vec2(cos(float(i) * 1.0472), sin(float(i) * 1.0472));
+              ring += texture(uShH, guv + o * rr).r / 50.0;
+              ring2 += texture(uShH, guv + o * rr * 3.0).r / 50.0;
+            }
+            // Valleys at two scales: side valleys a few km across, and the main valleys.
+            // Valleys: the floors of the erosion filter's gullies (the valleys you see; the height
+            // map is too coarse for them), and the broad valleys of the height map.
+            float valley = max(smoothstep(-0.06, -0.26, eroH) * smoothstep(0.0, 0.3, eroK) * 1.1,
+                               smoothstep(0.0003, 0.0015, ring2 / 6.0 - hc));
+            valley = clamp(valley, 0.0, 1.0);
+            float iceZone = smoothstep(line + 0.13, line + 0.03, st + edge * 0.5);
+            float gl = valley * iceZone * gfade * smoothstep(0.15, 0.3, hAbove / uRelief);
+            if (gl > 0.01) {
+              // Downhill, from the height map, for streaks along the flow.
+              vec2 gh = vec2(texture(uShH, guv + vec2(rr, 0.0)).r - texture(uShH, guv - vec2(rr, 0.0)).r,
+                             texture(uShH, guv + vec2(0.0, rr)).r - texture(uShH, guv - vec2(0.0, rr)).r);
+              vec3 down = -(uShE * gh.x + uShN * gh.y);
+              down = normalize(down - sn * dot(down, sn) + sn.yzx * 1e-5);
+              vec3 across = cross(sn, down);
+              float u = dot(vCloudP, across), v = dot(vCloudP, down);
+              float flow = snoise(vec3(u * 2500.0, v * 180.0, 3.0)) * 0.6 + snoise(vec3(u * 7000.0, v * 500.0, 9.0)) * 0.4;
+              float moraine = 1.0 - smoothstep(0.03, 0.1, abs(sin(u * 1400.0 + snoise(vec3(u * 300.0, v * 60.0, 1.0)) * 2.0)));
+              vec3 ice = vec3(0.78, 0.86, 0.93) * (0.9 + 0.12 * flow);
+              ice = mix(ice, vec3(0.32, 0.3, 0.28), moraine * 0.55 * aaFade(0.0005, foot));
+              diffuseColor.rgb = mix(diffuseColor.rgb, ice, smoothstep(0.05, 0.4, gl) * 0.92);
+            }
+          }
         }`);
     // Shadows cast by the terrain dim the sun's direct light (terrainshadow.ts).
     sh.fragmentShader = shadowLights(sh.fragmentShader, 'vCloudP');
