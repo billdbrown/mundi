@@ -57,98 +57,100 @@ body.capture #panel, body.capture #info, body.capture #scale { display: none; }
 
 /* ---------------------------------------------------------------- planet-first shell */
 body.capture .ui { display: none !important; }
-body.shell #panel.advanced { display: none; }
-body.shell #panel { top: auto; bottom: 84px; left: 16px; max-height: calc(100vh - 220px); overflow: auto; }
+.ui [hidden] { display: none !important; }
 
-.ui { --glass: rgba(10, 14, 22, 0.62); --edge: rgba(255, 255, 255, 0.12); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.ui { --glass: rgba(10, 14, 22, 0.62); --edge: rgba(255, 255, 255, 0.12); --on: rgba(110, 170, 255, 0.25);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 .ui button { font: inherit; color: var(--text); cursor: pointer; }
 .ui .pill { position: relative; background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge);
   border-radius: 999px; padding: 8px 14px; font-size: 13px; transition: border-color .15s, background .15s; }
 .ui .pill:hover, .ui .pill.on { border-color: rgba(140, 190, 255, 0.6); }
 .ui .pill.primary { background: rgba(70, 120, 200, 0.35); }
 
+/* Top left: the name, then the almanac (or the chronicle during Centuries) */
 .brand { position: fixed; top: 22px; left: 26px; pointer-events: none; text-shadow: 0 2px 12px rgba(0,0,0,.7); }
 .wordmark { font-size: 11px; letter-spacing: 0.42em; color: rgba(255,255,255,.6); }
 .pname { font-size: 34px; font-weight: 300; letter-spacing: 0.02em; margin-top: 2px; }
 .pseed { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
-.actions { position: fixed; top: 22px; right: 22px; display: flex; gap: 8px; }
-
-.lenses { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; gap: 2px;
-  background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 999px; padding: 4px; }
-.lenses button { background: none; border: none; border-radius: 999px; padding: 7px 14px; display: flex; gap: 6px; align-items: center;
-  color: var(--muted); font-size: 13px; }
-.lenses button.on { background: rgba(255,255,255,.14); color: #fff; }
-.lenses .ico { font-size: 14px; }
-
-.legend { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
-  font-size: 11px; color: var(--muted); text-shadow: 0 1px 4px #000; }
-.legend i { display: block; width: 160px; height: 6px; border-radius: 3px; }
-
-.shape-toggle { position: fixed; left: 22px; bottom: 22px; }
-.drawer { position: fixed; left: 22px; bottom: 72px; width: 300px; background: var(--glass); backdrop-filter: blur(14px);
-  border: 1px solid var(--edge); border-radius: 16px; padding: 14px 16px 12px; display: grid; gap: 12px; }
-.drawer-head { display: flex; justify-content: space-between; align-items: center; }
-.drawer h2 { margin: 0; font-size: 14px; font-weight: 600; }
-.drawer .x { background: none; border: none; font-size: 20px; line-height: 1; color: var(--muted); }
-.presets, .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.presets button, .chips button { background: rgba(255,255,255,.06); border: 1px solid var(--edge); border-radius: 999px;
-  padding: 5px 10px; font-size: 12px; }
-.presets button.on, .chips button.on { background: rgba(110,170,255,.25); border-color: rgba(140,190,255,.6); }
-.dials { display: grid; gap: 10px; }
-.dial { display: grid; gap: 3px; }
-.dial-name { font-size: 12px; color: var(--text); }
-.dial input { width: 100%; accent-color: #8fb8ff; }
-.dial-ends { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); font-style: normal; }
-.dial-ends em { font-style: normal; }
-.toggle { font-size: 12px; color: var(--text); display: flex; gap: 6px; align-items: center; }
-.link { background: none; border: none; padding: 0; text-align: left; font-size: 12px; color: #8fb8ff !important; }
-
-.almanac { display: none; }
-.ui-b .almanac { display: block; position: fixed; top: 120px; left: 26px; width: 250px; background: var(--glass);
+.almanac { position: fixed; top: 120px; left: 26px; width: 250px; background: var(--glass);
   backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 14px; padding: 12px 14px; font-size: 12px; }
 .almanac h3 { margin: 0 0 8px; font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
 .almanac dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 5px 10px; }
 .almanac dt { color: var(--muted); }
 .almanac dd { margin: 0; }
-.chips { display: none; }
-.ui-b .chips { display: flex; position: fixed; left: 200px; bottom: 26px; max-width: calc(50vw - 420px); }
-.ui-b .shape-toggle { }
 
-.hint { position: fixed; left: 50%; bottom: 76px; transform: translateX(-50%); font-size: 12px; color: rgba(255,255,255,.55);
-  text-shadow: 0 1px 6px #000; pointer-events: none; transition: opacity 1.2s; }
-.hint.gone { opacity: 0; }
-.ui-b .hint { bottom: 96px; }
-.toast { position: fixed; top: 74px; right: 22px; background: var(--glass); border: 1px solid var(--edge); border-radius: 10px;
-  padding: 8px 12px; font-size: 12px; }
+/* Top right: New world (a split button with a menu) and Share. Custom world opens below. */
+.actions { position: fixed; top: 22px; right: 22px; z-index: 10; display: flex; gap: 8px; align-items: flex-start; }
+.newworld { position: relative; display: flex; }
+.ui .nw-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ui .nw-more { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-color: rgba(255,255,255,.22);
+  margin-left: -1px; padding: 8px 11px; }
+.menu { position: absolute; top: calc(100% + 6px); right: 0; width: 250px; z-index: 5; display: grid; gap: 1px;
+  background: rgba(10, 14, 22, 0.88); backdrop-filter: blur(14px); border: 1px solid var(--edge); border-radius: 14px; padding: 6px; }
+.menu button { display: grid; gap: 1px; text-align: left; background: none; border: none; border-radius: 9px; padding: 7px 10px; }
+.menu button:hover { background: rgba(255,255,255,.08); }
+.menu button.on { background: var(--on); }
+.menu b { font-weight: 500; font-size: 13px; }
+.menu span { font-size: 11.5px; color: var(--muted); }
+.menu hr { border: none; border-top: 1px solid var(--edge); margin: 4px 6px; }
 
-body.shell #scale { bottom: 26px; right: 26px; }
-body.shell #info { border-radius: 12px; padding: 8px 11px; background: rgba(10,14,22,.78); backdrop-filter: blur(8px); }
+.drawer { position: fixed; top: 70px; right: 22px; width: 300px; max-height: calc(100vh - 160px); overflow: auto;
+  background: var(--glass); backdrop-filter: blur(14px); border: 1px solid var(--edge); border-radius: 16px;
+  padding: 14px 16px 12px; display: grid; gap: 12px; align-content: start; }
+.drawer-head { display: flex; justify-content: space-between; align-items: center; }
+.drawer h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.drawer .x { background: none; border: none; font-size: 20px; line-height: 1; color: var(--muted); }
+.drawer-note { margin: -6px 0 0; font-size: 11.5px; color: var(--muted); }
+.dials { display: grid; gap: 10px; }
+.dial { display: grid; gap: 3px; }
+.dial-name { font-size: 12px; color: var(--text); }
+.dial input { width: 100%; accent-color: #8fb8ff; }
+.dial-ends { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); }
+.dial-ends em { font-style: normal; }
+.link { background: none; border: none; padding: 0; text-align: left; font-size: 12px; color: #8fb8ff !important; }
+/* The old slider panel, inside the drawer under "All settings" */
+body.shell #panel.advanced { display: none; }
+.drawer #panel { position: static; width: auto; max-height: none; overflow: visible; padding: 0;
+  background: none; border: none; backdrop-filter: none; }
+.drawer #panel header { display: none; }
+.drawer #controls { margin-top: 0; }
 
-@media (max-width: 720px) {
-  .pname { font-size: 24px; }
-  .brand { top: 14px; left: 16px; }
-  .actions { top: 14px; right: 14px; }
-  .actions #share { display: none; }
-  .lenses { bottom: 70px; }
-  .lenses .lbl { display: none; }
-  .shape-toggle { left: 50%; transform: translateX(-50%); bottom: 18px; }
-  .drawer { left: 8px; right: 8px; width: auto; bottom: 120px; }
-  .ui-b .almanac, .ui-b .chips { display: none; }
-  .hint { bottom: 122px; }
-  body.shell #scale { bottom: 18px; right: 14px; }
+.toast { position: fixed; top: 74px; right: 22px; z-index: 6; background: var(--glass); border: 1px solid var(--edge);
+  border-radius: 10px; padding: 8px 12px; font-size: 12px; }
+
+/* Top centre: Globe / Flat map / Clouds */
+.proj { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px;
+  background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 999px; }
+.proj button { background: none; border: none; border-radius: 999px; padding: 6px 13px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.proj button:hover { color: var(--text); }
+.proj button.on { background: rgba(255,255,255,.13); color: #fff; }
+.proj .ico { display: inline-block; width: 1.1em; text-align: center; }
+.proj .sep { width: 1px; align-self: stretch; margin: 4px 3px; background: var(--edge); }
+
+/* Bottom left: the lenses, with the legend for the data lenses above them */
+.lenses { position: fixed; left: 22px; bottom: 22px; display: flex; gap: 2px;
+  background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 999px; padding: 4px; }
+.lenses button { background: none; border: none; border-radius: 999px; padding: 7px 13px; display: flex; gap: 7px; align-items: center;
+  color: var(--muted); font-size: 13px; }
+.lenses button:hover { color: var(--text); }
+.lenses button.on { background: rgba(255,255,255,.14); color: #fff; }
+.lenses .ico { font-size: 14px; width: 1.1em; text-align: center; }
+.legend { position: fixed; left: 26px; bottom: 72px; display: flex; align-items: center; gap: 8px;
+  font-size: 11px; color: var(--muted); text-shadow: 0 1px 4px #000; }
+.legend i { display: block; width: 160px; height: 6px; border-radius: 3px; }
+/* Column variant: a stack, like a map app's layer picker */
+.lenses-column .lenses { flex-direction: column; border-radius: 16px; }
+.lenses-column .lenses button { border-radius: 12px; padding: 7px 14px 7px 11px; }
+.lenses-column .legend { bottom: 214px; }
+/* Row variant: the labels drop out when the clock in the middle needs the room */
+@media (max-width: 1480px) {
+  .lenses-row .lenses .lbl { display: none; }
+  .lenses-row .lenses button { padding: 7px 11px; }
 }
 
-/* Fixes: [hidden] must win over display rules; pills that are also fixed-position. */
-.ui [hidden] { display: none !important; }
-.ui .shape-toggle { position: fixed; }
-.ui-b .chips { left: 22px; bottom: 68px; max-width: 330px; }
-.ui-b .ui:has(#drawer:not([hidden])) .chips, .ui:has(#drawer:not([hidden])) .chips { display: none; }
-.ui:has(#drawer:not([hidden])) .almanac { display: none; }
-@media (max-width: 720px) { .ui .shape-toggle { left: 50%; transform: translateX(-50%); } }
-
-/* Clock */
-.clock { position: fixed; left: 50%; bottom: 74px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px;
+/* Bottom centre: the clock, with the hint above it */
+.clock { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px;
   background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 999px; padding: 4px 14px 4px 4px;
   font-size: 12px; white-space: nowrap; }
 .clock button { background: rgba(255,255,255,.06); border: none; border-radius: 999px; padding: 6px 12px; font-size: 12px; color: var(--text); }
@@ -160,27 +162,16 @@ body.shell #info { border-radius: 12px; padding: 8px 11px; background: rgba(10,1
 .clock .yearbar { position: relative; width: 64px; height: 4px; border-radius: 2px; margin: 0 4px;
   background: linear-gradient(90deg, #cfe3ff 0 22%, #9fd28a 22% 47%, #e7c86a 47% 72%, #d48a4a 72% 97%, #cfe3ff 97%); opacity: .8; }
 .clock .yearbar b { position: absolute; top: -3px; width: 2px; height: 10px; margin-left: -1px; background: #fff; border-radius: 1px; }
-.hint { bottom: 122px !important; }
-.legend { bottom: 124px; }
-.ui-b .legend { bottom: 124px; }
-@media (max-width: 720px) {
-  .clock { bottom: 118px; }
-  .clock .date { display: none; }
-  .clock.running .date { display: inline; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
-  .hint { bottom: 166px !important; }
-}
+.clock .timeline { width: 150px; accent-color: #e0b04a; margin: 0 4px; }
 
-/* Globe / flat map switch */
-.proj { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px;
-  background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 999px; }
-.proj button { background: none; border: none; border-radius: 999px; padding: 6px 13px; font-size: 12px; color: var(--muted); }
-.proj button:hover { color: var(--text); }
-.proj button.on { background: rgba(255,255,255,.13); color: #fff; }
-.proj .ico { display: inline-block; width: 1.1em; text-align: center; }
-@media (max-width: 720px) { .proj { top: 64px; } }
+.hint { position: fixed; left: 50%; bottom: 74px; transform: translateX(-50%); font-size: 12px; color: rgba(255,255,255,.55);
+  text-shadow: 0 1px 6px #000; pointer-events: none; transition: opacity 1.2s; white-space: nowrap; }
+.hint.gone { opacity: 0; }
+
+body.shell #scale { bottom: 26px; right: 26px; }
+body.shell #info { border-radius: 12px; padding: 8px 11px; background: rgba(10,14,22,.78); backdrop-filter: blur(8px); }
 
 /* Centuries */
-.clock .timeline { width: 150px; accent-color: #e0b04a; margin: 0 4px; }
 .chronicle { position: fixed; top: 120px; left: 26px; width: 290px; background: var(--glass); backdrop-filter: blur(10px);
   border: 1px solid var(--edge); border-radius: 14px; padding: 12px 15px; font-size: 12px; line-height: 1.45; }
 .chronicle h3 { margin: 0 0 6px; font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
@@ -189,7 +180,32 @@ body.shell #info { border-radius: 12px; padding: 8px 11px; background: rgba(10,1
 .chronicle p b { color: #e0b04a; font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 4px; }
 .chronicle .quiet { color: var(--muted); }
 @keyframes chron-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-@media (max-width: 720px) { .chronicle { top: auto; bottom: 170px; left: 8px; right: 8px; width: auto; max-height: 30vh; overflow: hidden; }
-  .clock .timeline { width: 90px; } }
 
-.proj .sep { width: 1px; align-self: stretch; margin: 4px 3px; background: var(--edge); }
+/* Phones: icons only on the lenses, and the clock kept clear of them */
+@media (max-width: 720px) {
+  .pname { font-size: 24px; }
+  .brand { top: 14px; left: 16px; }
+  .actions { top: 14px; right: 14px; }
+  .actions #share { display: none; }
+  .proj { top: 92px; }
+  .almanac { display: none; }
+  .menu { width: min(260px, calc(100vw - 28px)); }
+  .drawer { top: 136px; left: 8px; right: 8px; width: auto; max-height: calc(100vh - 290px); }
+  .toast { top: 136px; }
+  .lenses { left: 10px; bottom: 14px; }
+  .lenses .lbl { display: none; }
+  .lenses button, .lenses-column .lenses button { padding: 8px 10px; }
+  .legend { left: 12px; }
+  .legend i { width: 110px; }
+  /* A column has no room beside the clock on a phone, so phones always get the row. */
+  .lenses-column .lenses { flex-direction: row; border-radius: 999px; }
+  .lenses-column .lenses button { border-radius: 999px; }
+  .clock { bottom: 62px; }
+  .legend, .lenses-column .legend { bottom: 112px; }
+  .clock .date { display: none; }
+  .clock.running .date { display: inline; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
+  .hint { bottom: 146px; }
+  body.shell #scale { bottom: 18px; right: 14px; }
+  .chronicle { top: auto; bottom: 170px; left: 8px; right: 8px; width: auto; max-height: 30vh; overflow: hidden; }
+  .clock .timeline { width: 90px; }
+}

@@ -1,10 +1,10 @@
 /**
  * The planet-first interface: the globe fills the screen and the controls stay out of its way.
  *
- * Name, new world, share, a lens bar, a "Shape this world" drawer, an almanac card describing
- * the planet, legends for the data lenses, preset chips, and the clock. (A minimal variant
- * without the almanac was tried side by side and dropped, 2026-10-31.) The old slider panel
- * survives as "Advanced".
+ * Name; a New world button whose menu offers kinds of world and a Custom world drawer (four
+ * dials, then the old slider panel as "All settings"); share; a lens bar in the bottom-left
+ * corner with legends for the data lenses; an almanac card describing the planet; the clock.
+ * (A minimal variant without the almanac was tried side by side and dropped, 2026-10-31.)
  */
 import type { PlanetView, ViewOptions } from './render.ts';
 import type { World, WorldParams } from './world.ts';
@@ -48,14 +48,14 @@ const LEGENDS: Partial<Record<Lens, [string, string, string]>> = {
   rain: ['Arid', 'Wet', 'linear-gradient(90deg, hsl(36 60% 60%), hsl(126 60% 47%), hsl(216 60% 35%))'],
 };
 
-interface Preset { id: string; label: string; p: Partial<WorldParams> }
+interface Preset { id: string; label: string; blurb: string; p: Partial<WorldParams> }
 const PRESETS: Preset[] = [
-  { id: 'earthlike', label: 'Earthlike', p: { ocean: 0.68, continents: 3, plates: 12, roughness: 0.45, heat: 0, wetness: 0 } },
-  { id: 'pangaea', label: 'Pangaea', p: { ocean: 0.6, continents: 1, plates: 10, roughness: 0.35, heat: 0.05, wetness: -0.05 } },
-  { id: 'archipelago', label: 'Archipelago', p: { ocean: 0.8, continents: 8, plates: 30, roughness: 0.85, heat: 0.05, wetness: 0.1 } },
-  { id: 'iceage', label: 'Ice age', p: { ocean: 0.64, continents: 3, plates: 12, roughness: 0.45, heat: -0.3, wetness: -0.1 } },
-  { id: 'desert', label: 'Desert world', p: { ocean: 0.35, continents: 2, plates: 12, roughness: 0.4, heat: 0.15, wetness: -0.3 } },
-  { id: 'water', label: 'Water world', p: { ocean: 0.9, continents: 6, plates: 20, roughness: 0.7, heat: 0.05, wetness: 0.1 } },
+  { id: 'earthlike', label: 'Earthlike', blurb: 'A few continents, two-thirds sea', p: { ocean: 0.68, continents: 3, plates: 12, roughness: 0.45, heat: 0, wetness: 0 } },
+  { id: 'pangaea', label: 'Pangaea', blurb: 'One supercontinent', p: { ocean: 0.6, continents: 1, plates: 10, roughness: 0.35, heat: 0.05, wetness: -0.05 } },
+  { id: 'archipelago', label: 'Archipelago', blurb: 'Scattered islands', p: { ocean: 0.8, continents: 8, plates: 30, roughness: 0.85, heat: 0.05, wetness: 0.1 } },
+  { id: 'iceage', label: 'Ice age', blurb: 'Cold, with great ice caps', p: { ocean: 0.64, continents: 3, plates: 12, roughness: 0.45, heat: -0.3, wetness: -0.1 } },
+  { id: 'desert', label: 'Desert world', blurb: 'Dry land, little sea', p: { ocean: 0.35, continents: 2, plates: 12, roughness: 0.4, heat: 0.15, wetness: -0.3 } },
+  { id: 'water', label: 'Water world', blurb: 'Nine-tenths ocean', p: { ocean: 0.9, continents: 6, plates: 20, roughness: 0.7, heat: 0.05, wetness: 0.1 } },
 ];
 
 /** Four plain-language dials, each 0..1, mapped onto the raw parameters. */
@@ -90,8 +90,12 @@ const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 export function mountShell(app: App) {
   const r = app.renderer;
-  document.body.classList.add('shell', 'ui-b');
+  document.body.classList.add('shell');
   document.getElementById('panel')!.classList.add('advanced');
+  // Layer buttons in the bottom-left corner: a row or a column, chosen live (?lenses=row|column).
+  // Temporary: once Bill picks one, the other goes.
+  const lensLayout = new URLSearchParams(location.search).get('lenses') === 'row' ? 'row' : 'column';
+  document.body.classList.add(`lenses-${lensLayout}`);
 
   const root = document.createElement('div');
   root.className = 'ui';
@@ -102,17 +106,24 @@ export function mountShell(app: App) {
       <div class="pseed" id="pseed"></div>
     </header>
     <div class="actions">
-      <button class="pill primary" id="new-world" title="Generate a new planet">⟳ New world</button>
+      <div class="newworld">
+        <button class="pill primary nw-main" id="new-world" title="Another planet of the same kind">⟳ New world</button>
+        <button class="pill primary nw-more" id="nw-more" title="Choose a kind of world" aria-haspopup="menu" aria-expanded="false">▾</button>
+        <div class="menu" id="nw-menu" role="menu" hidden>
+          ${PRESETS.map((p) => `<button role="menuitem" data-preset="${p.id}"><b>${p.label}</b><span>${p.blurb}</span></button>`).join('')}
+          <hr />
+          <button role="menuitem" id="nw-custom"><b>✦ Custom world…</b><span>Set every dial yourself</span></button>
+        </div>
+      </div>
       <button class="pill" id="share" title="Copy a link to this exact planet">⤴ Share</button>
     </div>
     <nav class="lenses" id="lenses">
       ${LENSES.map((l) => `<button data-lens="${l.id}" title="${l.label}"><span class="ico">${l.icon}</span><span class="lbl">${l.label}</span></button>`).join('')}
     </nav>
     <div class="legend" id="legend" hidden><span id="legend-lo"></span><i id="legend-bar"></i><span id="legend-hi"></span></div>
-    <button class="pill shape-toggle" id="shape-toggle">✦ Shape this world</button>
     <aside class="drawer" id="drawer" hidden>
-      <div class="drawer-head"><h2>Shape this world</h2><button class="x" id="drawer-close" title="Close">×</button></div>
-      <div class="presets" id="presets">${PRESETS.map((p) => `<button data-preset="${p.id}">${p.label}</button>`).join('')}</div>
+      <div class="drawer-head"><h2>Custom world</h2><button class="x" id="drawer-close" title="Close">×</button></div>
+      <p class="drawer-note">Changes reshape this planet as you drag. ⟳ New world keeps these settings.</p>
       <div class="dials">
         ${DIALS.map((d) => `
           <label class="dial"><span class="dial-name">${d.label}</span>
@@ -120,11 +131,11 @@ export function mountShell(app: App) {
             <span class="dial-ends"><em>${d.lo}</em><em>${d.hi}</em></span>
           </label>`).join('')}
       </div>
-      <button class="link" id="advanced-toggle">Advanced settings</button>
+      <button class="link" id="advanced-toggle">All settings</button>
+      <div id="advanced-slot"></div>
     </aside>
     <section class="almanac" id="almanac"></section>
     <section class="chronicle" id="chronicle" hidden><h3>Chronicle</h3><div id="chronicle-list"></div></section>
-    <div class="chips" id="chips">${PRESETS.map((p) => `<button data-preset="${p.id}">${p.label}</button>`).join('')}</div>
     <div class="clock" id="clock">
       <button data-scale="day" title="Speed time up: a day passes in 24 seconds"><span class="ico">☀</span> Watch a day</button>
       <button data-scale="year" title="Speed time up: a year passes in 30 seconds"><span class="ico">❄</span> Watch a year</button>
@@ -189,22 +200,39 @@ export function mountShell(app: App) {
   };
   syncCloudButton();
 
-  // --- Drawer: presets, dials, advanced ---
-  const openDrawer = (on: boolean) => { $('drawer').hidden = !on; $('shape-toggle').classList.toggle('on', on); };
-  $('shape-toggle').onclick = () => openDrawer($('drawer').hidden === true);
-  $('drawer-close').onclick = () => openDrawer(false);
+  // --- New world menu: a kind of world (fresh seed), or a custom one ---
+  const openMenu = (on: boolean) => {
+    $('nw-menu').hidden = !on;
+    $('nw-more').setAttribute('aria-expanded', String(on));
+    $('nw-more').classList.toggle('on', on);
+  };
+  $('nw-more').onclick = (e) => { e.stopPropagation(); openMenu($('nw-menu').hidden === true); };
+  document.addEventListener('pointerdown', (e) => {
+    if (!$('nw-menu').hidden && !(e.target as Element).closest('.newworld')) openMenu(false);
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { openMenu(false); openDrawer(false); } });
   root.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach((b) => {
     b.onclick = () => {
       const pre = PRESETS.find((x) => x.id === b.dataset.preset)!;
-      app.setParams(pre.p);
+      openMenu(false);
+      openDrawer(false);
+      app.setParams({ ...pre.p, seed: Math.floor(Math.random() * 1e6) });
       syncDials();
     };
   });
+
+  // --- Custom world drawer: the four dials, then every raw setting under "All settings" ---
+  const openDrawer = (on: boolean) => { $('drawer').hidden = !on; };
+  $('nw-custom').onclick = () => { openMenu(false); openDrawer(true); };
+  $('drawer-close').onclick = () => openDrawer(false);
+  // The old slider panel lives inside the drawer now, rather than floating on its own.
+  $('advanced-slot').appendChild(document.getElementById('panel')!);
   const syncDials = () => {
     const p = app.params();
     for (const d of DIALS) root.querySelector<HTMLInputElement>(`[data-dial="${d.id}"]`)!.value = String(clamp01(d.get(p)));
     const match = PRESETS.find((x) => Object.entries(x.p).every(([k, v]) => Math.abs((p[k as keyof WorldParams] as number) - (v as number)) < 1e-6));
     root.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach((b) => b.classList.toggle('on', b.dataset.preset === match?.id));
+    $('nw-custom').classList.toggle('on', !match);
   };
   for (const d of DIALS) {
     const input = root.querySelector<HTMLInputElement>(`[data-dial="${d.id}"]`)!;
@@ -374,7 +402,7 @@ export function mountShell(app: App) {
   $('advanced-toggle').onclick = () => {
     const panel = document.getElementById('panel')!;
     panel.classList.toggle('advanced');
-    $('advanced-toggle').textContent = panel.classList.contains('advanced') ? 'Advanced settings' : 'Hide advanced settings';
+    $('advanced-toggle').textContent = panel.classList.contains('advanced') ? 'All settings' : 'Hide all settings';
   };
 
   // --- Almanac ---
