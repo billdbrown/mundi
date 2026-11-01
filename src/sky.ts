@@ -4,6 +4,7 @@ import type { CloudPixels } from './clouds.ts';
 import { hash01 } from './rng.ts';
 import { MERC_GLSL, MERC_DISCARD, mercVertex, patchShaderChunks } from './mercator.ts';
 import { GROVE_GLSL } from './groves.ts';
+import { EROSION_GLSL } from './erosion.ts';
 
 patchShaderChunks();
 
@@ -27,6 +28,8 @@ export interface CloudUniforms {
   uMapDist: { value: number };
   /** Frequency of the grove pattern (groves.ts), set per world. */
   uGrove: { value: number };
+  /** Erosion filter strength, 0..1 (erosion.ts). */
+  uErosion: { value: number };
   /** Centuries: the year shown (−1: no civilisation drawn). */
   uYear: { value: number };
   /** Weather time in days, and the active storms (weather.ts). */
@@ -36,7 +39,7 @@ export interface CloudUniforms {
 
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
-    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uYear: { value: -1 },
+    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uErosion: { value: 1 }, uYear: { value: -1 },
     uWeather: { value: 0 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) } };
 }
 
@@ -314,7 +317,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
           return vec2(h, lee);
         }
         float duneH(vec3 p) { return duneField(p).x; }
-`)
+` + EROSION_GLSL)
       .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
         float hAbove = length(vCloudP) - 1.0;
         #ifdef MERCATOR
@@ -334,6 +337,42 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         diffuseColor.rgb *= mix(1.0, 0.74 + 0.52 * ln, (0.45 + 0.55 * highland) * farFade * (1.0 - 0.75 * iceK));
         float foot = length(fwidth(vCloudP));
         float desertW = 0.0;
+        // Erosion (erosion.ts): gullies running down the meshed slope, branching as they go.
+        // eroH says how deep in a gully this is; eroGrad bends the normal (below).
+        float eroH = 0.0, eroK = 0.0;
+        vec3 eroGrad = vec3(0.0);
+        if (uErosion > 0.0 && hAbove > 0.0004 && camDist < 0.3) {
+          #ifdef MERCATOR
+            vec3 wN = normalize(normalize(vNormal) * mercFrame(vCloudP));
+          #else
+            vec3 wN = normalize((vec4(vNormal, 0.0) * viewMatrix).xyz);
+          #endif
+          vec3 up = normalize(vCloudP);
+          // From high up the gullies read as hatching: they fade out, the orbit-scale relief
+          // (landNoise) takes over.
+          float eroFar = 1.0 - smoothstep(0.1, 0.3, camDist);
+          float cz = max(dot(wN, up), 0.3);
+          vec3 macro = -(wN - up * dot(wN, up)) / cz;
+          // Sand seas are flat between their dunes; rocky desert keeps a few dry channels (wadis).
+          #ifdef USE_CLIMATE
+            float sandE = smoothstep(0.24, 0.12, vClim.x) * smoothstep(0.4, 0.55, vClim.y) * (1.0 - highland);
+          #else
+            float sandE = 0.0;
+          #endif
+          eroFar *= 1.0 - 0.85 * sandE;
+          // The mesh is nearly flat between ranges: rolling hills (shaded too) give the water
+          // something to carve.
+          vec3 hg = hillGrad(vCloudP, up, smoothstep(0.02, 0.3, hAbove / uRelief)) * (1.0 - iceK);
+          macro += hg;
+          // Strength follows the slope smoothly: flats stay flat, and no hard edge where it starts.
+          eroK = smoothstep(0.0, 0.07, length(macro)) * (1.0 - iceK) * uErosion * eroFar;
+          eroGrad = hg * uErosion * eroFar;
+          if (eroK > 0.0) {
+            vec4 er = erosion(vCloudP, up, macro, foot);
+            eroH = er.x;
+            eroGrad += er.yzw * eroK;
+          }
+        }
         #ifdef USE_CLIMATE
           if (hAbove > 0.0004) {
             float moist = vClim.x, temp = vClim.y;
@@ -426,6 +465,19 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
             }
           }
         #endif
+        // Water gathers in the gullies: their floors are greener and darker, the spurs between
+        // them barer and paler, most of all in dry country (as in the Ethiopian highlands).
+        if (eroK > 0.0) {
+          #ifdef USE_CLIMATE
+            float dryE = 1.0 - smoothstep(0.4, 0.75, vClim.x);
+          #else
+            float dryE = 0.5;
+          #endif
+          float floorK = smoothstep(0.08, -0.25, eroH) * eroK;
+          float spurK = smoothstep(0.0, 0.3, eroH) * eroK;
+          diffuseColor.rgb *= mix(vec3(1.0), mix(vec3(0.78, 0.86, 0.74), vec3(0.5, 0.7, 0.42), dryE), floorK);
+          diffuseColor.rgb *= mix(vec3(1.0), vec3(1.16, 1.07, 0.9), spurK * (0.3 + 0.7 * dryE));
+        }
         // Centuries: farmland (a patchwork of fields with hedges) and towns (blocks and streets),
         // each from the year the history says it reached this spot.
         float civTown = 0.0;
@@ -499,9 +551,10 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
           vec3 t2 = cross(up, t1);
           float e = 0.0003;
           vec3 grad = t1 * (rockNoise(vCloudP + t1 * e) - rn) + t2 * (rockNoise(vCloudP + t2 * e) - rn);
-          float amp = (0.15 + 0.6 * highland) * detailFade * (1.0 - 0.7 * iceK);
+          float amp = (0.15 + 0.6 * highland) * detailFade * (1.0 - 0.7 * iceK) * (1.0 - 0.75 * eroK);
           normal = normalize(normal - TOVIEW(grad * amp));
         }
+        if (uErosion > 0.0) normal = normalize(normal - TOVIEW(eroGrad));
         // Dunes catch the light on their windward slopes and shade their lee faces.
         if (desertW > 0.0) {
           float k = desertW * aaFade(DUNE * 0.6, foot);
@@ -774,6 +827,17 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         // floor shows, so the land edge is jagged at every scale instead of a smooth curve.
         float cn = vnoise(vWorld * 110.0) * 0.75 + vnoise(vWorld * 330.0) * 0.25;
         float coast = smoothstep(0.0, uFoam * 0.35, vDepth - (cn - 0.4) * uFoam * 1.1);
+        // Lakes (water above sea level): their depth is biased deep right up to the shore, and
+        // with two mesh steps per cell the shore can only fall on cell edges. A strong per-pixel
+        // wobble pulls the shoreline in from the hexagon instead. (Simplex: thresholded value
+        // noise shows its grid.)
+        #ifndef USE_FADE
+          if (length(vWorld) > 1.0002) {
+            float ln = snoise(vWorld * 80.0) * 0.5 + snoise(vWorld * 210.0 + 5.0) * 0.3 + snoise(vWorld * 600.0 + 9.0) * 0.2;
+            float lk = smoothstep(0.0, 0.0008, vDepth - (0.5 + 0.5 * ln) * 0.009);
+            a *= lk; foam *= lk;
+          }
+        #endif
         a *= coast;
         foam *= coast;
         gl_FragColor = vec4(col, max(a, foam * 0.9));

@@ -4,9 +4,10 @@
  *
  *   node scripts/look.mjs <outdir> <tag> [shot...]
  *
- * A shot is name=seed:target:alt[:lens], where target is a biome list (b12, b8+9) or a debug
+ * A shot is name=seed:target:alt[:lens] (seed may carry more hash, e.g. 77&detail=40), where target is a biome list (b12, b8+9) or a debug
  * spot (desert, river, coast...). `zoom=seed:target` shoots a descent at several heights.
- * URL from LOOK_URL (default http://localhost:5291/).
+ * URL from LOOK_URL (default http://localhost:5291/). TOPDOWN=1 looks straight down (no tilt);
+ * ERO=0 turns the erosion filter off.
  */
 import { chromium } from 'playwright-core';
 
@@ -37,6 +38,19 @@ async function aim(seed, target, alt, lens) {
       m.orbit(Math.atan2(P[best * 3], P[best * 3 + 2]) * 57.2958, Math.asin(P[best * 3 + 1]) * 57.2958, a);
       return best;
     }
+    if (t === 'hills') {
+      // Upland away from mountains: land cells of middling height in a block of the same.
+      const mid = (c) => w.water[c] === 0 && w.elevation[c] > 0.22 && w.elevation[c] < 0.45;
+      let best = -1, bd = -1;
+      for (let c = 0; c < w.grid.count; c++) {
+        if (!mid(c)) continue;
+        let n = 0;
+        for (const nb of w.grid.neighbors[c]) { if (mid(nb)) n++; for (const n2 of w.grid.neighbors[nb]) if (mid(n2)) n++; }
+        if (n > bd) { bd = n; best = c; }
+      }
+      m.orbit(Math.atan2(P[best * 3], P[best * 3 + 2]) * 57.2958, Math.asin(P[best * 3 + 1]) * 57.2958, a);
+      return best;
+    }
     if (!t.startsWith('b')) return m.flyTo(t, a);
     const bs = t.slice(1).split('+').map(Number);
     let best = -1, bd = -1;
@@ -52,17 +66,19 @@ async function aim(seed, target, alt, lens) {
 }
 
 for (const spec of specs) {
-  const [name, rest] = spec.split('=');
+  const name = spec.slice(0, spec.indexOf('=')), rest = spec.slice(spec.indexOf('=') + 1);
   const [seed, target, alt, lens] = rest.split(':');
   if (name === 'zoom') {
     for (const a of [1.6, 1.3, 1.15, 1.08, 1.04, 1.02]) {
-      await aim(Number(seed), target, a, lens);
+      await aim(seed, target, a, lens);
       await page.waitForTimeout(900);
       await page.screenshot({ path: `${out}/${tag}-zoom-${a}.png` });
     }
     continue;
   }
-  await aim(Number(seed), target, Number(alt), lens);
+  await aim(seed, target, Number(alt), lens);
+  if (process.env.TOPDOWN) await page.evaluate(() => { const v = window.mundi.view; v.tilt = 0; v.applyTilt = () => {}; v.haze.density = 0; v.sky.visible = false; v.sun.position.set(-2, 1.5, 2.6); });
+  if (process.env.ERO) await page.evaluate((e) => { window.mundi.view.cloudU.uErosion.value = Number(e); }, process.env.ERO);
   if (process.env.NOWATER) await page.evaluate(() => { const v = window.mundi.view; v.water.visible = false; v.applyVisibility = () => {}; });
   await page.waitForTimeout(1300);
   await page.screenshot({ path: `${out}/${tag}-${name}.png` });
