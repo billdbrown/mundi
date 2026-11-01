@@ -918,6 +918,8 @@ export class PlanetView {
     const cellSamples = new Map<number, { p: number[]; h: number }[]>();
     /** Drawn channel points per cell (x, y, z, half-width), so trees keep out of the water. */
     const riverPts = new Map<number, number[]>();
+    /** Drawn river segments (not streams) per cell: a (3), b (3), width. For riverside trees. */
+    const riverSegs = new Map<number, number[]>();
     /** Green-corridor segments along rivers through dry land: a, b (unit directions), half-width, strength, cell. */
     const corr: number[] = [];
     const DRY = new Set<number>([B.DESERT, B.SAVANNA, B.STEPPE, B.BEACH, B.TUNDRA]);
@@ -1006,6 +1008,12 @@ export class PlanetView {
           let rp = riverPts.get(o.cell);
           if (!rp) riverPts.set(o.cell, (rp = []));
           rp.push(d[0], d[1], d[2], o.w);
+          if (i > 0 && o.river && out[i - 1].river) {
+            const pr = out[i - 1], pl = Math.hypot(pr.x, pr.y, pr.z) || 1;
+            let rs = riverSegs.get(o.cell);
+            if (!rs) riverSegs.set(o.cell, (rs = []));
+            rs.push(pr.x / pl, pr.y / pl, pr.z / pl, d[0], d[1], d[2], o.w);
+          }
         }
       }
       // Corridor segments for the river (not stream) parts, with dryness smoothed along the path
@@ -1114,8 +1122,25 @@ export class PlanetView {
     this.rivers = mesh(riverBuf);
     this.streams = mesh(streamBuf);
     this.dunePatch.setRivers([this.rivers, this.streams]);
+    this.terrainShadow.setRivers(this.rivers, this.streams);
     this.paintCorridors(w, corr);
     const gap = spacing / 8;
+    // Riverside trees: how far a point is from the nearest drawn river, in radians past its bank.
+    this.flora.setRiverside((x, y, z, cell) => {
+      const l = Math.hypot(x, y, z), px = x / l, py = y / l, pz = z / l;
+      let best = Infinity;
+      for (const k of [cell, ...g.neighbors[cell]]) {
+        const a = riverSegs.get(k);
+        if (!a) continue;
+        for (let i = 0; i < a.length; i += 7) {
+          const bx = a[i + 3] - a[i], by = a[i + 4] - a[i + 1], bz = a[i + 5] - a[i + 2];
+          const qx = px - a[i], qy = py - a[i + 1], qz = pz - a[i + 2];
+          const t = Math.max(0, Math.min(1, (qx * bx + qy * by + qz * bz) / Math.max(1e-14, bx * bx + by * by + bz * bz)));
+          best = Math.min(best, Math.hypot(qx - bx * t, qy - by * t, qz - bz * t) - a[i + 6] * 0.5);
+        }
+      }
+      return best;
+    }, (cell) => !!w.river[cell] || g.neighbors[cell].some((n) => !!w.river[n]));
     this.flora.setWater((x, y, z, cell) => {
       const l = Math.hypot(x, y, z);
       for (const k of [cell, ...g.neighbors[cell]]) {

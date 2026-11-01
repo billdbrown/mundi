@@ -24,26 +24,46 @@ export interface ShadowUniforms {
   uShN: { value: THREE.Vector3 };
   uShR: { value: number };
   uShMap: { value: THREE.Texture | null };
+  /** The height map itself (x50), for things that look at the land's shape nearby (coasts). */
+  uShH: { value: THREE.Texture | null };
+  /** Water map: r near rivers (a few km), g the wider valley floor (tens of km). */
+  uShRiv: { value: THREE.Texture | null };
   uShOn: { value: number };
 }
 
 /** One set, shared by everything that receives terrain shadows. */
 export const shadowUniforms: ShadowUniforms = {
   uShC: { value: new THREE.Vector3(0, 0, 1) }, uShE: { value: new THREE.Vector3(1, 0, 0) }, uShN: { value: new THREE.Vector3(0, 1, 0) },
-  uShR: { value: 0.1 }, uShMap: { value: null }, uShOn: { value: 0 },
+  uShR: { value: 0.1 }, uShMap: { value: null }, uShH: { value: null }, uShRiv: { value: null }, uShOn: { value: 0 },
 };
 
-/** terrainShadow(p): 1 in sunlight, toward 0 in the terrain's shadow, at world point p. */
+/**
+ * terrainShadow(p): 1 in sunlight, toward 0 in the terrain's shadow, at world point p.
+ * groundRiver(p): the water map there (0 outside the region). groundUv(p, fade): the region's
+ * texture coordinate, with fade 0 outside and at its edge.
+ */
 export const SHADOW_GLSL = /* glsl */`
   uniform vec3 uShC, uShE, uShN;
   uniform float uShR, uShOn;
-  uniform sampler2D uShMap;
-  float terrainShadow(vec3 p) {
-    if (uShOn < 0.5 || dot(p, uShC) < 0.5) return 1.0;
+  uniform sampler2D uShMap, uShH, uShRiv;
+  vec2 groundUv(vec3 p, out float fade) {
+    fade = 0.0;
+    if (uShOn < 0.5 || dot(p, uShC) < 0.5) return vec2(0.5);
     vec2 lat = vec2(dot(p, uShE), dot(p, uShN)) / uShR;
-    float edge = smoothstep(1.0, 0.85, max(abs(lat.x), abs(lat.y)));
+    fade = smoothstep(1.0, 0.85, max(abs(lat.x), abs(lat.y)));
+    return lat * 0.5 + 0.5;
+  }
+  float terrainShadow(vec3 p) {
+    float edge;
+    vec2 uv = groundUv(p, edge);
     if (edge <= 0.0) return 1.0;
-    return mix(1.0, texture(uShMap, lat * 0.5 + 0.5).r, edge);
+    return mix(1.0, texture(uShMap, uv).r, edge);
+  }
+  vec2 groundRiver(vec3 p) {
+    float edge;
+    vec2 uv = groundUv(p, edge);
+    if (edge <= 0.0) return vec2(0.0);
+    return texture(uShRiv, uv).rg * edge;
   }
 `;
 
@@ -107,6 +127,29 @@ const shadowFragment = /* glsl */`
     gl_FragColor = vec4(vec3(smoothstep(-1.0, 1.0, lit)), 1.0);
   }`;
 
+/**
+ * Water map blur, two passes (across then down): r a narrow Gaussian (the green strip right along
+ * a river), g a wide one (its valley floor). Steps are in texels, so widths stay fixed on the
+ * ground whatever the region's size.
+ */
+const blurFragment = /* glsl */`
+  uniform sampler2D uSrc;
+  uniform vec2 uDir;
+  uniform float uNear, uWide, uFirst;
+  varying vec2 vUv;
+  void main() {
+    float n = 0.0, w = 0.0, k = 0.0;
+    for (int i = -6; i <= 6; i++) {
+      float f = float(i) / 3.0, g = exp(-0.5 * f * f);
+      vec4 a = texture(uSrc, vUv + uDir * float(i) * uNear / 3.0);
+      vec4 b = texture(uSrc, vUv + uDir * float(i) * uWide / 3.0);
+      n += g * a.r;
+      w += g * (uFirst > 0.5 ? b.r : b.g);
+      k += g;
+    }
+    gl_FragColor = vec4(n / k, w / k, 0.0, 1.0);
+  }`;
+
 export class TerrainShadow {
   private height = new THREE.WebGLRenderTarget(SIZE, SIZE, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true });
   private shadow = new THREE.WebGLRenderTarget(SIZE, SIZE, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
@@ -124,9 +167,31 @@ export class TerrainShadow {
   private lastSun = new THREE.Vector3();
   private heightDirty = true;
   private u = shadowUniforms;
+  // Water map: rivers drawn from above, then blurred two ways (blurFragment).
+  private riverRaw = new THREE.WebGLRenderTarget(512, 512, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+  private riverTmp = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+  private riverMap = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+  private riverScene = new THREE.Scene();
+  private riverMats = [1, 0.45].map((v) => new THREE.MeshBasicMaterial({
+    color: new THREE.Color(v, v, v), side: THREE.DoubleSide, depthTest: false, depthWrite: false,
+    blending: THREE.CustomBlending, blendEquation: THREE.MaxEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
+  }));
+  private blurScene = new THREE.Scene();
+  private blurMat: THREE.ShaderMaterial;
 
   constructor() {
     this.u.uShMap.value = this.shadow.texture;
+    this.u.uShH.value = this.height.texture;
+    this.u.uShRiv.value = this.riverMap.texture;
+    this.blurMat = new THREE.ShaderMaterial({
+      uniforms: { uSrc: { value: null }, uDir: { value: new THREE.Vector2() }, uNear: { value: 1 }, uWide: { value: 4 }, uFirst: { value: 1 } },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: blurFragment,
+      depthTest: false, depthWrite: false,
+    });
+    const bq = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.blurMat);
+    bq.frustumCulled = false;
+    this.blurScene.add(bq);
     this.terrainCopy.matrixAutoUpdate = false;
     this.terrainCopy.frustumCulled = false;
     this.heightScene.add(this.terrainCopy);
@@ -161,6 +226,22 @@ export class TerrainShadow {
     for (const o of objs) this.heightScene.add(o);
     this.heightDirty = true;
   }
+  /** Rivers, then streams (fainter), for the water map. */
+  setRivers(rivers: THREE.Mesh | undefined, streams: THREE.Mesh | undefined) {
+    this.riverScene.clear();
+    [rivers, streams].forEach((m, k) => {
+      if (!m) return;
+      const copy = new THREE.Mesh(m.geometry, this.riverMats[k]);
+      copy.matrixAutoUpdate = false;
+      copy.frustumCulled = false;
+      m.updateWorldMatrix(true, false);
+      copy.matrix.copy(m.matrixWorld);
+      copy.matrixWorld.copy(m.matrixWorld);
+      this.riverScene.add(copy);
+    });
+    this.heightDirty = true;
+  }
+
   /** Something casting shadows changed shape (the patch recentred). */
   invalidate() { this.heightDirty = true; }
 
@@ -211,6 +292,20 @@ export class TerrainShadow {
     renderer.setRenderTarget(this.height);
     renderer.clear();
     renderer.render(this.heightScene, cam);
+    // The water map: rivers from above, blurred across then down. Widths in radians: ~5 km for
+    // the strip along the water, ~25 km for the valley floor (on an Earth-sized world).
+    renderer.setRenderTarget(this.riverRaw);
+    renderer.clear();
+    renderer.render(this.riverScene, cam);
+    const texel = (2 * r) / 512, b = this.blurMat.uniforms;
+    b.uNear.value = Math.max(1, 0.0014 / texel) / 512;
+    b.uWide.value = Math.max(1, 0.004 / texel) / 512;
+    b.uSrc.value = this.riverRaw.texture; b.uDir.value.set(1, 0); b.uFirst.value = 1;
+    renderer.setRenderTarget(this.riverTmp);
+    renderer.render(this.blurScene, this.quadCam);
+    b.uSrc.value = this.riverTmp.texture; b.uDir.value.set(0, 1); b.uFirst.value = 0;
+    renderer.setRenderTarget(this.riverMap);
+    renderer.render(this.blurScene, this.quadCam);
     renderer.setRenderTarget(prev);
     renderer.setClearColor(prevClear, prevAlpha);
   }
@@ -242,6 +337,8 @@ export class TerrainShadow {
 
   dispose() {
     this.height.dispose(); this.shadow.dispose();
+    this.riverRaw.dispose(); this.riverTmp.dispose(); this.riverMap.dispose(); this.blurMat.dispose();
+    for (const m of this.riverMats) m.dispose();
     this.heightMat.dispose(); this.shadowMat.dispose();
   }
 }

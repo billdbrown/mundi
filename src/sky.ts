@@ -497,6 +497,27 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
             }
           }
         #endif
+        // Rivers green the land along them (the Nile from space): a strip right along the water,
+        // and a fainter valley floor around it, from the water map (terrainshadow.ts). Strongest
+        // in dry country, where nothing else is green; in wet country a deeper green.
+        #ifdef USE_CLIMATE
+          if (hAbove > 0.0002) {
+            vec2 rv = groundRiver(vCloudP);
+            if (rv.x + rv.y > 0.002) {
+              float dryR = smoothstep(0.5, 0.18, vClim.x) * smoothstep(0.15, 0.3, vClim.y);
+              // A crisp-edged strip (irrigated and flooded land ends abruptly at the desert), with
+              // ragged edges at several scales, and a faint valley floor around it.
+              float rag = snoise(vCloudP * 700.0) * 0.55 + snoise(vCloudP * 2200.0) * 0.3 + snoise(vCloudP * 6000.0) * 0.15;
+              float nearR = smoothstep(0.07, 0.13, rv.x + 0.05 * rag);
+              float wideR = smoothstep(0.02, 0.25, rv.y);
+              vec3 lush = vec3(0.075, 0.14, 0.035) * (0.85 + 0.3 * snoise01(vCloudP * 3000.0));
+              vec3 valley = mix(diffuseColor.rgb, vec3(0.2, 0.22, 0.1), 0.5);
+              float a = (1.0 - iceK) * mix(0.3, 1.0, dryR);
+              diffuseColor.rgb = mix(diffuseColor.rgb, valley, wideR * 0.5 * a);
+              diffuseColor.rgb = mix(diffuseColor.rgb, lush, nearR * 0.92 * a);
+            }
+          }
+        #endif
         // Beach: a thin, wavering strip of sand right at the sea's edge, in all but cold climates.
         // Thin and partial: from orbit a full-strength strip outlined every continent in yellow.
         #ifdef USE_CLIMATE

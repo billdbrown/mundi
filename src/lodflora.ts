@@ -15,7 +15,7 @@ import * as THREE from 'three';
 import { B, landBiome } from './biomes.ts';
 import { WATER_LAND, WATER_OCEAN, type World } from './world.ts';
 import type { SurfaceData } from './surface.ts';
-import { FLORA, ICEBERG, CACTUS, ROCK, treeGeometry, treeMaterial } from './flora.ts';
+import { FLORA, ICEBERG, CACTUS, ROCK, PALM, BROADLEAF, treeGeometry, treeMaterial } from './flora.ts';
 import { groveField, groveFreq, forestMask, openMask, REF_SPACING } from './groves.ts';
 import { makeRng } from './rng.ts';
 import { makeSimplex, type Noise3 } from './noise.ts';
@@ -23,6 +23,10 @@ import { makeSimplex, type Noise3 } from './noise.ts';
 /** Biomes that are forest (trees with clearings) and open country (trees only in groves). */
 const FOREST = new Set<number>([B.TAIGA, B.FOREST, B.TEMPERATE_RAIN, B.RAINFOREST, B.DRY_FOREST]);
 const OPEN = new Set<number>([B.SAVANNA, B.GRASSLAND]);
+/** Dry biomes, where trees crowd along rivers (gallery forest, date palms on the Nile). */
+const DRY = new Set<number>([B.DESERT, B.STEPPE, B.SAVANNA, B.DRY_FOREST, B.GRASSLAND]);
+/** Riverside band, radians past the bank (a few km on an Earth-sized world). */
+const RIVERSIDE = 0.0011;
 
 const SEA = 1.0;
 /** At scale 1, plants are full size within FADE_NEAR of the camera and gone at FADE_FAR. */
@@ -70,6 +74,15 @@ export class LodFlora {
   private inWater: ((x: number, y: number, z: number, cell: number) => boolean) | null = null;
   setWater(f: ((x: number, y: number, z: number, cell: number) => boolean) | null) {
     this.inWater = f;
+    this.forget();
+  }
+
+  /** Riverside trees: distance from a point to the nearest river past its bank, and which cells have one near. */
+  private riverDist: ((x: number, y: number, z: number, cell: number) => number) | null = null;
+  private riverNear: ((cell: number) => boolean) | null = null;
+  setRiverside(dist: ((x: number, y: number, z: number, cell: number) => number) | null, near: ((cell: number) => boolean) | null) {
+    this.riverDist = dist;
+    this.riverNear = near;
     this.forget();
   }
 
@@ -355,6 +368,23 @@ export class LodFlora {
             const cut = this.clearing && kind !== ROCK && kind !== CACTUS && rng() < 0.88 ? this.clearing(pt[0], pt[1], pt[2], c) : 0;
             out.push(pt[0], pt[1], pt[2], spacing * size * (0.022 + 0.032 * r * r), rng() * Math.PI * 2, 0.8 + 0.32 * rng(), kind, col, cut);
           }
+        }
+      }
+      // Along rivers through dry country, a dense band of trees: date palms in hot desert,
+      // poplar and willow elsewhere. Thick at the bank, thinning outward.
+      const dryHere = DRY.has(b) || (mountain && w.moisture[c] < 0.35);
+      if (dryHere && this.riverDist && this.riverNear?.(c)) {
+        const hot = w.temperature[c] > 0.62 && w.moisture[c] < 0.2;
+        const kind = hot ? PALM : BROADLEAF, col = hot ? 0x4c7d2c : 0x3f6b2a;
+        const n = count(26 * DENSITY * area * (b === B.DESERT ? 1 : 0.6));
+        for (let i = 0; i < n; i++) {
+          const pt = this.randomPoint(t, rng, false);
+          if (!pt) continue;
+          const d = this.riverDist(pt[0], pt[1], pt[2], c);
+          if (d < 0 || d > RIVERSIDE * (0.6 + 0.8 * rng()) || rng() > 1 - d / (RIVERSIDE * 1.4)) continue;
+          const r = rng();
+          const cut = this.clearing && rng() < 0.88 ? this.clearing(pt[0], pt[1], pt[2], c) : 0;
+          out.push(pt[0], pt[1], pt[2], spacing * (0.022 + 0.032 * r * r), rng() * Math.PI * 2, 0.8 + 0.32 * rng(), kind, col, cut);
         }
       }
     }
