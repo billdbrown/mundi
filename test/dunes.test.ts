@@ -17,5 +17,6 @@ test('dune simulation neither makes nor loses sand', () => {
 
 test('dunes grow out of the flat start', () => {
   const h = simulateDunes(opts);
-  assert.ok(Math.max(...h) > 2.5, 'some sand piles up well above the mean of 1 cell');
+  assert.ok(Math.max(...h) > 2, 'sand piles up to twice the mean of 1 cell');
+  assert.ok(Math.min(...h) < 0.2, 'bare ground opens up between the dunes');
 });

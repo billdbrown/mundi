@@ -113,9 +113,10 @@ export function simulateDunes(o: DuneOptions): Float32Array {
     }
   }
 
-  // Slab steps are blocky; a light blur rounds them without losing the slip faces.
+  // Slab steps are blocky (as real geometry they showed as sawteeth along every slip face);
+  // a blur rounds them, keeping the slip faces steep.
   let f = Float32Array.from(h, (v) => v * SLAB);
-  for (let pass = 0; pass < 3; pass++) {
+  for (let pass = 0; pass < 6; pass++) {
     const g = new Float32Array(N);
     for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
       g[y * n + x] = (4 * f[at(x, y)] + f[at(x + 1, y)] + f[at(x - 1, y)] + f[at(x, y + 1)] + f[at(x, y - 1)]) / 8;

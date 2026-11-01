@@ -15,6 +15,7 @@ import { LodFlora, FADE_NEAR, FADE_FAR } from './lodflora.ts';
 import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere, makeStars, makeSky, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
 import type { CloudPixels } from './clouds.ts';
 import { groveFreq } from './groves.ts';
+import { DunePatch } from './dunepatch.ts';
 import { CivLayer } from './civview.ts';
 import { Weather } from './weather.ts';
 import { GroundProbe } from './ground.ts';
@@ -111,6 +112,8 @@ export class PlanetView {
   /** Centuries: the history being shown, its drawing, and whether borders are on. */
   private history: History | null = null;
   private civ!: CivLayer;
+  /** Fine ground under the middle of the view, where dunes stand up as shapes (dunepatch.ts). */
+  private dunePatch!: DunePatch;
   private civBorders = false;
   /** Weather: storm schedule for this world, and weather time in days. */
   private weather?: Weather;
@@ -195,6 +198,8 @@ export class PlanetView {
     this.planet.add(this.graticule);
     this.civ = new CivLayer(this.cloudU.uYear);
     this.planet.add(this.civ.group);
+    this.dunePatch = new DunePatch(this.cloudU);
+    this.planet.add(this.dunePatch.mesh);
     this.mapInput();
     this.globeZoomInput();
 
@@ -684,6 +689,7 @@ export class PlanetView {
     let d: number;
     if (this.mapMode) {
       this.updateMapCam();
+      this.dunePatch.update(this.renderer, this.virtualPos, 99, false);
       const dist = 2.75 * this.map.half * Math.cos(mercLat(this.map.y));
       this.cloudU.uMapDist.value = dist;
       d = 1 + dist;
@@ -700,6 +706,8 @@ export class PlanetView {
       this.controls.update();
       this.virtualPos.copy(this.camera.position);
       this.applyTilt(d);
+      // The patch centres on the point in the middle of the view: the untilted camera's nadir.
+      this.dunePatch.update(this.renderer, this.virtualPos, d, this.opts.mode === 'biome' && this.opts.style === 'smooth');
     }
 
     this.sun.getWorldPosition(this.sunDir).normalize();
@@ -764,6 +772,7 @@ export class PlanetView {
     }
     for (const f of this.forest) { this.planet.remove(f); f.dispose(); }
     this.terrain = this.water = this.gridLines = this.rivers = this.streams = undefined;
+    this.dunePatch?.setTerrain(null);
     this.forest = [];
   }
 
@@ -779,6 +788,7 @@ export class PlanetView {
     this.terrain = new THREE.Mesh(toGeometry(data.terrain), makeTerrainMaterial(this.cloudU, !!data.terrain.climate));
     this.faceCell = data.faces;
     this.planet.add(this.terrain);
+    this.dunePatch.setTerrain(data.style === 'smooth' ? this.terrain : null);
 
     if (data.water) {
       this.water = new THREE.Mesh(toGeometry(data.water), this.waterMat);

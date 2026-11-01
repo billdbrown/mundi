@@ -5,7 +5,7 @@ import { hash01 } from './rng.ts';
 import { MERC_GLSL, MERC_DISCARD, mercVertex, patchShaderChunks } from './mercator.ts';
 import { GROVE_GLSL } from './groves.ts';
 import { EROSION_GLSL } from './erosion.ts';
-import { DUNES_GLSL, makeDuneUniforms, type DuneUniforms } from './dunes.ts';
+import { DUNES_GLSL, PATCH_GLSL, makeDuneUniforms, type DuneUniforms, type PatchUniforms } from './dunes.ts';
 
 patchShaderChunks();
 
@@ -220,12 +220,14 @@ const CLOUD_GLSL = /* glsl */`
  * bends the normal so slopes catch light like rock and scree, stronger on high ground, and
  * the same noise breaks up colour. Both fade out with distance, where they would only shimmer.
  */
-export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.MeshStandardMaterial {
+export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: PatchUniforms): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
   // Ground patterns need the per-vertex climate (natural colours, smooth style only).
   if (climate) mat.defines = { ...mat.defines, USE_CLIMATE: '' };
+  // The dune patch (dunepatch.ts): the same ground shading on a fine grid that carries the dunes.
+  if (patch) mat.defines = { ...mat.defines, DUNE_PATCH: '' };
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, u);
+    Object.assign(sh.uniforms, u, patch ?? {});
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         varying vec3 vCloudP;
@@ -236,11 +238,32 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         #ifdef USE_CIV
           attribute vec2 civ;
           varying vec2 vCiv;
+        #endif
+        #ifdef DUNE_PATCH
+          ${NOISE_GLSL}
+          ${DUNES_GLSL}
+          ${PATCH_GLSL}
+        #endif`)
+      .replace('#include <color_vertex>', `#include <color_vertex>
+        #ifdef DUNE_PATCH
+          patchSample(position.xy);
+          vColor.rgb = pCol;
+        #endif`)
+      .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+        #ifdef DUNE_PATCH
+          objectNormal = pNorm;
         #endif`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
+        #ifdef DUNE_PATCH
+          transformed = pSurf;
+        #endif
         vCloudP = (modelMatrix * vec4(transformed, 1.0)).xyz;
         #ifdef USE_CLIMATE
-          vClim = climate;
+          #ifdef DUNE_PATCH
+            vClim = pClim;
+          #else
+            vClim = climate;
+          #endif
         #endif
         #ifdef USE_CIV
           vCiv = civ;
@@ -284,8 +307,10 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
           }
           return sqrt(d2) - sqrt(d1);
         }
-        // Dunes (dunes.ts): simulated tiles. DUNE is the spacing of transverse ridges, for fading.
-        const float DUNE = 0.0011;
+        // Dunes: simulated tiles (dunes.ts).
+        #ifdef DUNE_PATCH
+          varying float vDuneGeo, vDuneK;
+        #endif
 ` + EROSION_GLSL + DUNES_GLSL)
       .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
         float hAbove = length(vCloudP) - 1.0;
@@ -307,7 +332,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         float foot = length(fwidth(vCloudP));
         float desertW = 0.0;
         vec4 duneS = vec4(0.0);   // dunes(): height, slip face, slope east, north
-        float duneK = 0.0;
+        float duneK = 0.0, duneRaw = 0.0;
         // Erosion (erosion.ts): gullies running down the meshed slope, branching as they go.
         // eroH says how deep in a gully this is; eroGrad bends the normal (below).
         float eroH = 0.0, eroK = 0.0;
@@ -386,18 +411,12 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
               float pn = 0.6 * snoise(vCloudP * 9.0) + 0.3 * snoise(vCloudP * 31.0 + 4.0) + 0.1 * snoise(vCloudP * 140.0);
               float pan = smoothstep(0.42, 0.5, pn) * (1.0 - smoothstep(0.03, 0.09, hAbove / uRelief));
               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.80, 0.77, 0.70), pan * desertW * 0.85);
-              // Which dunes (Wasson & Hyde): where sand is thin, at the edges of the sand seas,
-              // barchans; in the seas, transverse ridges under a steady wind, network dunes where
-              // the winds vary (the horse latitudes, ~20-35°), and linear ridges in the less dry
-              // margins (as in the Kalahari and Australia).
-              float core = smoothstep(0.35, 0.75, seaMask);
-              float varied = smoothstep(0.33, 0.55, abs(asin(clamp(normalize(vCloudP).y, -1.0, 1.0))));
-              float semi = smoothstep(0.1, 0.19, moist);
-              vec4 dw = vec4(smoothstep(0.04, 0.3, seaMask) * (1.0 - core),
-                             core * (1.0 - varied) * (1.0 - semi), core * (1.0 - varied) * semi, core * varied);
-              duneK = desertW * aaFade(DUNE * 0.6, foot) * min(1.0, dw.x + dw.y + dw.z + dw.w);
+              // Which dunes where (dunes.ts).
+              vec4 dw = duneWeights(vCloudP, moist, desertW, seaMask, duneRaw);
+              duneK = duneRaw * aaFade(DUNE * 0.6, foot);
               if (duneK > 0.0) {
-                duneS = dunes(vCloudP, dw / max(1e-4, dw.x + dw.y + dw.z + dw.w));
+                float dh;
+                duneS = dunes(vCloudP, dw, dh);
                 // Crests are bright, loose orange sand; the flats between are paler and greyer;
                 // slip faces sit in their own shade whatever the light.
                 vec3 sand = mix(diffuseColor.rgb * vec3(1.0, 0.97, 0.92), diffuseColor.rgb * vec3(1.12, 1.0, 0.82), duneS.x);
@@ -558,11 +577,17 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         }
         if (uErosion > 0.0) normal = normalize(normal - TOVIEW(eroGrad));
         // Dunes catch the light on their windward slopes and shade their lee faces.
-        if (duneK > 0.0) {
+        // (On the dune patch the nearer dunes are real geometry, already in the normal.)
+        #ifdef DUNE_PATCH
+          float duneShade = 1.0 - vDuneGeo;
+        #else
+          float duneShade = 1.0;
+        #endif
+        if (duneK * duneShade > 0.0) {
           vec3 up = normalize(vCloudP);
           vec3 east = normalize(vec3(up.z, 0.0, -up.x));
           vec3 north = cross(up, east);
-          normal = normalize(normal - TOVIEW((east * duneS.z + north * duneS.w) * duneK));
+          normal = normalize(normal - TOVIEW((east * duneS.z + north * duneS.w) * duneK * duneShade));
         }
         // Rock strata: bands across steep high ground, as layered rock shows in cliffs.
         if (highland > 0.0 && hAbove > 0.0) {
