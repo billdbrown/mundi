@@ -12,10 +12,13 @@
  * stripe phase with full contrast everywhere, and where the kernels disagree the stripes fork,
  * which reads as tributaries joining. A 3D lattice has no seams anywhere on the sphere.
  *
- * Needs aaFade(lambda, foot) from the terrain shader.
+ * On the dune patch (dunepatch.ts) the octaves its grid can carry become real relief in the
+ * vertex shader (erosionSplit with the grid spacing), and only the finer ones stay shading.
  */
 export const EROSION_GLSL = /* glsl */`
   uniform float uErosion;
+  // Fades a pattern out once its features (spacing lambda) get smaller than a few pixels (foot).
+  float aaFade(float lambda, float foot) { return 1.0 - smoothstep(lambda * 0.12, lambda * 0.45, foot); }
   const float ERO_L0 = 0.005;     // widest gully spacing (radians; ~30 km on an Earth-sized world)
   const int ERO_OCT = 6;          // down to ~1 km
   const float ERO_STEEP = 0.7;    // gully wall slope (exaggerated, like all relief here)
@@ -60,14 +63,14 @@ export const EROSION_GLSL = /* glsl */`
   }
   /**
    * Hills for the gullies to carve where the mesh is nearly flat: rolling ground 60-120 km
-   * across, strong on uplands, patchy in lowlands (some plains stay plains). Returns the height
-   * gradient (tangent, uphill). hilly: 0..1 from height above the sea.
+   * across, strong on uplands, patchy in lowlands (some plains stay plains). x: height (radians,
+   * about zero-mean), yzw: its gradient (tangent, uphill). hilly: 0..1 from height above the sea.
    */
-  vec3 hillGrad(vec3 p, vec3 up, float hilly) {
+  vec4 hills(vec3 p, vec3 up, float hilly) {
     // Where hills are at all: broad regions, so lowlands mix plains and hill country.
     float region = smoothstep(-0.3, 0.4, snoise(p * 9.0 + 41.0) + 0.6 * hilly);
     float a = (0.15 + 0.85 * hilly) * region;
-    if (a <= 0.0) return vec3(0.0);
+    if (a <= 0.0) return vec4(0.0);
     vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
     vec3 t2 = cross(up, t1);
     const float E = 0.0006;
@@ -75,17 +78,25 @@ export const EROSION_GLSL = /* glsl */`
     vec3 w = 0.004 * vec3(snoise(p * 60.0 + 11.0), snoise(p * 60.0 + 23.0), snoise(p * 60.0 + 37.0));
     float h0 = eroHills(p + w, p), h1 = eroHills(p + t1 * E + w, p + t1 * E), h2 = eroHills(p + t2 * E + w, p + t2 * E);
     // Scaled to slopes of about 0.3.
-    return (t1 * (h1 - h0) + t2 * (h2 - h0)) / E * 0.00045 * a;
+    return vec4((h0 - 0.6) * 0.00045 * a, (t1 * (h1 - h0) + t2 * (h2 - h0)) / E * 0.00045 * a);
   }
+  vec3 hillGrad(vec3 p, vec3 up, float hilly) { return hills(p, up, hilly).yzw; }
   /**
-   * p: point on the planet; up: its direction; macro: the height gradient of the surface as
-   * meshed (uphill, tangent). foot: pixel footprint, to drop octaves too fine to see.
-   * x: where this is in the gully relief, about -0.5 (floor) to 0.5 (crest), weighted toward
-   * the bigger gullies. yzw: the gradient of the added relief (tangent, uphill).
+   * The gully octaves, split between relief and shading. p: point on the planet; up: its
+   * direction; macro: the height gradient of the surface (uphill, tangent), which steers the
+   * gullies; foot: pixel footprint (0 in a vertex shader), to drop octaves too fine to see;
+   * sp: spacing of a grid carrying the coarse octaves as relief (0: none, all shading).
    */
-  vec4 erosion(vec3 p, vec3 up, vec3 macro, float foot) {
+  struct Ero {
+    float h;       // where this is in the gully relief, about -0.5 (floor) to 0.5 (crest)
+    vec3 shade;    // gradient of the octaves left to shading (tangent, uphill)
+    vec3 geo;      // gradient of the octaves the grid carries
+    float geoH;    // height of those octaves, radians
+  };
+  Ero erosionSplit(vec3 p, vec3 up, vec3 macro, float foot, float sp) {
+    Ero e = Ero(0.0, vec3(0.0), vec3(0.0), 0.0);
     vec3 g = vec3(0.0);
-    float h = 0.0, norm = 0.0, lambda = ERO_L0, amp = 1.0;
+    float norm = 0.0, lambda = ERO_L0, amp = 1.0;
     for (int i = 0; i < ERO_OCT; i++) {
       float fade = aaFade(lambda, foot);
       if (fade <= 0.0) break;
@@ -99,13 +110,25 @@ export const EROSION_GLSL = /* glsl */`
       float prof = sqrt(c * c + 0.02);
       float dprof = -0.25 * sin(phi) / prof;
       float k = amp * fade;
-      h += k * lambda * (prof - 0.5);
+      e.h += k * lambda * (prof - 0.5);
       norm += amp * lambda;
       // Height amplitude lambda * steep / 2pi, times the phase gradient 2pi / lambda.
-      g += k * ERO_STEEP * dprof * across;
+      vec3 dg = k * ERO_STEEP * dprof * across;
+      g += dg;
+      // A grid shows an octave as relief once it has several vertices per gully.
+      float gw = sp > 0.0 ? smoothstep(2.5 * sp, 4.0 * sp, lambda) : 0.0;
+      e.geo += gw * dg;
+      e.geoH += gw * k * ERO_STEEP * lambda / 6.2831853 * (prof - 0.5);
+      e.shade += (1.0 - gw) * dg;
       amp *= ERO_GAIN;
       lambda *= 0.5;
     }
-    return vec4(h / max(norm, 1e-9), g);
+    e.h /= max(norm, 1e-9);
+    return e;
+  }
+  /** All octaves as shading: x where in the gully relief, yzw gradient. */
+  vec4 erosion(vec3 p, vec3 up, vec3 macro, float foot) {
+    Ero e = erosionSplit(p, up, macro, foot, 0.0);
+    return vec4(e.h, e.shade);
   }
 `;

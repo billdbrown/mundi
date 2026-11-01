@@ -116,24 +116,40 @@ export interface PatchUniforms {
   uPatchN: { value: THREE.Vector3 };
   uCapA: { value: THREE.Texture | null };
   uCapB: { value: THREE.Texture | null };
+  /** How far the patch moved the ground (see LIFT_GLSL); 1 while the patch is drawn. */
+  uCapL: { value: THREE.Texture | null };
+  /** Where rivers run, seen from above: the patch keeps flat floodplains there. */
+  uCapR: { value: THREE.Texture | null };
+  uPatchOn: { value: number };
 }
+/** One set, shared by the patch and by whatever must follow its ground (trees, rivers). */
+export const patchUniforms: PatchUniforms = {
+  uPatchC: { value: new THREE.Vector3(0, 0, 1) }, uPatchE: { value: new THREE.Vector3(1, 0, 0) }, uPatchN: { value: new THREE.Vector3(0, 1, 0) },
+  uCapA: { value: null }, uCapB: { value: null }, uCapL: { value: null }, uCapR: { value: null }, uPatchOn: { value: 0 },
+};
 export const PATCH_N = 288;          // vertices along a side
 export const PATCH_A = 0.15;         // grid spacing at the centre, relative to an even grid
 export const PATCH_R = 0.05;         // half-width, radians (~320 km on an Earth-sized world)
+export const CAPTURE_SIZE = 512;     // texels along a side of the patch's captures
 
 /**
- * Vertex code for the patch (needs NOISE_GLSL and DUNES_GLSL before it). Each vertex's position
- * is a point (x, y) in the tangent plane at the patch centre; the terrain under it comes from a
- * capture of the terrain mesh seen from straight above (height, normal, colour, climate), and
- * the dunes raise it. Where the grid is too coarse for the dunes, they flatten into shading.
+ * Vertex code for the patch (needs NOISE_GLSL, EROSION_GLSL and DUNES_GLSL before it). Each
+ * vertex's position is a point (x, y) in the tangent plane at the patch centre; the terrain
+ * under it comes from a capture of the terrain mesh seen from straight above (height, normal,
+ * colour, climate). The dunes, the rolling hills and the gully octaves the grid is fine enough
+ * for raise it, by the same rules as the terrain shader; the rest stays shading there.
  */
 export const PATCH_GLSL = /* glsl */`
   uniform vec3 uPatchC, uPatchE, uPatchN;
-  uniform sampler2D uCapA, uCapB;
+  uniform sampler2D uCapA, uCapB, uCapR;
   uniform float uRelief;
-  varying float vDuneGeo, vDuneK;
+  // 1 when rendering the lift map: erosion at full strength, whatever the camera height.
+  uniform float uLiftPass;
+  varying float vDuneGeo, vSpacing, vEdge;
+  varying vec3 vTerrN, vBase;
   vec3 pSurf, pNorm, pCol;
   vec2 pClim;
+  float pLiftDune, pLiftEro;   // for the lift map: dune lift, erosion lift before its distance fade
   void patchSample(vec2 lat) {
     const float R = ${PATCH_R};
     vec2 uv = lat / (2.0 * R) + 0.5;
@@ -144,30 +160,93 @@ export const PATCH_GLSL = /* glsl */`
     vec3 base = uPatchC * sqrt(max(rad * rad - dot(lat, lat), 0.0)) + uPatchE * lat.x + uPatchN * lat.y;
     vec3 up = normalize(base);
     vec3 n0 = normalize(uPatchE * a.y + uPatchN * a.z + uPatchC * sqrt(max(1.0 - dot(a.yz, a.yz), 0.0)));
+    vec3 east = normalize(vec3(up.z, 0.0, -up.x)), north = cross(up, east);
     float hAbove = rad - 1.0;
     float highland = smoothstep(0.12, 0.85, hAbove / uRelief);
-    float desert = smoothstep(0.24, 0.12, a.w) * smoothstep(0.4, 0.55, b.w) * (1.0 - highland) * smoothstep(0.0003, 0.0008, hAbove);
-    // Dunes stand up where the grid resolves them (finer than a third of their spacing), and
-    // sink back to nothing at the patch edge, where it meets the plain terrain.
+    // Grid spacing here, and the fade to plain terrain at the patch edge.
     float s = max(abs(lat.x), abs(lat.y)) / R;
     float spacing = R * (${PATCH_A} + 2.0 * (1.0 - ${PATCH_A}) * s) * 2.0 / ${PATCH_N - 1}.0;
-    float geo = (1.0 - smoothstep(DUNE * 0.2, DUNE * 0.36, spacing)) * (1.0 - smoothstep(0.8, 0.97, s));
+    float edge = 1.0 - smoothstep(0.8, 0.97, s);
+
+    // Dunes stand up where the grid resolves them (finer than a third of their spacing).
+    float desert = smoothstep(0.24, 0.12, a.w) * smoothstep(0.4, 0.55, b.w) * (1.0 - highland) * smoothstep(0.0003, 0.0008, hAbove);
+    float geo = (1.0 - smoothstep(DUNE * 0.2, DUNE * 0.36, spacing)) * edge;
     float k = 0.0, raw = 0.0;
     vec4 d = vec4(0.0);
-    if (desert > 0.0) {
+    if (desert * geo > 0.0) {
       vec4 w = duneWeights(base, a.w, desert, sandSea(base), k);
-      if (k * geo > 0.0) d = dunes(base, w, raw);
+      if (k > 0.0) d = dunes(base, w, raw);
     }
-    vDuneK = k;
     float hk = k * geo;
-    vec3 east = normalize(vec3(up.z, 0.0, -up.x)), north = cross(up, east);
-    pSurf = base + up * (raw * DUNE_CELL * hk);
-    // No dunes here: sink below the terrain, which then draws in front. (Discarding instead
-    // would stop the GPU skipping hidden pixels, and dunes hide plenty behind themselves.)
-    if (k < 0.002) pSurf = base - up * 0.002;
-    pNorm = normalize(n0 - (east * d.z + north * d.w) * hk);
+    float lift = raw * DUNE_CELL * hk;
+    vec3 grad = (east * d.z + north * d.w) * hk;
+
+    // Erosion, as in the terrain shader (sky.ts): hills and the gully octaves the grid carries.
+    // Worked out at full strength, then faded with distance from the camera, so the lift map
+    // (which trees and rivers read) can apply the same fade itself.
+    pLiftDune = lift;
+    pLiftEro = 0.0;
+    vec3 eroG = vec3(0.0);
+    float farDist = uLiftPass > 0.5 ? 1.0 : 1.0 - smoothstep(0.08, 0.22, length(cameraPosition - base));
+    float eroFar = uErosion * edge * (farDist > 0.0 ? 1.0 : 0.0);
+    // Rivers run on flat valley floors: no hills or gullies within a few km of one. (Relief
+    // crossing a river also rose between the river ribbon's sparse points and hid the water.)
+    if (eroFar > 0.0) {
+      float t = 1.0 / ${CAPTURE_SIZE}.0, river = texture(uCapR, uv).r;
+      for (int i = 0; i < 8; i++) {
+        float ang = float(i) * 0.785398;
+        vec2 o = vec2(cos(ang), sin(ang)) * t;
+        river = max(river, max(texture(uCapR, uv + o * 2.0).r, texture(uCapR, uv + o * 4.0).r * 0.6));
+      }
+      eroFar *= 1.0 - river;
+    }
+    if (eroFar > 0.0) {
+      float iceK = smoothstep(0.6, 0.8, min(b.r, min(b.g, b.b)));
+      float sandE = smoothstep(0.24, 0.12, a.w) * smoothstep(0.4, 0.55, b.w) * (1.0 - highland);
+      if (sandE > 0.0) eroFar *= 1.0 - sandE * mix(0.6, 1.0, smoothstep(0.2, 0.5, sandSea(base)));
+      eroFar *= smoothstep(0.0001, 0.001, hAbove + 0.0004 * snoise(base * 150.0));
+      if (eroFar >= 0.01 && iceK < 0.99) {
+        float cz = max(dot(n0, up), 0.3);
+        vec3 macro = -(n0 - up * dot(n0, up)) / cz;
+        vec4 hl = hills(base, up, smoothstep(0.02, 0.3, hAbove / uRelief)) * (1.0 - iceK);
+        macro += hl.yzw;
+        float eroK = smoothstep(0.0, 0.07, length(macro)) * (1.0 - iceK) * eroFar;
+        pLiftEro += hl.x * eroFar;
+        eroG += hl.yzw * eroFar;
+        if (eroK > 0.0) {
+          Ero er = erosionSplit(base, up, macro, 0.0, spacing);
+          pLiftEro += er.geoH * eroK;
+          eroG += er.geo * eroK;
+        }
+      }
+    }
+    lift += pLiftEro * farDist;
+    grad += eroG * farDist;
+    pSurf = base + up * lift;
+    pNorm = normalize(n0 - grad);
     pCol = b.rgb;
     pClim = vec2(a.w, b.w);
     vDuneGeo = geo;
+    vSpacing = spacing;
+    vEdge = edge;
+    vTerrN = n0;
+    vBase = base;
+  }
+`;
+
+/**
+ * For things that sit on the ground (trees, rivers): how far the patch has raised or lowered
+ * it under a point p, from the lift map the patch renders when it recentres.
+ */
+export const LIFT_GLSL = /* glsl */`
+  uniform vec3 uPatchC, uPatchE, uPatchN;
+  uniform sampler2D uCapL;
+  uniform float uPatchOn;
+  float patchLift(vec3 p) {
+    if (uPatchOn < 0.5 || dot(normalize(p), uPatchC) < 0.9) return 0.0;
+    vec2 uv = vec2(dot(p, uPatchE), dot(p, uPatchN)) / (2.0 * ${PATCH_R}) + 0.5;
+    if (uv.x <= 0.0 || uv.y <= 0.0 || uv.x >= 1.0 || uv.y >= 1.0) return 0.0;
+    vec2 l = texture(uCapL, uv).xy;
+    return l.x + l.y * (1.0 - smoothstep(0.08, 0.22, length(cameraPosition - p)));
   }
 `;

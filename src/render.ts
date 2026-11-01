@@ -773,6 +773,7 @@ export class PlanetView {
     for (const f of this.forest) { this.planet.remove(f); f.dispose(); }
     this.terrain = this.water = this.gridLines = this.rivers = this.streams = undefined;
     this.dunePatch?.setTerrain(null);
+    this.dunePatch?.setRivers([]);
     this.forest = [];
   }
 
@@ -1083,6 +1084,7 @@ export class PlanetView {
     };
     this.rivers = mesh(riverBuf);
     this.streams = mesh(streamBuf);
+    this.dunePatch.setRivers([this.rivers, this.streams]);
     this.paintCorridors(w, corr);
     const gap = spacing / 8;
     this.flora.setWater((x, y, z, cell) => {

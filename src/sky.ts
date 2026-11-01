@@ -5,7 +5,7 @@ import { hash01 } from './rng.ts';
 import { MERC_GLSL, MERC_DISCARD, mercVertex, patchShaderChunks } from './mercator.ts';
 import { GROVE_GLSL } from './groves.ts';
 import { EROSION_GLSL } from './erosion.ts';
-import { DUNES_GLSL, PATCH_GLSL, makeDuneUniforms, type DuneUniforms, type PatchUniforms } from './dunes.ts';
+import { DUNES_GLSL, PATCH_GLSL, LIFT_GLSL, patchUniforms, makeDuneUniforms, type DuneUniforms, type PatchUniforms } from './dunes.ts';
 
 patchShaderChunks();
 
@@ -241,6 +241,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         #endif
         #ifdef DUNE_PATCH
           ${NOISE_GLSL}
+          ${EROSION_GLSL}
           ${DUNES_GLSL}
           ${PATCH_GLSL}
         #endif`)
@@ -291,7 +292,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         #endif
         // --- Ground patterns, by climate. Each fades out once its features get smaller than a
         // few pixels (fwidth), so it adds detail up close without shimmering from orbit.
-        float aaFade(float lambda, float foot) { return 1.0 - smoothstep(lambda * 0.12, lambda * 0.45, foot); }
+        // (aaFade, which fades patterns out below a few pixels, is in erosion.ts.)
         vec3 hash3(vec3 p) {
           p = vec3(dot(p, vec3(127.1, 311.7, 74.7)), dot(p, vec3(269.5, 183.3, 246.1)), dot(p, vec3(113.5, 271.9, 124.6)));
           return fract(sin(p) * 43758.5453);
@@ -309,7 +310,8 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         }
         // Dunes: simulated tiles (dunes.ts).
         #ifdef DUNE_PATCH
-          varying float vDuneGeo, vDuneK;
+          varying float vDuneGeo, vSpacing, vEdge;
+          varying vec3 vTerrN, vBase;
         #endif
 ` + EROSION_GLSL + DUNES_GLSL)
       .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
@@ -335,15 +337,26 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         float duneK = 0.0, duneRaw = 0.0;
         // Erosion (erosion.ts): gullies running down the meshed slope, branching as they go.
         // eroH says how deep in a gully this is; eroGrad bends the normal (below).
+        // On the dune patch the point and slope are the terrain's, before the patch's own relief,
+        // so the gullies here line up with the ones its vertices raised.
+        #ifdef DUNE_PATCH
+          vec3 eroP = vBase;
+          float eroHA = length(vBase) - 1.0;
+        #else
+          vec3 eroP = vCloudP;
+          float eroHA = hAbove;
+        #endif
         float eroH = 0.0, eroK = 0.0;
         vec3 eroGrad = vec3(0.0);
-        if (uErosion > 0.0 && hAbove > 0.0001 && camDist < 0.22 && iceK < 0.99) {
-          #ifdef MERCATOR
+        if (uErosion > 0.0 && eroHA > 0.0001 && camDist < 0.22 && iceK < 0.99) {
+          #if defined(DUNE_PATCH)
+            vec3 wN = normalize(vTerrN);
+          #elif defined(MERCATOR)
             vec3 wN = normalize(normalize(vNormal) * mercFrame(vCloudP));
           #else
             vec3 wN = normalize((vec4(vNormal, 0.0) * viewMatrix).xyz);
           #endif
-          vec3 up = normalize(vCloudP);
+          vec3 up = normalize(eroP);
           // From high up the gullies read as hatching: they fade out, the orbit-scale relief
           // (landNoise) takes over.
           float eroFar = 1.0 - smoothstep(0.08, 0.22, camDist);
@@ -357,26 +370,34 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           #endif
           // In the sand seas themselves (the same mask as the desert colours) dunes cover
           // everything: no erosion at all, which also saves its cost there.
-          if (sandE > 0.0) {
-            float sea = smoothstep(-0.55, 0.05, snoise(vCloudP * 40.0) + 0.25 * snoise(vCloudP * 160.0));
-            eroFar *= 1.0 - sandE * mix(0.6, 1.0, smoothstep(0.2, 0.5, sea));
-          }
+          if (sandE > 0.0) eroFar *= 1.0 - sandE * mix(0.6, 1.0, smoothstep(0.2, 0.5, sandSea(eroP)));
           // Comes in over the first stretch above the shore rather than at a contour (it ended in
           // a hard line along every coast), the line itself wavering.
-          eroFar *= smoothstep(0.0001, 0.001, hAbove + 0.0004 * snoise(vCloudP * 150.0));
+          eroFar *= smoothstep(0.0001, 0.001, eroHA + 0.0004 * snoise(eroP * 150.0));
           if (eroFar >= 0.01) {
             // The mesh is nearly flat between ranges: rolling hills (shaded too) give the water
             // something to carve.
-            vec3 hg = hillGrad(vCloudP, up, smoothstep(0.02, 0.3, hAbove / uRelief)) * (1.0 - iceK);
+            vec3 hg = hillGrad(eroP, up, smoothstep(0.02, 0.3, eroHA / uRelief)) * (1.0 - iceK);
             macro += hg;
             // Strength follows the slope smoothly: flats stay flat, and no hard edge where it starts.
             eroK = smoothstep(0.0, 0.07, length(macro)) * (1.0 - iceK) * uErosion * eroFar;
-            eroGrad = hg * uErosion * eroFar;
-            if (eroK > 0.0) {
-              vec4 er = erosion(vCloudP, up, macro, foot);
-              eroH = er.x;
-              eroGrad += er.yzw * eroK;
-            }
+            #ifdef DUNE_PATCH
+              // Hills and coarse gullies are relief on the patch; shading only where it hands
+              // back to the plain terrain at its edge.
+              eroGrad = hg * uErosion * eroFar * (1.0 - vEdge);
+              if (eroK > 0.0) {
+                Ero er = erosionSplit(eroP, up, macro, foot, vSpacing);
+                eroH = er.h;
+                eroGrad += (er.shade + er.geo * (1.0 - vEdge)) * eroK;
+              }
+            #else
+              eroGrad = hg * uErosion * eroFar;
+              if (eroK > 0.0) {
+                vec4 er = erosion(eroP, up, macro, foot);
+                eroH = er.x;
+                eroGrad += er.yzw * eroK;
+              }
+            #endif
           }
         }
         #ifdef USE_CLIMATE
@@ -674,9 +695,18 @@ export function applyCloudShadow(
           if (cut > 0.5 && uYear >= 0.0) transformed *= 1.0 - smoothstep(cut, cut + 25.0, uYear);
         #endif` : '';
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, u, sun ?? {}, fade ?? {});
+    Object.assign(sh.uniforms, u, sun ?? {}, fade ?? {}, fade ? patchUniforms : {});
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;' + (fade ? '\nuniform float uFadeNear, uFadeFar, uYear;\nattribute float cut;' : ''))
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;' + (fade ? '\nuniform float uFadeNear, uFadeFar, uYear;\nattribute float cut;\n' + LIFT_GLSL : ''))
+      // Plants stand on the ground as the high-detail patch shapes it (dunepatch.ts).
+      .replace('#include <project_vertex>', fade ? `
+        vec4 mvPosition = vec4(transformed, 1.0);
+        #ifdef USE_INSTANCING
+          mvPosition = instanceMatrix * mvPosition;
+          mvPosition.xyz += normalize(fadeO.xyz) * patchLift(fadeO.xyz);
+        #endif
+        mvPosition = modelViewMatrix * mvPosition;
+        gl_Position = projectionMatrix * mvPosition;` : '#include <project_vertex>')
       .replace('#include <begin_vertex>', `#include <begin_vertex>${grow}
         vec4 cloudP = vec4(transformed, 1.0);
         #ifdef USE_INSTANCING
@@ -699,6 +729,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
     depthWrite: false,
     uniforms: {
       ...cloud,
+      ...(fade ? patchUniforms : {}),
       ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
       uTime: { value: 0 },
       uSunDir: { value: new THREE.Vector3(0, 0, 1) },
@@ -719,6 +750,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
       #ifdef USE_FADE
         attribute float fade;
         varying float vFade;
+        ${LIFT_GLSL}
       #endif
       ${MERC_GLSL}
       #include <fog_pars_vertex>
@@ -728,6 +760,10 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
           vFade = fade;
         #endif
         vec4 w = modelMatrix * vec4(position, 1.0);
+        // Rivers follow the ground as the high-detail patch shapes it (dunepatch.ts).
+        #if defined(USE_FADE) && !defined(MERCATOR)
+          w.xyz += normalize(w.xyz) * patchLift(w.xyz);
+        #endif
         vWorld = w.xyz;
         #ifdef MERCATOR
           ${mercVertex('w.xyz')}
