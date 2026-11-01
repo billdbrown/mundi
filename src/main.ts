@@ -6,12 +6,21 @@ import type { BuildRequest, BuildResult } from './worker.ts';
 import type { HistoryRequest, HistoryResult } from './historyWorker.ts';
 import type { History } from './civ.ts';
 import { gameData, exportJSON, RESOURCE_NAMES, type GameData } from './gamedata.ts';
-import { mountShell, type Lens } from './shell.ts';
+import { kindOf, mountShell, planetName, PRESETS, type Lens } from './shell.ts';
+import { nameSeed, parseSeed, randomName } from './seedname.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const view = new PlanetView($('view'));
-let params: WorldParams = { ...DEFAULT_PARAMS, seed: Math.floor(Math.random() * 1e6) };
+/** The planet's name, which is also its seed in the URL. Null for a world given by number. */
+let worldName: string | null = randomName();
+let params: WorldParams = { ...DEFAULT_PARAMS, seed: nameSeed(worldName) };
+/** A new named world, optionally with other settings. */
+function newWorld(p: Partial<WorldParams> = {}) {
+  worldName = randomName();
+  params = { ...params, ...p, seed: nameSeed(worldName) };
+}
+const displayName = () => worldName ?? planetName(params.seed);
 let viewOpts: ViewOptions = { ...DEFAULT_VIEW };
 let world: World;
 let timings = { gen: 0, mesh: 0, clouds: 0 };
@@ -119,10 +128,18 @@ function setView(o: Partial<ViewOptions>): Promise<void> | void {
   if (rebuild) return request();
 }
 
-// --- Parameters live in the URL hash, so a world can be shared as a link. ---
+// --- The world lives in the URL hash, so it can be shared as a link. Kept short: an ordinary
+// world is just #seed=zalund; a kind from the New world menu adds &kind=archipelago; a custom
+// world lists only the settings that differ from the defaults. ---
+const SETTINGS = (Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[]).filter((k) => k !== 'seed');
+const DEFAULT_LENS: Lens = 'earth', DEFAULT_RADIUS = 6371;
 function readHash() {
   const h = new URLSearchParams(location.hash.slice(1));
-  for (const k of Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[]) {
+  const s = parseSeed(h.get('seed') ?? '');
+  if (s) { worldName = s.name; params.seed = s.seed; }
+  const kind = PRESETS.find((p) => p.id === h.get('kind'));
+  if (kind) params = { ...params, ...kind.p };
+  for (const k of SETTINGS) {
     const v = h.get(k);
     if (v !== null && v !== '' && !Number.isNaN(Number(v))) params[k] = Number(v);
   }
@@ -133,12 +150,19 @@ function readHash() {
   const l = h.get('lens');
   if (l) lens = l as Lens;
 }
+const same = (a: number, b: number) => Math.abs(a - b) < 1e-9;
 function writeHash() {
   const h = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) h.set(k, String(v));
-  h.set('relief', String(viewOpts.relief));
-  h.set('radius', String(radiusKm));
-  h.set('lens', lens);
+  h.set('seed', worldName ? worldName.toLowerCase() : String(params.seed));
+  if (SETTINGS.some((k) => !same(params[k], DEFAULT_PARAMS[k]))) {
+    // Earthlike is the defaults; any other kind is named rather than spelled out.
+    const kind = kindOf(params);
+    if (kind) h.set('kind', kind.id);
+    else for (const k of SETTINGS) if (!same(params[k], DEFAULT_PARAMS[k])) h.set(k, String(+params[k].toFixed(4)));
+  }
+  if (!same(viewOpts.relief, DEFAULT_VIEW.relief)) h.set('relief', String(viewOpts.relief));
+  if (radiusKm !== DEFAULT_RADIUS) h.set('radius', String(radiusKm));
+  if (lens !== DEFAULT_LENS) h.set('lens', lens);
   history.replaceState(null, '', location.search + '#' + h.toString());
 }
 
@@ -155,7 +179,7 @@ const sliders: [keyof WorldParams | 'relief', (v: number) => string][] = [
 ];
 
 function syncInputs() {
-  $<HTMLInputElement>('seed').value = String(params.seed);
+  $<HTMLInputElement>('seed').value = worldName ?? String(params.seed);
   $<HTMLInputElement>('radius').value = String(radiusKm);
   $<HTMLOutputElement>('radius-out').textContent = `${radiusKm.toLocaleString()} km`;
   for (const [k, fmt] of sliders) {
@@ -183,11 +207,13 @@ for (const [k, fmt] of sliders) {
   });
 }
 $<HTMLInputElement>('seed').addEventListener('change', (e) => {
-  params.seed = Math.max(0, Math.floor(Number((e.target as HTMLInputElement).value) || 0));
-  request();
+  const s = parseSeed((e.target as HTMLInputElement).value);
+  if (s) { worldName = s.name; params.seed = s.seed; }
+  syncInputs();
+  if (s) request();
 });
 $('dice').addEventListener('click', () => {
-  params.seed = Math.floor(Math.random() * 1e6);
+  newWorld();
   syncInputs();
   request();
 });
@@ -210,7 +236,7 @@ $('export').addEventListener('click', () => {
   const blob = new Blob([exportJSON(world, game)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `mundi-${params.seed}.json`;
+  a.download = `mundi-${(worldName ?? String(params.seed)).toLowerCase()}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
@@ -285,6 +311,7 @@ view.renderer.domElement.addEventListener('pointerleave', () => { info.hidden = 
   load: (hash: string, opts: Partial<ViewOptions> = {}): Promise<void> => {
     history.replaceState(null, '', '#' + hash);
     params = { ...DEFAULT_PARAMS };
+    worldName = null;
     viewOpts = { ...DEFAULT_VIEW };
     readHash();
     viewOpts = { ...viewOpts, ...opts };
@@ -301,6 +328,8 @@ syncInputs();
 const shell = mountShell({
   params: () => params,
   setParams: (p) => { params = { ...params, ...p }; syncInputs(); request(); },
+  newWorld: (p) => { newWorld(p); syncInputs(); request(); },
+  name: displayName,
   view: () => viewOpts,
   setView: (o) => { const r = setView(o); syncInputs(); return r; },
   lens: () => lens,
@@ -317,3 +346,14 @@ const shell = mountShell({
 shell.applyLens(lens, false);
 view.setOptions(viewOpts);
 request();
+
+// A link pasted into an open tab only changes the hash, which doesn't reload the page. (Our own
+// writes use replaceState, which doesn't fire this.)
+window.addEventListener('hashchange', () => {
+  worldName = randomName();
+  params = { ...DEFAULT_PARAMS, seed: nameSeed(worldName) };
+  readHash();
+  syncInputs();
+  shell.applyLens(lens, false);
+  request();
+});

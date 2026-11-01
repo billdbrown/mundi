@@ -8,7 +8,7 @@
  */
 import type { PlanetView, ViewOptions } from './render.ts';
 import type { World, WorldParams } from './world.ts';
-import { WATER_LAKE, WATER_OCEAN } from './world.ts';
+import { DEFAULT_PARAMS, WATER_LAKE, WATER_OCEAN } from './world.ts';
 import type { GameData } from './gamedata.ts';
 import { nameMaker } from './gamedata.ts';
 import { B, BIOMES } from './biomes.ts';
@@ -19,6 +19,10 @@ export type Lens = 'earth' | 'map' | 'heat' | 'rain' | 'plates';
 export interface App {
   params(): WorldParams;
   setParams(p: Partial<WorldParams>): void;
+  /** A new named world (fresh name and seed), optionally with other settings. */
+  newWorld(p?: Partial<WorldParams>): void;
+  /** The planet's name. */
+  name(): string;
   view(): ViewOptions;
   setView(o: Partial<ViewOptions>): Promise<void> | void;
   lens(): Lens;
@@ -49,7 +53,8 @@ const LEGENDS: Partial<Record<Lens, [string, string, string]>> = {
 };
 
 interface Preset { id: string; label: string; blurb: string; p: Partial<WorldParams> }
-const PRESETS: Preset[] = [
+/** Kinds of world. Earthlike is the defaults; the others also name themselves in the URL (kind=…). */
+export const PRESETS: Preset[] = [
   { id: 'earthlike', label: 'Earthlike', blurb: 'A few continents, two-thirds sea', p: { ocean: 0.68, continents: 3, plates: 12, roughness: 0.45, heat: 0, wetness: 0 } },
   { id: 'pangaea', label: 'Pangaea', blurb: 'One supercontinent', p: { ocean: 0.6, continents: 1, plates: 10, roughness: 0.35, heat: 0.05, wetness: -0.05 } },
   { id: 'archipelago', label: 'Archipelago', blurb: 'Scattered islands', p: { ocean: 0.8, continents: 8, plates: 30, roughness: 0.85, heat: 0.05, wetness: 0.1 } },
@@ -57,6 +62,12 @@ const PRESETS: Preset[] = [
   { id: 'desert', label: 'Desert world', blurb: 'Dry land, little sea', p: { ocean: 0.35, continents: 2, plates: 12, roughness: 0.4, heat: 0.15, wetness: -0.3 } },
   { id: 'water', label: 'Water world', blurb: 'Nine-tenths ocean', p: { ocean: 0.9, continents: 6, plates: 20, roughness: 0.7, heat: 0.05, wetness: 0.1 } },
 ];
+
+/** The kind of world these settings are, or undefined for a custom one. Every setting must match. */
+export function kindOf(p: WorldParams): Preset | undefined {
+  const keys = (Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[]).filter((k) => k !== 'seed');
+  return PRESETS.find((x) => keys.every((k) => Math.abs(p[k] - (x.p[k] ?? DEFAULT_PARAMS[k])) < 1e-6));
+}
 
 /** Four plain-language dials, each 0..1, mapped onto the raw parameters. */
 const DIALS = [
@@ -158,14 +169,14 @@ export function mountShell(app: App) {
 
   // --- Name ---
   const showName = () => {
-    const p = app.params();
-    $('pname').textContent = planetName(p.seed);
-    $('pseed').textContent = `world #${p.seed}`;
-    document.title = `${planetName(p.seed)} · Mundi`;
+    const name = app.name(), kind = kindOf(app.params());
+    $('pname').textContent = name;
+    $('pseed').textContent = !kind ? 'Custom world' : /world$/i.test(kind.label) ? kind.label : `${kind.label} world`;
+    document.title = `${name} · Mundi`;
   };
 
   // --- Actions ---
-  $('new-world').onclick = () => app.setParams({ seed: Math.floor(Math.random() * 1e6) });
+  $('new-world').onclick = () => app.newWorld();
   $('share').onclick = async () => {
     try { await navigator.clipboard.writeText(location.href); toast('Link copied: anyone with it sees this planet'); }
     catch { toast('Copy the address bar to share this planet'); }
@@ -216,7 +227,7 @@ export function mountShell(app: App) {
       const pre = PRESETS.find((x) => x.id === b.dataset.preset)!;
       openMenu(false);
       openDrawer(false);
-      app.setParams({ ...pre.p, seed: Math.floor(Math.random() * 1e6) });
+      app.newWorld(pre.p);
       syncDials();
     };
   });
@@ -230,7 +241,7 @@ export function mountShell(app: App) {
   const syncDials = () => {
     const p = app.params();
     for (const d of DIALS) root.querySelector<HTMLInputElement>(`[data-dial="${d.id}"]`)!.value = String(clamp01(d.get(p)));
-    const match = PRESETS.find((x) => Object.entries(x.p).every(([k, v]) => Math.abs((p[k as keyof WorldParams] as number) - (v as number)) < 1e-6));
+    const match = kindOf(p);
     root.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach((b) => b.classList.toggle('on', b.dataset.preset === match?.id));
     $('nw-custom').classList.toggle('on', !match);
   };
