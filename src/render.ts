@@ -38,8 +38,10 @@ export interface ViewOptions {
 
 export const DEFAULT_VIEW: ViewOptions = { mode: 'biome', style: 'smooth', grid: true, rivers: true, trees: true, clouds: true, blend: true, relief: 1, light: 'follow', sites: false, look: 'map' };
 
-/** Seconds for one full day in cycle lighting. */
-const DAY_SECONDS = 120;
+/** Days in a year, and the day of the northern spring equinox (seasonal offset zero). */
+export const YEAR_DAYS = 365, EQUINOX_DAY = 80;
+/** Axial tilt in degrees: how far the sun swings north and south over the year. */
+const TILT = 23.4;
 
 /** Options that change the meshes, so need a trip to the worker; the rest only toggle visibility. */
 export const REBUILD_KEYS: (keyof ViewOptions)[] = ['mode', 'style', 'blend', 'relief'];
@@ -100,6 +102,10 @@ export class PlanetView {
   private sunU = { uSunDir: { value: new THREE.Vector3(0, 0, 1) } };
   private ambient: THREE.AmbientLight;
   private time = 0;
+  /** Calendar day (fractional). Advances only while the clock runs. */
+  private day = EQUINOX_DAY;
+  /** Days per real second; 0 = paused. */
+  private clockRate = 0;
   /** When set, animation stops at this time, so renders are repeatable (visual tests). */
   private frozen: number | null = null;
 
@@ -158,6 +164,11 @@ export class PlanetView {
     this.renderer.setAnimationLoop(() => this.frame());
   }
 
+  /** Run the clock at `rate` days per second (0 pauses). */
+  setClock(rate: number) { this.clockRate = rate; }
+  getDay() { return this.day; }
+  setDay(d: number) { this.day = d; }
+
   freeze(t: number | null) {
     this.frozen = t;
     this.clock.getDelta();
@@ -165,6 +176,8 @@ export class PlanetView {
 
   /** Draws a world from worker-built data. */
   setData(world: World, data: SurfaceData) {
+    this.cloudU.uHeat.value = world.params.heat;
+    this.cloudU.uRelief.value = RELIEF * this.opts.relief;
     this.world = world;
     this.rebuild(data);
   }
@@ -290,10 +303,14 @@ export class PlanetView {
   private frame() {
     const dt = this.frozen === null ? this.clock.getDelta() : 0;
     this.time = this.frozen ?? this.time + dt;
+    this.day += dt * this.clockRate;
+    const season = Math.sin((2 * Math.PI * (this.day - EQUINOX_DAY)) / YEAR_DAYS);
+    this.cloudU.uSeason.value = season;
     if (this.opts.light === 'cycle') {
-      // Sun circles the equator with a slight tilt; phase puts it ahead-left of the start view.
-      const a = (this.time / DAY_SECONDS) * Math.PI * 2 - 0.6;
-      this.sun.position.set(Math.sin(a) * 5, 1.4, Math.cos(a) * 5);
+      // The sun goes round once a day, and swings north and south with the season (the tilt).
+      const a = (this.day % 1) * Math.PI * 2 - 0.6;
+      const dec = ((TILT * Math.PI) / 180) * season;
+      this.sun.position.set(Math.sin(a) * Math.cos(dec) * 5, Math.sin(dec) * 5, Math.cos(a) * Math.cos(dec) * 5);
     }
     const d = this.camera.position.length();
     // Slow the orbit as you close in, so ground-level views stay controllable.

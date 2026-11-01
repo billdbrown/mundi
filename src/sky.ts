@@ -12,10 +12,16 @@ export interface CloudUniforms {
   uCloudTime: { value: number };
   /** Sun direction, so shadows fall on the side of a cloud away from the sun. */
   uCloudSun: { value: THREE.Vector3 };
+  /** −1..1: +1 is northern midsummer, −1 northern midwinter, 0 an equinox. */
+  uSeason: { value: number };
+  /** World heat offset and vertical scale, so shaders can reproduce the generator's temperatures. */
+  uHeat: { value: number };
+  uRelief: { value: number };
 }
 
 export function makeCloudUniforms(): CloudUniforms {
-  return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) } };
+  return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
+    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.035 } };
 }
 
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
@@ -42,8 +48,18 @@ export const NOISE_GLSL = /* glsl */`
  */
 const CLOUD_GLSL = /* glsl */`
   uniform sampler2D uCloudMap;
-  uniform float uCloudRot, uCloudShadow, uCloudTime;
+  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uHeat, uRelief;
   uniform vec3 uCloudSun;
+  /**
+   * Seasons. The generator's annual-mean temperature for a point (the same formula as the
+   * per-vertex snow), and that temperature shifted by the season: the tilt warms one hemisphere
+   * while it cools the other, more toward the poles, not at all at the equator.
+   */
+  float meanTemp(vec3 n, float above) {
+    float lat = abs(asin(clamp(n.y, -1.0, 1.0))) / 1.5707963;
+    return 1.0 - 1.1 * pow(lat, 1.25) - 0.55 * max(0.0, above) / uRelief + uHeat;
+  }
+  float seasonalTemp(vec3 n, float mean) { return mean + 0.24 * n.y * uSeason; }
   // Own noise (distinct names), so this chunk can sit beside NOISE_GLSL in one shader.
   float cnHash(vec3 p) {
     p = fract(p * 0.3183099 + 0.1);
@@ -121,6 +137,19 @@ export function makeTerrainMaterial(u: CloudUniforms): THREE.MeshStandardMateria
         float farFade = smoothstep(0.12, 0.8, camDist) * step(0.0005, hAbove);
         float ln = landNoise(vCloudP);
         diffuseColor.rgb *= mix(1.0, 0.74 + 0.52 * ln, (0.45 + 0.55 * highland) * farFade);
+        if (uSeason != 0.0 && hAbove > 0.0006) {
+          vec3 sn = normalize(vCloudP);
+          float mt = meanTemp(sn, hAbove), st = seasonalTemp(sn, mt);
+          float patchy = (vnoise(vCloudP * 9.0) - 0.5) * 0.12 + vnoise(vCloudP * 260.0) * 0.06;
+          // Only the seasonal part: snow that the annual mean doesn't already have.
+          float wsnow = smoothstep(0.27, 0.15, st + patchy) * (1.0 - smoothstep(0.27, 0.15, mt));
+          // Winter browns the mid-latitude vegetation of the cold hemisphere.
+          float winter = max(0.0, -sign(sn.y) * uSeason) * smoothstep(0.2, 0.55, abs(sn.y));
+          float green = clamp((diffuseColor.g - max(diffuseColor.r, diffuseColor.b)) * 6.0, 0.0, 1.0);
+          float l = dot(diffuseColor.rgb, vec3(0.3, 0.55, 0.15));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.12, 0.98, 0.7) * l, green * winter * 0.55);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.92, 0.94, 0.97), wsnow * 0.92);
+        }
         diffuseColor.rgb *= cloudShade(vCloudP);`)
       .replace('#include <normal_fragment_maps>', /* glsl */`#include <normal_fragment_maps>
         if (detailFade > 0.0 && hAbove > 0.0) {
@@ -290,6 +319,16 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         col = mix(col, vec3(0.94, 0.97, 0.98) * shade * mix(0.06, 1.0, day), foam * 0.8);
 
         float a = mix(0.5, 0.95, smoothstep(0.0, 0.35, d));
+        #ifndef USE_FADE
+          if (uSeason != 0.0) {
+            float mt = meanTemp(Ng, 0.0), st = seasonalTemp(Ng, mt);
+            // Big wobbles (currents, bays) plus floes, so the ice edge isn't a circle of latitude.
+            float floe = (vnoise(vWorld * 9.0) - 0.5) * 0.14 + (vnoise(vWorld * 40.0) - 0.5) * 0.06 + vnoise(vWorld * 180.0) * 0.05;
+            float ice = smoothstep(0.17, 0.11, st + floe) * (1.0 - smoothstep(0.17, 0.11, mt));
+            col = mix(col, vec3(0.88, 0.92, 0.95) * shade * mix(0.08, 1.0, day), ice);
+            a = max(a, ice);
+          }
+        #endif
         // Ragged coastline: in a noisy fringe along the shore the water thins out and the sandy
         // floor shows, so the land edge is jagged at every scale instead of a smooth curve.
         float cn = vnoise(vWorld * 110.0) * 0.75 + vnoise(vWorld * 330.0) * 0.25;

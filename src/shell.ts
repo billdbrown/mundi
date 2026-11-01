@@ -85,6 +85,7 @@ export function planetName(seed: number): string {
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 export function mountShell(app: App) {
+  const r = app.renderer;
   const variant = (() => {
     const q = new URLSearchParams(location.search).get('ui');
     if (q === 'a' || q === 'b') return q;
@@ -120,11 +121,20 @@ export function mountShell(app: App) {
             <span class="dial-ends"><em>${d.lo}</em><em>${d.hi}</em></span>
           </label>`).join('')}
       </div>
-      <label class="toggle"><input type="checkbox" id="daynight" /> Day and night</label>
       <button class="link" id="advanced-toggle">Advanced settings</button>
     </aside>
     <section class="almanac" id="almanac"></section>
     <div class="chips" id="chips">${PRESETS.map((p) => `<button data-preset="${p.id}">${p.label}</button>`).join('')}</div>
+    <div class="clock" id="clock">
+      <button class="play" id="play" title="Play / pause time">▶</button>
+      <div class="scales" id="scales">
+        <button data-scale="day" title="Watch a day pass: the sun goes round, clouds drift">Day</button>
+        <button data-scale="year" class="on" title="Watch a year pass: snow, sea ice and forests follow the seasons">Year</button>
+        <button disabled title="Coming: cities grow, roads and borders spread">Centuries</button>
+        <button disabled title="Coming: continents drift, mountains rise">Ages</button>
+      </div>
+      <span class="date" id="date"></span>
+    </div>
     <div class="hint" id="hint">Drag to spin · scroll to dive · hover a place</div>
     <div class="toast" id="toast" hidden></div>
     <div class="compare" title="Temporary: compare the two interface designs">
@@ -200,8 +210,35 @@ export function mountShell(app: App) {
     const input = root.querySelector<HTMLInputElement>(`[data-dial="${d.id}"]`)!;
     input.oninput = () => app.setParams(d.set(Number(input.value)));
   }
-  const dn = $<HTMLInputElement>('daynight');
-  dn.onchange = () => app.setView({ light: dn.checked ? 'cycle' : 'follow' });
+  // --- Clock: Day runs the sun round (day/night), Year sweeps the seasons. ---
+  const RATES = { day: 1 / 24, year: 365 / 60 };   // days per second: a day in 24 s, a year in a minute
+  let scale: 'day' | 'year' = 'year', playing = false;
+  const applyClock = () => {
+    r.setClock(playing ? RATES[scale] : 0);
+    // Day/night only makes sense at day speed; at year speed it would strobe.
+    app.setView({ light: playing && scale === 'day' ? 'cycle' : 'follow' });
+    $('play').textContent = playing ? '❚❚' : '▶';
+    root.querySelectorAll<HTMLButtonElement>('[data-scale]').forEach((b) => b.classList.toggle('on', b.dataset.scale === scale));
+    $('clock').classList.toggle('running', playing);
+  };
+  $('play').onclick = () => { playing = !playing; applyClock(); };
+  root.querySelectorAll<HTMLButtonElement>('[data-scale]').forEach((b) => {
+    b.onclick = () => { scale = b.dataset.scale as 'day' | 'year'; playing = true; applyClock(); };
+  });
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const SEASONS = ['winter', 'spring', 'summer', 'autumn'];
+  const tickDate = () => {
+    const d = r.getDay(), doy = ((d % 365) + 365) % 365;
+    const month = MONTHS[Math.min(11, Math.floor(doy / 30.42))];
+    // Northern season: winter from ~Dec 21 (day 355), spring from ~Mar 21 (day 80)...
+    const sIdx = Math.floor((((doy - 355 + 365) % 365)) / 91.25) % 4;
+    const year = Math.floor(d / 365) + 1;
+    const hour = Math.floor((d % 1) * 24);
+    $('date').textContent = scale === 'day' && playing
+      ? `${month} ${Math.floor(doy % 30.42) + 1} · ${String(hour).padStart(2, '0')}:00`
+      : `Year ${year} · ${month} · northern ${SEASONS[sIdx]}`;
+    requestAnimationFrame(tickDate);
+  };
   $('advanced-toggle').onclick = () => {
     const panel = document.getElementById('panel')!;
     panel.classList.toggle('advanced');
@@ -247,9 +284,10 @@ export function mountShell(app: App) {
   app.onDrawn(() => { showName(); syncDials(); almanac(); });
   showName();
   syncDials();
+  applyClock();
+  requestAnimationFrame(tickDate);
 
   // --- Hint fades after the first interaction; idle auto-rotate when viewed from orbit ---
-  const r = app.renderer;
   let lastInput = performance.now();
   const touched = () => {
     lastInput = performance.now();

@@ -49,6 +49,8 @@ const CASES = [
   { name: 'sites-4242', hash: 'seed=4242', opts: { sites: true }, view: { orbit: [60, 20, ORBIT] } },
   { name: 'photo-77', hash: 'seed=77', opts: { look: 'photo' }, view: { orbit: [180, 15, ORBIT] } },
   { name: 'photo-4242', hash: 'seed=4242', opts: { look: 'photo' }, view: { orbit: [60, 20, ORBIT] } },
+  { name: 'nwinter-77', hash: 'seed=77', day: 353, view: { orbit: [180, 40, ORBIT] } },
+  { name: 'nsummer-77', hash: 'seed=77', day: 171, view: { orbit: [180, 40, ORBIT] } },
   { name: 'iceage-1903', hash: 'seed=1903&heat=-0.3', view: { orbit: [0, 45, ORBIT] } },
 ];
 
@@ -104,6 +106,7 @@ try {
       wg.capture(true);
       wg.freeze(10);
       await wg.load(tc.hash, tc.opts ?? {});
+      wg.view.setDay(tc.day ?? 80);
       if (tc.view.orbit) wg.orbit(...tc.view.orbit);
       else wg.flyTo(tc.view.spot, tc.view.alt);
       // Two frames: one to apply the camera, one to draw with it.

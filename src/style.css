@@ -151,3 +151,24 @@ body.shell #info { border-radius: 12px; padding: 8px 11px; background: rgba(10,1
 .ui-b .ui:has(#drawer:not([hidden])) .chips, .ui:has(#drawer:not([hidden])) .chips { display: none; }
 .ui:has(#drawer:not([hidden])) .almanac { display: none; }
 @media (max-width: 720px) { .ui .shape-toggle { left: 50%; transform: translateX(-50%); } }
+
+/* Clock */
+.clock { position: fixed; left: 50%; bottom: 74px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
+  background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 999px; padding: 4px 12px 4px 4px;
+  font-size: 12px; white-space: nowrap; }
+.clock .play { width: 30px; height: 30px; border-radius: 50%; border: none; background: rgba(110,170,255,.25); font-size: 12px; }
+.clock.running .play { background: rgba(110,170,255,.45); }
+.clock .scales { display: flex; gap: 2px; }
+.clock .scales button { background: none; border: none; border-radius: 999px; padding: 4px 9px; font-size: 12px; color: var(--muted); }
+.clock .scales button.on { background: rgba(255,255,255,.12); color: #fff; }
+.clock .scales button:disabled { opacity: .35; cursor: default; }
+.clock .date { color: var(--text); min-width: 170px; font-variant-numeric: tabular-nums; }
+.hint { bottom: 122px !important; }
+.legend { bottom: 124px; }
+.ui-b .legend { bottom: 124px; }
+@media (max-width: 720px) {
+  .clock { bottom: 118px; }
+  .clock .scales button:disabled { display: none; }
+  .clock .date { min-width: 0; }
+  .hint { bottom: 166px !important; }
+}
