@@ -63,6 +63,7 @@ for (const spec of specs) {
     continue;
   }
   await aim(Number(seed), target, Number(alt), lens);
+  if (process.env.NOWATER) await page.evaluate(() => { const v = window.mundi.view; v.water.visible = false; v.applyVisibility = () => {}; });
   await page.waitForTimeout(1300);
   await page.screenshot({ path: `${out}/${tag}-${name}.png` });
 }

@@ -247,6 +247,7 @@ function vertexTemp(y: number, e: number, heat: number): number {
 
 const ALPINE = new THREE.Color(0x6e6858);
 const LAKEBED = new THREE.Color(0x2c3a30);
+const SEABED_SAND = new THREE.Color(0x8a8064), SEABED_DEEP = new THREE.Color(0x26323a);
 const SNOW = new THREE.Color(0xf2f5f8), ROCK = new THREE.Color(0x776b5f), SAND = new THREE.Color(0xd9c89b);
 
 /**
@@ -273,7 +274,8 @@ function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number,
     const slope = 1 - up;                         // 0 flat, ~0.3 steep
     // Beach sand at the sea's edge only (lowland lakes sit near sea level too).
     // Thin and partial: from orbit a full-strength strip outlined every continent in yellow.
-    if (!lakeSide[i]) mix(i, SAND, sm(0.0011, 0.0004, above) * sm(0.25, 0.4, vertexTemp(y / l, e, heat)) * 0.7);
+    // (Low coastal cells sit only ~0.0012 above the sea, so a wider band painted whole cells.)
+    if (!lakeSide[i]) mix(i, SAND, sm(0.0005, 0.0001, above) * sm(0.25, 0.4, vertexTemp(y / l, e, heat)) * 0.7);
     mix(i, ROCK, sm(0.04, 0.12, slope) * 0.6);
     // Altitude zones: vegetation thins to bare rock and alpine scrub above the tree line, so
     // mountains step through rock before snow instead of snow sitting on desert sand.
@@ -452,6 +454,14 @@ function buildSmooth(inp: SurfaceInput): Surface {
       clim.push(blendRGB[3], blendRGB[4]);
     } else {
       clim.push(w.moisture[owner], w.temperature[owner]);
+    }
+    // Sea floor colour by depth, not by cell: sand in the shallowest water, dark mud beyond
+    // (per-cell "shallows" colour drew a tan hexagon ring round every coast).
+    if (inp.natural && w.water[owner] === WATER_OCEAN && w.biome[owner] !== B.SEA_ICE) {
+      const k = Math.max(0, Math.min(1, (lvl - h - 0.0002) / 0.0015));
+      r = SEABED_SAND.r + (SEABED_DEEP.r - SEABED_SAND.r) * k;
+      gg = SEABED_SAND.g + (SEABED_DEEP.g - SEABED_SAND.g) * k;
+      b = SEABED_SAND.b + (SEABED_DEEP.b - SEABED_SAND.b) * k;
     }
     // A lake bed is dark silt and weed, not lake-blue (it shows through the shallows).
     if (inp.natural && lake) {
