@@ -323,12 +323,13 @@ export class PlanetView {
     const s = (a: number, b: number) => THREE.MathUtils.smoothstep(d, a, b);
     // Keep a little clearance over the ground below, so you can skim valleys but not enter hills.
     const c = this.cellBelow();
-    if (c >= 0 && this.surface) this.controls.minDistance = Math.max(1.006, Math.max(this.surface.centerH(c), SEA) + 0.005);
+    if (c >= 0 && this.surface) this.controls.minDistance = Math.max(1.008, Math.max(this.surface.centerH(c), SEA) + 0.007);
     // Tilt grows smoothly all the way down from 1.5 radii, most of it near the ground, up to
     // ~66°. The view pivots about the ground point at the middle of the screen, which stays put:
     // zooming in always closes on the spot you were looking at.
     const t = 1 - s(1.012, 1.5);
-    this.tilt = 1.15 * t * t;
+    // Up to ~75° at the lowest: with a 40° view the horizon stays in frame.
+    this.tilt = 1.3 * t * t;
     this.tiltActive = this.tilt > 1e-4;
     if (this.tiltActive) {
       const up = this.camera.position.clone().normalize();
@@ -337,7 +338,7 @@ export class PlanetView {
       let north = new THREE.Vector3(0, 1, 0).addScaledVector(up, -up.y);
       if (north.lengthSq() < 1e-6) north = new THREE.Vector3(0, 0, -1).addScaledVector(up, up.z);
       north.normalize();
-      const dist = Math.max(0.003, d - ground);
+      const dist = Math.max(0.006, d - ground);
       const pos = target.clone()
         .addScaledVector(up, Math.cos(this.tilt) * dist)
         .addScaledVector(north, -Math.sin(this.tilt) * dist);
