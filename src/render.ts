@@ -360,7 +360,13 @@ export class PlanetView {
     (this.stars.material as THREE.PointsMaterial).opacity = 0.7 * (1 - low * day);
     // Haze colour follows the sky at the horizon (dark at night); density grows as you descend.
     this.haze.color.setRGB(0.36, 0.48, 0.66).multiplyScalar(0.12 + 0.88 * day);
-    this.haze.density = low * 1.6;
+    this.haze.density = low * low * 1.3;
+    // Low down, the follow-light swings round to the side and drops, so it rakes across the
+    // terrain and relief reads (from the camera's side, slopes shade almost evenly).
+    if (this.opts.light === 'follow' && this.sun.parent === this.camera) {
+      const k = 1 - s(1.03, 1.4);
+      this.sun.position.set(-3 - 1.5 * k, 1.6 - 0.9 * k, 2.2 - 2.4 * k);
+    }
   }
 
   // --- Centuries ------------------------------------------------------------------------------
