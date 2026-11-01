@@ -363,8 +363,11 @@ function buildSmooth(inp: SurfaceInput): Surface {
   for (let c = 0; c < N; c++) {
     if (level[c] > 0) { vLevel[c] = level[c]; continue; }
     // River cells keep their own (dry) level: their carved valleys would otherwise fill with a
-    // thin, foamy channel of the neighbouring sea or lake.
-    if (w.river[c]) continue;
+    // thin, foamy channel of the neighbouring sea or lake. Except at the mouth, by the sea:
+    // there part of the cell dips below sea level, and with no water over it the bare sea floor
+    // showed as flat plates jutting out from the coast. The sea floods the valley's end instead,
+    // an estuary.
+    if (w.river[c] && !g.neighbors[c].some((nb) => w.water[nb] === WATER_OCEAN)) continue;
     for (const nb of g.neighbors[c]) vLevel[c] = Math.max(vLevel[c], level[nb]);
   }
 

@@ -968,6 +968,19 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
             foam = max(foam, crest * (0.35 + 0.65 * breakup) * smoothstep(0.9, 0.3, dist) * 0.8);
           }
         #endif
+        // Silt: rivers carry mud out to sea, a brownish plume swirling off the mouth and fading
+        // tens of km out (the water map's river valleys reaching past the coast).
+        #if !defined(USE_FADE) && !defined(MERCATOR)
+          if (cs >= 0.0) {
+            vec4 gw = groundWater(vWorld);
+            float plume = smoothstep(0.012, 0.07, gw.g) * (1.0 - smoothstep(0.8, 0.98, gw.a));
+            if (plume > 0.0) {
+              float swirl = snoise(vWorld * 120.0 + vec3(t * 0.02)) * 0.5 + snoise(vWorld * 400.0 - vec3(t * 0.03)) * 0.3;
+              plume *= smoothstep(-0.2, 0.4, swirl + plume - 0.3);
+              col = mix(col, vec3(0.44, 0.37, 0.2) * shade * mix(0.06, 1.0, day), plume * 0.65);
+            }
+          }
+        #endif
         #ifdef USE_FADE
           foam = 0.0;   // rivers have no breakers
         #endif

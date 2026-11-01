@@ -26,7 +26,7 @@ export interface ShadowUniforms {
   uShMap: { value: THREE.Texture | null };
   /** The height map itself (x50), for things that look at the land's shape nearby (coasts). */
   uShH: { value: THREE.Texture | null };
-  /** Water map: r near rivers (a few km), g the wider valley floor (tens of km), b the sea blurred a few km (0.5 at the shore). */
+  /** Water map: r near rivers (a few km), g the wider valley floor (tens of km), b the sea blurred a few km (0.5 at the shore), a the sea blurred ~40 km (delta scale). */
   uShRiv: { value: THREE.Texture | null };
   uShOn: { value: number };
 }
@@ -65,6 +65,13 @@ export const SHADOW_GLSL = /* glsl */`
     vec2 uv = groundUv(p, edge);
     if (edge <= 0.0) return -1.0;
     return texture(uShRiv, uv).b;
+  }
+  /** The whole water map at p (zero outside the region). */
+  vec4 groundWater(vec3 p) {
+    float edge;
+    vec2 uv = groundUv(p, edge);
+    if (edge <= 0.0) return vec4(0.0);
+    return texture(uShRiv, uv);
   }
   vec2 groundRiver(vec3 p) {
     float edge;
@@ -142,10 +149,10 @@ const shadowFragment = /* glsl */`
 const blurFragment = /* glsl */`
   uniform sampler2D uSrc, uHeight;
   uniform vec2 uDir;
-  uniform float uNear, uWide, uCoast, uFirst;
+  uniform float uNear, uWide, uCoast, uSeaWide, uFirst;
   varying vec2 vUv;
   void main() {
-    float n = 0.0, w = 0.0, s = 0.0, k = 0.0;
+    float n = 0.0, w = 0.0, s = 0.0, sw = 0.0, k = 0.0;
     for (int i = -6; i <= 6; i++) {
       float f = float(i) / 3.0, g = exp(-0.5 * f * f);
       vec4 a = texture(uSrc, vUv + uDir * float(i) * uNear / 3.0);
@@ -153,12 +160,15 @@ const blurFragment = /* glsl */`
       vec2 cu = vUv + uDir * float(i) * uCoast / 3.0;
       // The sea, from the height map (below sea level) on the first pass.
       float c = uFirst > 0.5 ? step(texture(uHeight, cu).r, 0.0) : texture(uSrc, cu).b;
+      vec2 du = vUv + uDir * float(i) * uSeaWide / 3.0;
+      float c2 = uFirst > 0.5 ? step(texture(uHeight, du).r, 0.0) : texture(uSrc, du).a;
       n += g * a.r;
       w += g * (uFirst > 0.5 ? b.r : b.g);
       s += g * c;
+      sw += g * c2;
       k += g;
     }
-    gl_FragColor = vec4(n / k, w / k, s / k, 1.0);
+    gl_FragColor = vec4(n / k, w / k, s / k, sw / k);
   }`;
 
 export class TerrainShadow {
@@ -195,7 +205,7 @@ export class TerrainShadow {
     this.u.uShH.value = this.height.texture;
     this.u.uShRiv.value = this.riverMap.texture;
     this.blurMat = new THREE.ShaderMaterial({
-      uniforms: { uSrc: { value: null }, uHeight: { value: this.height.texture }, uDir: { value: new THREE.Vector2() }, uNear: { value: 1 }, uWide: { value: 4 }, uCoast: { value: 1 }, uFirst: { value: 1 } },
+      uniforms: { uSrc: { value: null }, uHeight: { value: this.height.texture }, uDir: { value: new THREE.Vector2() }, uNear: { value: 1 }, uWide: { value: 4 }, uCoast: { value: 1 }, uSeaWide: { value: 6 }, uFirst: { value: 1 } },
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: blurFragment,
       depthTest: false, depthWrite: false,
@@ -312,6 +322,7 @@ export class TerrainShadow {
     b.uNear.value = Math.max(1, 0.0014 / texel) / 512;
     b.uWide.value = Math.max(1, 0.004 / texel) / 512;
     b.uCoast.value = Math.max(0.7, 0.0005 / texel) / 512;
+    b.uSeaWide.value = Math.max(1, 0.006 / texel) / 512;
     b.uSrc.value = this.riverRaw.texture; b.uDir.value.set(1, 0); b.uFirst.value = 1;
     renderer.setRenderTarget(this.riverTmp);
     renderer.render(this.blurScene, this.quadCam);
