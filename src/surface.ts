@@ -180,7 +180,7 @@ function climateColour(m: number, t: number, out: THREE.Color) {
   out.setRGB(lo[0] + (hi[0] - lo[0]) * tf, lo[1] + (hi[1] - lo[1]) * tf, lo[2] + (hi[2] - lo[2]) * tf);
 }
 /** Cells whose own colour stands rather than the climate palette: ice and bare high rock. */
-const OWN_COLOUR = new Set<number>([B.ICE, B.PEAK, B.MOUNTAIN]);
+const OWN_COLOUR = new Set<number>([B.ICE]);   // mountains take the climate's colour; rock is per pixel
 
 function cornerCellsOf(world: World): number[][] {
   const g = world.grid;
@@ -271,11 +271,13 @@ function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number,
     const up = (nor.getX(i) * x + nor.getY(i) * y + nor.getZ(i) * z) / l;
     const slope = 1 - up;                         // 0 flat, ~0.3 steep
     mix(i, SAND, sm(0.0017, 0.0007, above) * sm(0.25, 0.4, vertexTemp(y / l, e, heat)));
-    mix(i, ROCK, sm(0.025, 0.09, slope) * 0.75);
+    mix(i, ROCK, sm(0.04, 0.12, slope) * 0.6);
     // Altitude zones: vegetation thins to bare rock and alpine scrub above the tree line, so
     // mountains step through rock before snow instead of snow sitting on desert sand.
     const n = noise(x * 90, y * 90, z * 90) * 0.5 + noise(x * 260 + 4.1, y * 260, z * 260) * 0.25;
-    mix(i, ALPINE, sm(0.28, 0.5, e + n * 0.12) * 0.75);
+    // The tree line follows temperature, not height alone: high in the tropics, low near the
+    // poles (Earth: ~3,800 m on the equator, ~2,000 m at 45°). Above it, alpine scrub.
+    mix(i, ALPINE, sm(0.3, 0.18, vertexTemp(y / l, e, heat) + n * 0.05) * 0.7);
     // Snow settles on gentler slopes first.
     const tv = vertexTemp(y / l, e, heat);
     // Patchy edge: noise moves the snow line, so it breaks into streaks along ridges.
@@ -463,6 +465,27 @@ function buildSmooth(inp: SurfaceInput): Surface {
     return sum / norm;
   };
   /**
+   * Eroded-looking relief (after Inigo Quilez's derivative-damped fBm): each octave is damped
+   * where the octaves below it are already steep, so slopes stay smooth and detail gathers on
+   * crests and in valley floors. Combined with a ridged first octave, ranges read as branching
+   * spurs and gullies rather than uniform bumps. About −0.5..0.6.
+   */
+  const H = 0.02;
+  const eroded = (dx: number, dy: number, dz: number) => {
+    let sum = 0, amp = 0.55, f = ridgeBase * 0.8, gx = 0, gy = 0, gz = 0;
+    for (let o = 0; o < 5; o++) {
+      const qx = dx * f + 7.1 * o, qy = dy * f, qz = dz * f;
+      // The first octave is ridged (1 − |n|): long crest lines to hang the spurs from.
+      const shape = (v: number) => (o === 0 ? 0.5 - Math.abs(v) : v);
+      const n = shape(rough(qx, qy, qz));
+      const nx = (shape(rough(qx + H, qy, qz)) - n) / H, ny = (shape(rough(qx, qy + H, qz)) - n) / H, nz = (shape(rough(qx, qy, qz + H)) - n) / H;
+      gx += nx * amp; gy += ny * amp; gz += nz * amp;
+      sum += (amp * n) / (1 + 0.6 * (gx * gx + gy * gy + gz * gz));
+      amp *= 0.48; f *= 2.03;
+    }
+    return sum;
+  };
+  /**
    * Smooth height on high ground. Linear centre-to-corner interpolation makes every high cell a
    * hexagonal pyramid, and snow on the apexes then tiles the range in hexagons. Up high, height
    * instead comes from a noise-warped Gaussian blend of nearby land cells, like the colours.
@@ -497,7 +520,9 @@ function buildSmooth(inp: SurfaceInput): Surface {
     // Ranges are ridges and valleys, not domes: only the crests reach the snow line, so snow
     // lies in streaks along them instead of capping the whole massif.
     // Valleys bottom out (the floor clamp) rather than sinking into round pits.
-    const crags = 0.45 * relief * Math.pow(e, 1.1) * Math.max(-0.12, ridged(dx, dy, dz) - 0.45);
+    const crags = e > 0.12
+      ? 0.55 * relief * Math.pow(e, 1.1) * Math.max(-0.16, eroded(dx, dy, dz)) * Math.min(1, (e - 0.12) / 0.15)
+      : 0;
     return h + gentle * inp.relief + crags;
   };
 

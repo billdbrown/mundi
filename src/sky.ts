@@ -492,6 +492,20 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
           float amp = (1.0 + 3.0 * highland) * farFade;
           normal = normalize(normal - TOVIEW(grad * amp));
         }
+        // Bare rock, per pixel, where the detailed surface (normal included) is steep on high
+        // ground: crests and cliffs show rock while slopes and valleys keep their vegetation,
+        // as mountains look from the air, rather than whole ranges painted one flat brown.
+        if (uSnow > 0.0 && hAbove > 0.0004) {
+          #ifdef MERCATOR
+            float rslope = 1.0 - normal.z;
+          #else
+            float rslope = 1.0 - dot(normalize((vec4(normal, 0.0) * viewMatrix).xyz), normalize(vCloudP));
+          #endif
+          float hiK = smoothstep(0.15, 0.55, hAbove / uRelief);
+          float rockK = smoothstep(0.16, 0.34, rslope + 0.08 * hiK) * smoothstep(0.1, 0.35, hAbove / uRelief);
+          vec3 rock = vec3(0.30, 0.28, 0.25) * (0.85 + 0.3 * rn);
+          diffuseColor.rgb = mix(diffuseColor.rgb, rock, clamp(rockK * (0.55 + 0.45 * hiK), 0.0, 0.9));
+        }
         // Snow, per pixel: where it is cold enough for the height, latitude and season. Done
         // here rather than per vertex, where its edge broke along the mesh triangles. It sheds
         // off steep faces and lies in streaks along ridges, so ranges read as rock with white

@@ -8,7 +8,7 @@
  * you descend are drawn.
  */
 import * as THREE from 'three';
-import { B } from './biomes.ts';
+import { B, landBiome } from './biomes.ts';
 import { WATER_LAND, WATER_OCEAN, type World } from './world.ts';
 import type { SurfaceData } from './surface.ts';
 import { FLORA, ICEBERG, CACTUS, ROCK, treeGeometry, treeMaterial } from './flora.ts';
@@ -189,7 +189,14 @@ export class LodFlora {
         }
       }
     } else if (w.water[c] === WATER_LAND) {
-      const b = w.biome[c], spec = FLORA[b];
+      // Mountain cells grow what their climate grows lower down, thinned (the snow line and the
+      // slope test in randomPoint keep trees off peaks and cliffs); the rocks stay.
+      const mountain = w.biome[c] === B.MOUNTAIN || w.biome[c] === B.PEAK;
+      const b = mountain ? landBiome(w.temperature[c], w.moisture[c], 0) : w.biome[c];
+      type Spec = NonNullable<(typeof FLORA)[number]>;
+      const spec: Spec | undefined = mountain
+        ? [...(FLORA[b] ?? []).map(([k, col, d, sz]): Spec[number] => [k, col, d * 0.6, sz]), ...(FLORA[B.MOUNTAIN] ?? []).filter(([k]) => k === ROCK)]
+        : FLORA[b];
       if (spec) {
         const f = 0.45 / spacing, clump = this.clump!;
         const cn = 0.5 + 0.5 * clump(P[c * 3] * f, P[c * 3 + 1] * f, P[c * 3 + 2] * f);
