@@ -134,8 +134,11 @@ export function mountShell(app: App) {
       </div>
       <button class="pill" id="share" title="Copy a link to this exact planet">⤴ Share</button>
     </div>
-    <nav class="lenses" id="lenses">
-      ${LENSES.map((l) => `<button data-lens="${l.id}" title="${l.label}"><span class="ico">${l.icon}</span><span class="lbl">${l.label}</span></button>`).join('')}
+    <nav class="lenses collapsed" id="lenses">
+      <button class="lens-toggle" id="lens-toggle" aria-expanded="false"><span class="ico" id="lens-cur-ico"></span><span class="lbl" id="lens-cur"></span><span class="chev"></span></button>
+      <div class="lens-opts">
+        ${LENSES.map((l) => `<button data-lens="${l.id}" title="${l.label}"><span class="ico">${l.icon}</span><span class="lbl">${l.label}</span></button>`).join('')}
+      </div>
     </nav>
     <div class="legend" id="legend" hidden><span id="legend-lo"></span><i id="legend-bar"></i><span id="legend-hi"></span></div>
     <aside class="drawer" id="drawer" hidden>
@@ -172,6 +175,9 @@ export function mountShell(app: App) {
   `;
   document.body.appendChild(root);
   const $ = <T extends HTMLElement>(id: string) => root.querySelector<T>('#' + id)!;
+  // Per-browser conveniences (open panels); storage can be missing in private windows.
+  const pref = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
+  const setPref = (key: string, v: string) => { try { localStorage.setItem(key, v); } catch { /* private window */ } };
 
   // --- Name ---
   const showName = () => {
@@ -198,16 +204,30 @@ export function mountShell(app: App) {
   // --- Lenses ---
   // The clouds button is a standing preference: lenses that show clouds respect it.
   let cloudsOn = (() => { try { return localStorage.getItem('mundi-clouds') !== 'off'; } catch { return true; } })();
+  // The layers start collapsed to one button showing the current layer; open or closed is
+  // remembered per browser.
+  let layersOpen = pref('mundi-layers') === 'open';
+  const syncLensToggle = () => {
+    $('lenses').classList.toggle('collapsed', !layersOpen);
+    const t = $('lens-toggle'), cur = LENSES.find((x) => x.id === app.lens()) ?? LENSES[0];
+    t.setAttribute('aria-expanded', String(layersOpen));
+    t.title = layersOpen ? 'Hide the layers' : 'Show the layers';
+    $('lens-cur-ico').textContent = cur.icon;
+    $('lens-cur').textContent = layersOpen ? 'Layers' : cur.label;
+  };
+  $('lens-toggle').onclick = () => { layersOpen = !layersOpen; setPref('mundi-layers', layersOpen ? 'open' : 'closed'); syncLensToggle(); };
   const applyLens = (l: Lens, user = true) => {
     const def = LENSES.find((x) => x.id === l) ?? LENSES[0];
-    root.querySelectorAll<HTMLButtonElement>('#lenses button').forEach((b) => b.classList.toggle('on', b.dataset.lens === def.id));
+    root.querySelectorAll<HTMLButtonElement>('#lenses [data-lens]').forEach((b) => b.classList.toggle('on', b.dataset.lens === def.id));
     app.setLens(def.id);
+    syncLensToggle();
     if (user || true) app.setView({ ...def.view, sites: def.id === 'map', clouds: !!def.view.clouds && cloudsOn });
     const lg = LEGENDS[def.id];
     $('legend').hidden = !lg;
     if (lg) { $('legend-lo').textContent = lg[0]; $('legend-hi').textContent = lg[1]; $('legend-bar').style.background = lg[2]; }
   };
-  root.querySelectorAll<HTMLButtonElement>('#lenses button').forEach((b) => { b.onclick = () => applyLens(b.dataset.lens as Lens); });
+  root.querySelectorAll<HTMLButtonElement>('#lenses [data-lens]').forEach((b) => { b.onclick = () => applyLens(b.dataset.lens as Lens); });
+  syncLensToggle();
   const syncCloudButton = () => $('clouds-toggle').classList.toggle('on', cloudsOn);
   $('clouds-toggle').onclick = () => {
     cloudsOn = !cloudsOn;
@@ -422,7 +442,19 @@ export function mountShell(app: App) {
     $('advanced-toggle').textContent = panel.classList.contains('advanced') ? 'All settings' : 'Hide all settings';
   };
 
-  // --- Almanac ---
+  // --- Almanac: collapsed to its heading by default, remembered per browser ---
+  let almanacOpen = pref('mundi-almanac') === 'open';
+  const syncAlmanac = () => {
+    $('almanac').classList.toggle('collapsed', !almanacOpen);
+    $('almanac').querySelector('.card-head')?.setAttribute('aria-expanded', String(almanacOpen));
+  };
+  $('almanac').addEventListener('click', (e) => {
+    if (!(e.target as Element).closest('.card-head')) return;
+    almanacOpen = !almanacOpen;
+    setPref('mundi-almanac', almanacOpen ? 'open' : 'closed');
+    syncAlmanac();
+  });
+  syncAlmanac();
   const almanac = () => {
     const w = app.world(), g = app.game();
     if (!w || !g) return;
@@ -444,7 +476,7 @@ export function mountShell(app: App) {
     const named = g.continents.filter((k) => !k.name.startsWith('Isle'));
     const cellKm = Math.round(Math.sqrt((4 * Math.PI) / N) * app.radiusKm());
     $('almanac').innerHTML = `
-      <h3>Almanac</h3>
+      <button class="card-head" aria-expanded="${almanacOpen}" title="Show or hide the almanac">Almanac <span class="chev"></span></button>
       <dl>
         <dt>Land</dt><dd>${Math.round((land / N) * 100)}% of the surface</dd>
         <dt>Continents</dt><dd>${named.length ? named.slice(0, 3).map((k) => k.name).join(', ') + (named.length > 3 ? ` +${named.length - 3}` : '') : 'none, only islands'}</dd>

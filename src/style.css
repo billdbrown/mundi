@@ -75,7 +75,15 @@ body.capture .ui { display: none !important; }
 
 .almanac { position: fixed; top: 120px; left: 26px; width: 250px; background: var(--glass);
   backdrop-filter: blur(10px); border: 1px solid var(--edge); border-radius: 14px; padding: 12px 14px; font-size: 12px; }
-.almanac h3 { margin: 0 0 8px; font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.almanac .card-head { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 12px;
+  margin: 0 0 8px; padding: 0; background: none; border: none; font-size: 11px; letter-spacing: .2em;
+  text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.almanac .card-head:hover { color: var(--text); }
+.almanac .chev::before { content: '▾'; letter-spacing: 0; font-size: 13px; }
+.almanac.collapsed { width: auto; padding: 8px 14px; }
+.almanac.collapsed .card-head { margin: 0; }
+.almanac.collapsed .chev::before { content: '▸'; }
+.almanac.collapsed dl { display: none; }
 .almanac dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 5px 10px; }
 .almanac dt { color: var(--muted); }
 .almanac dd { margin: 0; }
@@ -136,13 +144,24 @@ body.shell #panel.advanced { display: none; }
 .lenses button:hover { color: var(--text); }
 .lenses button.on { background: rgba(255,255,255,.14); color: #fff; }
 .lenses .ico { font-size: 14px; width: 1.1em; text-align: center; }
+/* Collapsed: one button showing the current layer. Open: a small Layers heading, then all five. */
+.lens-opts { display: contents; }
+.lenses.collapsed .lens-opts { display: none; }
+.lenses .lens-toggle { color: var(--text); }
+.lenses .lens-toggle .chev { font-size: 12px; color: var(--muted); }
+.lenses .lens-toggle .chev::before { content: '▴'; }
+.lenses:not(.collapsed) .lens-toggle { color: var(--muted); font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; }
+.lenses:not(.collapsed) .lens-toggle .ico { display: none; }
+.lenses:not(.collapsed) .lens-toggle .chev::before { content: '▾'; }
+.lenses-row .lenses:not(.collapsed) .lens-toggle .chev::before { content: '◂'; }
 .legend { position: fixed; left: 26px; bottom: 72px; display: flex; align-items: center; gap: 8px;
   font-size: 11px; color: var(--muted); text-shadow: 0 1px 4px #000; }
 .legend i { display: block; width: 160px; height: 6px; border-radius: 3px; }
 /* Column variant: a stack, like a map app's layer picker */
 .lenses-column .lenses { flex-direction: column; border-radius: 16px; }
 .lenses-column .lenses button { border-radius: 12px; padding: 7px 14px 7px 11px; }
-.lenses-column .legend { bottom: 214px; }
+.lenses-column .legend { bottom: 250px; }
+.ui:has(.lenses.collapsed) .legend { bottom: 72px; }
 /* Row variant: the labels drop out when the clock in the middle needs the room */
 @media (max-width: 1480px) {
   .lenses-row .lenses .lbl { display: none; }
@@ -201,7 +220,7 @@ body.shell #info { border-radius: 12px; padding: 8px 11px; background: rgba(10,1
   .lenses-column .lenses { flex-direction: row; border-radius: 999px; }
   .lenses-column .lenses button { border-radius: 999px; }
   .clock { bottom: 62px; }
-  .legend, .lenses-column .legend { bottom: 112px; }
+  .legend, .lenses-column .legend, .ui:has(.lenses.collapsed) .legend { bottom: 112px; }
   .clock .date { display: none; }
   .clock.running .date { display: inline; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
   .hint { bottom: 146px; }
