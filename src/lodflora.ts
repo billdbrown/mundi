@@ -11,7 +11,12 @@ import * as THREE from 'three';
 import { B } from './biomes.ts';
 import { WATER_LAND, WATER_OCEAN, type World } from './world.ts';
 import type { SurfaceData } from './surface.ts';
-import { FLORA, ICEBERG, treeGeometry, treeMaterial } from './flora.ts';
+import { FLORA, ICEBERG, CACTUS, ROCK, treeGeometry, treeMaterial } from './flora.ts';
+import { groveField, groveFreq, forestMask, openMask } from './groves.ts';
+
+/** Biomes that are forest (trees with clearings) and open country (trees only in groves). */
+const FOREST = new Set<number>([B.TAIGA, B.FOREST, B.TEMPERATE_RAIN, B.RAINFOREST, B.DRY_FOREST]);
+const OPEN = new Set<number>([B.SAVANNA, B.GRASSLAND]);
 import { makeRng } from './rng.ts';
 import { makeSimplex, type Noise3 } from './noise.ts';
 
@@ -25,7 +30,7 @@ const DENSITY = 36;
 const KINDS = 7;
 /** Floats per plant: x, y, z, size, spin, shade, kind, colour. */
 const STRIDE = 8;
-const MAX_INSTANCES = 250000;
+const MAX_INSTANCES = 320000;
 
 export class LodFlora {
   private group = new THREE.Group();
@@ -162,17 +167,26 @@ export class LodFlora {
         }
       }
     } else if (w.water[c] === WATER_LAND) {
-      const spec = FLORA[w.biome[c]];
+      const b = w.biome[c], spec = FLORA[b];
       if (spec) {
         const f = 0.45 / spacing, clump = this.clump!;
         const cn = 0.5 + 0.5 * clump(P[c * 3] * f, P[c * 3 + 1] * f, P[c * 3 + 2] * f);
-        const groves = Math.max(0.05, 1.9 * cn * cn);
+        // Forest and open country take their shape from the grove pattern (shared with the ground
+        // shader's canopy); elsewhere the old cell-scale clumping still varies density.
+        const forest = FOREST.has(b), open = OPEN.has(b);
+        const groves = forest ? 3.2 : open ? 2.6 : Math.max(0.05, 1.9 * cn * cn);
+        const gf = groveFreq(g.count);
         const riverThin = w.river[c] ? 0.35 : 1;
         for (const [kind, col, density, size = 1] of spec) {
           const n = Math.round(density * DENSITY * groves * riverThin * (0.85 + 0.3 * rng()));
+          const shaped = (forest || open) && kind !== ROCK && kind !== CACTUS;
           for (let i = 0; i < n; i++) {
             const pt = this.randomPoint(c, rng, false);
             if (!pt) continue;
+            if (shaped) {
+              const gv = groveField(pt[0], pt[1], pt[2], gf);
+              if (rng() > (forest ? forestMask(gv) : openMask(gv))) continue;
+            }
             // Sizes skew small: plenty of young trees, a few big ones.
             const r = rng();
             out.push(pt[0], pt[1], pt[2], spacing * size * (0.022 + 0.032 * r * r), rng() * Math.PI * 2, 0.8 + 0.32 * rng(), kind, col);

@@ -14,6 +14,7 @@ import { buildForest, treeMaterial } from './flora.ts';
 import { LodFlora, FADE_NEAR, FADE_FAR } from './lodflora.ts';
 import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere, makeStars, makeSky, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
 import type { CloudPixels } from './clouds.ts';
+import { groveFreq } from './groves.ts';
 import { MERC_GLSL, MERC_DISCARD, MERC_MAX_Y, mercVertex, mercY, mercLat, setMercator } from './mercator.ts';
 import type { ViewMode, TerrainStyle } from './colors.ts';
 
@@ -204,6 +205,7 @@ export class PlanetView {
   /** Draws a world from worker-built data. */
   setData(world: World, data: SurfaceData) {
     this.cloudU.uHeat.value = world.params.heat;
+    this.cloudU.uGrove.value = groveFreq(world.grid.count);
     this.cloudU.uRelief.value = RELIEF * this.opts.relief;
     this.world = world;
     this.rebuild(data);

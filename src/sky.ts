@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import type { CloudPixels } from './clouds.ts';
 import { hash01 } from './rng.ts';
 import { MERC_GLSL, MERC_DISCARD, mercVertex, patchShaderChunks } from './mercator.ts';
+import { GROVE_GLSL } from './groves.ts';
 
 patchShaderChunks();
 
@@ -24,11 +25,13 @@ export interface CloudUniforms {
   uSnow: { value: number };
   /** On the flat map: how far away the view "is", standing in for the camera distance. */
   uMapDist: { value: number };
+  /** Frequency of the grove pattern (groves.ts), set per world. */
+  uGrove: { value: number };
 }
 
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
-    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 } };
+    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 } };
 }
 
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
@@ -151,6 +154,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         }
         #ifdef USE_CLIMATE
           varying vec2 vClim;
+          ${GROVE_GLSL}
         #endif
         // --- Ground patterns, by climate. Each fades out once its features get smaller than a
         // few pixels (fwidth), so it adds detail up close without shimmering from orbit.
@@ -223,6 +227,21 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
               float k = grassW * aaFade(0.0006, foot);
               diffuseColor.rgb *= mix(1.0, 0.76 + 0.48 * m, k);
               diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.12, 1.04, 0.8), smoothstep(0.55, 0.8, m) * k * 0.6);
+            }
+            // Forest: dense canopy in the groves, with lumpy crowns up close, and paler, yellower
+            // clearings between. Open country gets the odd dark grove. The trees placed near the
+            // camera follow the same pattern (groves.ts), so canopy and trees agree.
+            float forestW = smoothstep(0.005, 0.04, diffuseColor.g - max(diffuseColor.r, diffuseColor.b)) * smoothstep(0.35, 0.5, moist) * lowland;
+            float gv = groveField(vCloudP);
+            if (forestW > 0.0) {
+              float inGrove = smoothstep(-0.35, 0.25, gv);
+              float crowns = vnoise(vCloudP * 3200.0) * 0.6 + vnoise(vCloudP * 9000.0) * 0.4;
+              diffuseColor.rgb *= mix(1.0, 0.68, forestW * inGrove);
+              diffuseColor.rgb *= mix(1.0, 0.75 + 0.35 * crowns, forestW * inGrove * aaFade(0.0003, foot));
+              diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.18, 1.12, 0.82), forestW * (1.0 - inGrove) * 0.55);
+            }
+            if (grassW > 0.0) {
+              diffuseColor.rgb *= mix(1.0, 0.82, grassW * smoothstep(0.25, 0.7, gv) * smoothstep(0.3, 0.45, moist));
             }
             // Tundra: frost polygons, a net of dark cracks with the odd meltwater pond.
             float tundraW = smoothstep(0.08, 0.16, temp) * smoothstep(0.34, 0.24, temp) * lowland;
