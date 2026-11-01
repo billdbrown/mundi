@@ -2,6 +2,7 @@ import { buildGrid, type Grid } from './grid.ts';
 import { makeRng } from './rng.ts';
 import { makeSimplex, fbm } from './noise.ts';
 import { B, landBiome } from './biomes.ts';
+import { erodeLand, EROSION_DEFAULTS } from './erode.ts';
 
 export interface WorldParams {
   seed: number;
@@ -19,10 +20,12 @@ export interface WorldParams {
   wetness: number;
   /** River density multiplier. */
   rivers: number;
+  /** River erosion of the land, 0..1 (erode.ts): 0 leaves the plate model's heights as they are. */
+  erosion: number;
 }
 
 export const DEFAULT_PARAMS: WorldParams = {
-  seed: 1, detail: 60, ocean: 0.68, plates: 12, continents: 3, roughness: 0.45, heat: 0, wetness: 0, rivers: 1,
+  seed: 1, detail: 60, ocean: 0.68, plates: 12, continents: 3, roughness: 0.45, heat: 0, wetness: 0, rivers: 1, erosion: 1,
 };
 
 export const WATER_LAND = 0, WATER_OCEAN = 1, WATER_LAKE = 2;
@@ -239,6 +242,12 @@ export function generateWorld(params: WorldParams): World {
     } else if (water[m[0]] === WATER_OCEAN && i !== mainOcean && m.length < maxInlandSea) {
       for (const c of m) { elev[c] = 0.01; water[c] = WATER_LAND; }
     }
+  }
+
+  // --- River erosion: valleys and spurs carved into the land (erode.ts). Coasts stay put. ---
+  if (params.erosion > 0) {
+    const carved = erodeLand(grid, elev, null, { ...EROSION_DEFAULTS, blend: EROSION_DEFAULTS.blend * Math.min(1, params.erosion) });
+    elev.set(carved);
   }
 
   // --- Temperature: latitude, altitude, a little noise ---

@@ -4,8 +4,8 @@
  *
  *   node scripts/look.mjs <outdir> <tag> [shot...]
  *
- * A shot is name=seed:target:alt[:lens] (seed may carry more hash, e.g. 77&detail=40), where target is a biome list (b12, b8+9) or a debug
- * spot (desert, river, coast...). `zoom=seed:target` shoots a descent at several heights.
+ * A shot is name=seed:target:alt[:lens] (lens: map, elev) (seed may carry more hash, e.g. 77&detail=40), where target is a biome list (b12, b8+9) or a debug
+ * spot (desert, river, coast...), or @lon,lat. `zoom=seed:target` shoots a descent at several heights.
  * URL from LOOK_URL (default http://localhost:5291/). TOPDOWN=1 looks straight down (no tilt);
  * ERO=0 turns the erosion filter off.
  */
@@ -24,7 +24,7 @@ await page.waitForFunction(() => window.mundi?.world, null, { timeout: 60000 });
 let seedNow = -1;
 async function aim(seed, target, alt, lens) {
   if (seed !== seedNow || lens) {
-    const opts = lens === 'map' ? { look: 'map', grid: true, clouds: false } : { look: 'photo', grid: false, clouds: process.env.CLOUDS === '1' };
+    const opts = lens === 'map' ? { look: 'map', grid: true, clouds: false } : lens === 'elev' ? { mode: 'elevation', grid: false, clouds: false } : { look: 'photo', grid: false, clouds: process.env.CLOUDS === '1' };
     await page.evaluate(([s, o]) => window.mundi.load('seed=' + s, o), [seed, opts]);
     await page.evaluate(() => { window.mundi.capture(true); window.mundi.freeze(10); });
     seedNow = seed;
@@ -38,6 +38,7 @@ async function aim(seed, target, alt, lens) {
       m.orbit(Math.atan2(P[best * 3], P[best * 3 + 2]) * 57.2958, Math.asin(P[best * 3 + 1]) * 57.2958, a);
       return best;
     }
+    if (t.startsWith('@')) { const [lo, la] = t.slice(1).split(',').map(Number); m.orbit(lo, la, a); return -1; }
     if (t === 'hills') {
       // Upland away from mountains: land cells of middling height in a block of the same.
       const mid = (c) => w.water[c] === 0 && w.elevation[c] > 0.22 && w.elevation[c] < 0.45;
