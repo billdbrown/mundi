@@ -242,12 +242,13 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         // Ridged octaves (1 - |2n - 1|) give crest lines and gullies rather than uniform grain.
         float ridge(float n) { return 1.0 - abs(2.0 * n - 1.0); }
         float rockNoise(vec3 p) {
-          return ridge(vnoise(p * 320.0)) * 0.5 + ridge(vnoise(p * 900.0)) * 0.3 + vnoise(p * 2600.0) * 0.2;
+          return ridge(snoise01(p * 320.0)) * 0.5 + ridge(snoise01(p * 900.0 + 3.0)) * 0.3 + vnoise(p * 2600.0) * 0.2;
         }
         // Orbit-scale relief: ridge-and-valley texture a few hundred km across, the hillshaded
         // look of land from space. Takes over as the fine rock detail fades out.
         float landNoise(vec3 p) {
-          return ridge(vnoise(p * 45.0)) * 0.55 + ridge(vnoise(p * 120.0)) * 0.3 + vnoise(p * 300.0) * 0.15;
+          // Simplex, not value noise: value noise's lattice showed as chevrons over whole continents.
+          return ridge(snoise01(p * 45.0)) * 0.55 + ridge(snoise01(p * 120.0 + 3.0)) * 0.3 + snoise01(p * 300.0 + 7.0) * 0.15;
         }
         #ifdef USE_CLIMATE
           varying vec2 vClim;
@@ -364,14 +365,20 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
             float forestW = smoothstep(0.005, 0.04, diffuseColor.g - max(diffuseColor.r, diffuseColor.b)) * smoothstep(0.35, 0.5, moist) * lowland;
             float gv = groveField(vCloudP);
             if (forestW > 0.0) {
-              float inGrove = smoothstep(-0.35, 0.25, gv);
+              // Fades out where groves are too small to resolve: from orbit the waves of the
+              // grove pattern average into chevron stripes.
+              // Groves only come in on descent; from orbit a broad, irregular canopy shade stands in
+              // (the grove waves, seen together from afar, lined up into chevrons).
+              float groveNear = 1.0 - smoothstep(0.18, 0.45, camDist);
+              float broad = smoothstep(-0.4, 0.5, snoise(vCloudP * 60.0) + 0.5 * snoise(vCloudP * 170.0 + 2.0));
+              float inGrove = mix(mix(0.45, 0.85, broad), smoothstep(-0.35, 0.25, gv), groveNear);
               float crowns = snoise01(vCloudP * 3200.0) * 0.6 + snoise01(vCloudP * 9000.0) * 0.4;
               diffuseColor.rgb *= mix(1.0, 0.68, forestW * inGrove);
               diffuseColor.rgb *= mix(1.0, 0.75 + 0.35 * crowns, forestW * inGrove * aaFade(0.0003, foot));
               diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.18, 1.12, 0.82), forestW * (1.0 - inGrove) * 0.55);
             }
             if (grassW > 0.0) {
-              diffuseColor.rgb *= mix(1.0, 0.82, grassW * smoothstep(0.25, 0.7, gv) * smoothstep(0.3, 0.45, moist));
+              diffuseColor.rgb *= mix(1.0, 0.82, grassW * smoothstep(0.25, 0.7, gv) * smoothstep(0.3, 0.45, moist) * (1.0 - smoothstep(0.18, 0.45, camDist)));
             }
             // Tundra: frost polygons, a net of dark cracks with the odd meltwater pond.
             float tundraW = smoothstep(0.08, 0.16, temp) * smoothstep(0.34, 0.24, temp) * lowland;
@@ -451,6 +458,9 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         #else
           #define TOVIEW(v) ((viewMatrix * vec4(v, 0.0)).xyz)
         #endif
+        // The surface's own normal, before any detail: slope tests far away use it, because
+        // the detail normal is mostly noise at that scale and turned rock and snow to speckle.
+        vec3 geoN = normal;
         if (detailFade > 0.0 && hAbove > 0.0) {
           vec3 up = normalize(vCloudP);
           vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
@@ -475,9 +485,9 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         // Rock strata: bands across steep high ground, as layered rock shows in cliffs.
         if (highland > 0.0 && hAbove > 0.0) {
           #ifdef MERCATOR
-            float steep = 1.0 - normal.z;
+            float steep = 1.0 - normalize(mix(geoN, normal, detailFade)).z;
           #else
-            float steep = 1.0 - dot(normalize((vec4(normal, 0.0) * viewMatrix).xyz), normalize(vCloudP));
+            float steep = 1.0 - dot(normalize((vec4(normalize(mix(geoN, normal, detailFade)), 0.0) * viewMatrix).xyz), normalize(vCloudP));
           #endif
           float band = sin(hAbove / uRelief * 70.0 + (vnoise(vCloudP * 260.0) - 0.5) * 6.0);
           float k = smoothstep(0.04, 0.16, steep) * highland * aaFade(0.0005, foot);
@@ -497,9 +507,9 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         // as mountains look from the air, rather than whole ranges painted one flat brown.
         if (uSnow > 0.0 && hAbove > 0.0004) {
           #ifdef MERCATOR
-            float rslope = 1.0 - normal.z;
+            float rslope = 1.0 - normalize(mix(geoN, normal, detailFade)).z;
           #else
-            float rslope = 1.0 - dot(normalize((vec4(normal, 0.0) * viewMatrix).xyz), normalize(vCloudP));
+            float rslope = 1.0 - dot(normalize((vec4(normalize(mix(geoN, normal, detailFade)), 0.0) * viewMatrix).xyz), normalize(vCloudP));
           #endif
           float hiK = smoothstep(0.15, 0.55, hAbove / uRelief);
           float rockK = smoothstep(0.16, 0.34, rslope + 0.08 * hiK) * smoothstep(0.1, 0.35, hAbove / uRelief);
@@ -519,9 +529,9 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
           float edge = (vnoise(vCloudP * 40.0) - 0.5) * 0.1 + (vnoise(vCloudP * 300.0) - 0.5) * 0.05;
           float snow = smoothstep(line + 0.04, line - 0.06, st + edge);
           #ifdef MERCATOR
-            float slope = 1.0 - normal.z;
+            float slope = 1.0 - normalize(mix(geoN, normal, detailFade)).z;
           #else
-            float slope = 1.0 - dot(normalize((vec4(normal, 0.0) * viewMatrix).xyz), sn);
+            float slope = 1.0 - dot(normalize((vec4(normalize(mix(geoN, normal, detailFade)), 0.0) * viewMatrix).xyz), sn);
           #endif
           // Value noise shows its grid once thresholded, so warp it and rotate each octave.
           vec3 q = vCloudP * 160.0;
@@ -664,9 +674,16 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         }
 
         float d = clamp(vDepth / uDepthScale, 0.0, 1.0);
-        vec3 col = d < 0.12 ? mix(uShallow, uMid, smoothstep(0.0, 0.12, d)) : mix(uMid, uDeep, smoothstep(0.12, 0.6, d));
+        // Turquoise shallows belong to warm seas (Bahamas, Red Sea, northern Australia); cold
+        // shelves are only a little lighter and greener than the open ocean.
+        vec3 shallow = uShallow;
+        #ifndef USE_FADE
+          float warmSea = smoothstep(0.5, 0.8, meanTemp(Ng, 0.0));
+          shallow = mix(mix(uMid, vec3(0.16, 0.33, 0.38), 0.6), uShallow, warmSea);
+        #endif
+        vec3 col = d < 0.12 ? mix(shallow, uMid, smoothstep(0.0, 0.12, d)) : mix(uMid, uDeep, smoothstep(0.12, 0.6, d));
         // Light passing through wave crests in shallow water.
-        col += uShallow * (h0 - 0.5) * 0.25 * near * (1.0 - d);
+        col += shallow * (h0 - 0.5) * 0.25 * near * (1.0 - d);
 
         float fres = pow(1.0 - max(dot(N, V), 0.0), 5.0);
         col = mix(col, uSky, 0.02 + fres * 0.45);
@@ -676,7 +693,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         // Glint: from orbit a broad, dim, silvery patch (the sea is rough at that scale), up close
         // a tight bright highlight.
         float shine = mix(40.0, 380.0, near);
-        float spec = pow(max(dot(R, V), 0.0), shine) * mix(0.26, 2.2, near);
+        float spec = pow(max(dot(R, V), 0.0), shine) * mix(0.15, 2.2, near);
         #ifdef USE_FADE
           spec *= 0.12;   // rivers: sparkle on a thin channel reads as whitewater
         #endif
@@ -701,7 +718,8 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         float zone = 1.0 - smoothstep(0.0, uFoam * 2.5, fd);
         float swell = smoothstep(0.8, 1.0, sin(fd / uFoam * 4.0 + t * 1.6)) * zone * 0.6;
         float breakup = smoothstep(0.35, 0.75, vnoise(vWorld * 2600.0 + vec3(t * 0.3)));
-        float foam = clamp(edge * (0.6 + 0.4 * breakup) + swell * breakup * near, 0.0, 1.0);
+        // Surf is metres wide: from orbit it would be an outline round every coast, so it fades.
+        float foam = clamp(edge * (0.6 + 0.4 * breakup) + swell * breakup * near, 0.0, 1.0) * (1.0 - smoothstep(0.35, 1.3, dist));
         #ifdef USE_FADE
           foam = 0.0;   // rivers have no breakers
         #endif

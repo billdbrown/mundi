@@ -272,7 +272,8 @@ function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number,
     const up = (nor.getX(i) * x + nor.getY(i) * y + nor.getZ(i) * z) / l;
     const slope = 1 - up;                         // 0 flat, ~0.3 steep
     // Beach sand at the sea's edge only (lowland lakes sit near sea level too).
-    if (!lakeSide[i]) mix(i, SAND, sm(0.0017, 0.0007, above) * sm(0.25, 0.4, vertexTemp(y / l, e, heat)));
+    // Thin and partial: from orbit a full-strength strip outlined every continent in yellow.
+    if (!lakeSide[i]) mix(i, SAND, sm(0.0011, 0.0004, above) * sm(0.25, 0.4, vertexTemp(y / l, e, heat)) * 0.7);
     mix(i, ROCK, sm(0.04, 0.12, slope) * 0.6);
     // Altitude zones: vegetation thins to bare rock and alpine scrub above the tree line, so
     // mountains step through rock before snow instead of snow sitting on desert sand.
