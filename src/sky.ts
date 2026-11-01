@@ -383,6 +383,13 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
             // Tundra: frost polygons, a net of dark cracks with the odd meltwater pond.
             float tundraW = smoothstep(0.08, 0.16, temp) * smoothstep(0.34, 0.24, temp) * lowland;
             if (tundraW > 0.0) {
+              // From the air: mottled — pale lichen, rusty heath, mossy green in hollows — and
+              // pocked with ponds and thaw lakes.
+              float mt = snoise(vCloudP * 70.0) * 0.6 + snoise(vCloudP * 230.0 + 1.0) * 0.4;
+              vec3 heath = mix(diffuseColor.rgb * vec3(1.18, 1.12, 1.0), diffuseColor.rgb * vec3(0.88, 1.06, 0.82), smoothstep(-0.5, 0.5, mt));
+              diffuseColor.rgb = mix(diffuseColor.rgb, heath, tundraW);
+              float lakesT = smoothstep(0.55, 0.62, snoise(vCloudP * 160.0) * 0.7 + snoise(vCloudP * 520.0 + 9.0) * 0.3) * smoothstep(0.3, 0.45, moist);
+              diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.08, 0.11), lakesT * tundraW * 0.85);
               float k = tundraW * aaFade(0.0007, foot);
               // Warped, so the polygons are irregular rather than paving stones.
               vec3 q = vCloudP * 2200.0 + vec3(snoise01(vCloudP * 900.0), snoise01(vCloudP * 900.0 + 7.0), snoise01(vCloudP * 900.0 + 13.0)) * 1.2;
@@ -524,9 +531,11 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         if (uSnow > 0.0 && hAbove > 0.0004) {
           vec3 sn = normalize(vCloudP);
           float lat = abs(asin(clamp(sn.y, -1.0, 1.0))) / 1.5707963;
-          float st = seasonalTemp(sn, 1.0 - 1.1 * pow(lat, 1.25) - 0.3 * hAbove / uRelief + uHeat);
-          float line = 0.27;
-          float edge = (vnoise(vCloudP * 40.0) - 0.5) * 0.1 + (vnoise(vCloudP * 300.0) - 0.5) * 0.05;
+          float st = seasonalTemp(sn, 1.0 - 1.1 * pow(lat, 1.25) - 0.5 * hAbove / uRelief + uHeat);
+          // Lying snow at an equinox: polar margins and high ground. (0.27 put snow over all the
+          // tundra and much of the taiga.) The season moves it, via seasonalTemp.
+          float line = 0.15;
+          float edge = snoise(vCloudP * 25.0) * 0.06 + snoise(vCloudP * 110.0 + 3.0) * 0.03 + snoise(vCloudP * 420.0 + 5.0) * 0.015;
           float snow = smoothstep(line + 0.04, line - 0.06, st + edge);
           #ifdef MERCATOR
             float slope = 1.0 - normalize(mix(geoN, normal, detailFade)).z;
