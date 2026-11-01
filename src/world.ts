@@ -52,7 +52,11 @@ export interface World {
 
 const gridCache = new Map<number, Grid>();
 
-export function generateWorld(params: WorldParams): World {
+/** The generator's steps, in order, reported through generateWorld's optional callback. */
+export type GenStep = 'plates' | 'mountains' | 'seas' | 'erosion' | 'temperature' | 'winds' | 'currents' | 'rivers' | 'biomes';
+export const GEN_STEPS: GenStep[] = ['plates', 'mountains', 'seas', 'erosion', 'temperature', 'winds', 'currents', 'rivers', 'biomes'];
+
+export function generateWorld(params: WorldParams, stage?: (step: GenStep) => void): World {
   const { seed, detail } = params;
   let grid = gridCache.get(detail);
   if (!grid) { grid = buildGrid(detail); gridCache.set(detail, grid); }
@@ -64,6 +68,7 @@ export function generateWorld(params: WorldParams): World {
   const noiseB = makeSimplex(seed * 7 + 2);
   const noiseC = makeSimplex(seed * 7 + 3);
 
+  stage?.('plates');
   // --- Plates: random seeds, grown by random flood fill so the borders come out ragged ---
   const plateCount = Math.max(2, Math.min(params.plates, 60));
   const plate = new Int16Array(N).fill(-1);
@@ -145,6 +150,7 @@ export function generateWorld(params: WorldParams): World {
     elev = next;
   }
 
+  stage?.('mountains');
   // --- Plate boundaries: collisions raise mountains, separations open rifts and ridges ---
   const boundary = new Float32Array(N);
   const va = [0, 0, 0], vb = [0, 0, 0];
@@ -218,6 +224,7 @@ export function generateWorld(params: WorldParams): World {
     elev[c] += 0.12 * ridge * ridge * Math.max(0, elev[c]);
   }
 
+  stage?.('seas');
   // --- Sea level at the requested ocean fraction, then normalise each side ---
   const sorted = Float32Array.from(elev).sort();
   const seaLevel = sorted[Math.min(N - 1, Math.floor(params.ocean * N))];
@@ -260,12 +267,14 @@ export function generateWorld(params: WorldParams): World {
     }
   }
 
+  stage?.('erosion');
   // --- River erosion: valleys and spurs carved into the land (erode.ts). Coasts stay put. ---
   if (params.erosion > 0) {
     const carved = erodeLand(grid, elev, null, { ...EROSION_DEFAULTS, blend: EROSION_DEFAULTS.blend * Math.min(1, params.erosion) });
     elev.set(carved);
   }
 
+  stage?.('temperature');
   // --- Temperature: latitude, altitude, a little noise ---
   const lat = new Float32Array(N);
   const temperature = new Float32Array(N);
@@ -279,6 +288,7 @@ export function generateWorld(params: WorldParams): World {
     temperature[c] = Math.max(0, Math.min(1, t));
   }
 
+  stage?.('winds');
   // --- Moisture: distance from the sea plus the wet/dry latitude bands of Earth's circulation ---
   const coastDist = new Int32Array(N).fill(-1);
   const queue: number[] = [];
@@ -337,6 +347,7 @@ export function generateWorld(params: WorldParams): World {
     moisture[c] = Math.max(0, Math.min(1, m));
   }
 
+  stage?.('currents');
   // --- Ocean currents, roughly. Subtropical gyres send cold currents along the west coasts of
   // continents, which makes coastal deserts (Atacama, Namib). At mid-latitudes the westerlies
   // blow in off a warm ocean drift and keep west coasts mild (Western Europe). Both only touch
@@ -408,6 +419,7 @@ export function generateWorld(params: WorldParams): World {
     }
   }
 
+  stage?.('rivers');
   // --- Drainage: priority-flood from the sea gives every land cell a downhill route out.
   // Cells the flood has to raise noticeably are basins, and become lakes. ---
   const filled = Float32Array.from(elev);
@@ -454,6 +466,7 @@ export function generateWorld(params: WorldParams): World {
   // Rivers wet their banks.
   for (const c of land) if (river[c]) moisture[c] = Math.min(1, moisture[c] + 0.12);
 
+  stage?.('biomes');
   // --- Biomes ---
   const biome = new Uint8Array(N);
   for (let c = 0; c < N; c++) {

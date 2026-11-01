@@ -69,6 +69,12 @@ export function kindOf(p: WorldParams): Preset | undefined {
   return PRESETS.find((x) => keys.every((k) => Math.abs(p[k] - (x.p[k] ?? DEFAULT_PARAMS[k])) < 1e-6));
 }
 
+/** "Earthlike world", "Desert world", "Custom world"... */
+export function kindLabel(p: WorldParams): string {
+  const k = kindOf(p);
+  return !k ? 'Custom world' : /world$/i.test(k.label) ? k.label : `${k.label} world`;
+}
+
 /** Four plain-language dials, each 0..1, mapped onto the raw parameters. */
 const DIALS = [
   {
@@ -169,9 +175,9 @@ export function mountShell(app: App) {
 
   // --- Name ---
   const showName = () => {
-    const name = app.name(), kind = kindOf(app.params());
+    const name = app.name();
     $('pname').textContent = name;
-    $('pseed').textContent = !kind ? 'Custom world' : /world$/i.test(kind.label) ? kind.label : `${kind.label} world`;
+    $('pseed').textContent = kindLabel(app.params());
     document.title = `${name} · Mundi`;
   };
 

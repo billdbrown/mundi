@@ -2,7 +2,7 @@
  * Background thread: generates worlds, builds their meshes and paints clouds, so the page never
  * freezes. Keeps the last world, so a view-only change (style, mode, relief) skips generation.
  */
-import { generateWorld, type World, type WorldParams } from './world.ts';
+import { generateWorld, type GenStep, type World, type WorldParams } from './world.ts';
 import { buildSurfaceData, surfaceTransfer, type BuildOptions, type SurfaceData } from './surface.ts';
 import { cloudPixels, type CloudPixels } from './clouds.ts';
 
@@ -15,6 +15,8 @@ export interface BuildResult {
   clouds: CloudPixels | null;
   timings: { gen: number; mesh: number; clouds: number };
 }
+/** Sent as work starts on each step, for the loading screen. */
+export interface BuildStage { id: number; stage: GenStep | 'mesh' | 'clouds' }
 
 let last: World | null = null;
 let lastKey = '';
@@ -24,10 +26,13 @@ self.onmessage = (e: MessageEvent<BuildRequest>) => {
   const t0 = performance.now();
   const key = JSON.stringify(params);
   let fresh = false;
-  if (key !== lastKey || !last) { last = generateWorld(params); lastKey = key; fresh = true; }
+  const stage = (s: BuildStage['stage']) => (self as unknown as Worker).postMessage({ id, stage: s } satisfies BuildStage);
+  if (key !== lastKey || !last) { last = generateWorld(params, stage); lastKey = key; fresh = true; }
   const t1 = performance.now();
+  stage('mesh');
   const surface = buildSurfaceData(last, opts);
   const t2 = performance.now();
+  if (e.data.clouds) stage('clouds');
   const clouds = e.data.clouds ? cloudPixels(params.seed, last) : null;
   const t3 = performance.now();
   const msg: BuildResult = {

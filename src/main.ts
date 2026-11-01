@@ -2,11 +2,12 @@ import { PlanetView, DEFAULT_VIEW, REBUILD_KEYS, type ViewMode, type TerrainStyl
 import { DEFAULT_PARAMS, WATER_OCEAN, WATER_LAKE, type World, type WorldParams } from './world.ts';
 import { BIOMES } from './biomes.ts';
 import { flyTo, orbit, type Spot } from './debug.ts';
-import type { BuildRequest, BuildResult } from './worker.ts';
+import type { BuildRequest, BuildResult, BuildStage } from './worker.ts';
+import { mountLoader, type Loader } from './loader.ts';
 import type { HistoryRequest, HistoryResult } from './historyWorker.ts';
 import type { History } from './civ.ts';
 import { gameData, exportJSON, RESOURCE_NAMES, type GameData } from './gamedata.ts';
-import { kindOf, mountShell, planetName, PRESETS, type Lens } from './shell.ts';
+import { kindLabel, kindOf, mountShell, planetName, PRESETS, type Lens } from './shell.ts';
 import { nameSeed, parseSeed, randomName } from './seedname.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -57,7 +58,13 @@ function pump() {
   $('panel').classList.add('busy');
 }
 
-worker.onmessage = (e: MessageEvent<BuildResult>) => {
+/** The loading screen, until the first world is on screen. */
+let loader: Loader | null = null;
+/** Resolves once the loading screen has gone (at once if there never was one). */
+let loaderGone: Promise<void> = Promise.resolve();
+
+worker.onmessage = (e: MessageEvent<BuildResult | BuildStage>) => {
+  if ('stage' in e.data) { loader?.step(e.data.stage); return; }
   const r = e.data;
   inFlight = false;
   if (r.world) {
@@ -74,6 +81,13 @@ worker.onmessage = (e: MessageEvent<BuildResult>) => {
     writeHash();
     $('panel').classList.remove('busy');
     for (const f of drawnListeners) f();
+    if (loader) {
+      // Hold the screen through the first frame, which is when the shaders compile.
+      const l = loader;
+      loader = null;
+      l.step('light');
+      requestAnimationFrame(() => requestAnimationFrame(() => { void l.finish(); }));
+    }
     const done = waiters;
     waiters = [];
     for (const f of done) f();
@@ -320,7 +334,8 @@ view.renderer.domElement.addEventListener('pointerleave', () => { info.hidden = 
     return request();
   },
   /** Resolves once the current request (if any) has been drawn. */
-  ready: (): Promise<void> => (inFlight || queued ? new Promise((r) => waiters.push(r)) : Promise.resolve()),
+  ready: (): Promise<void> => (inFlight || queued ? new Promise<void>((r) => waiters.push(r)) : Promise.resolve())
+    .then(() => loaderGone),
 };
 
 readHash();
@@ -345,6 +360,8 @@ const shell = mountShell({
 });
 shell.applyLens(lens, false);
 view.setOptions(viewOpts);
+loader = mountLoader(displayName(), kindLabel(params));
+loaderGone = loader.gone;
 request();
 
 // A link pasted into an open tab only changes the hash, which doesn't reload the page. (Our own
