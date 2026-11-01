@@ -32,6 +32,9 @@ const KINDS = 7;
 const STRIDE = 9;
 const MAX_INSTANCES = 320000;
 
+/** A cell's plants as instance data, by kind: count, matrices (16 each), colours (3), clearing year. */
+interface Baked { n: Int32Array; mat: Float32Array[]; col: Float32Array[]; cut: Float32Array[] }
+
 export class LodFlora {
   private group = new THREE.Group();
   private meshes: (THREE.InstancedMesh | null)[] = new Array(KINDS).fill(null);
@@ -41,6 +44,8 @@ export class LodFlora {
   private triStart = new Int32Array(0);
   private triCount = new Int32Array(0);
   private cache = new Map<number, Float32Array>();
+  /** Per cell, its plants ready to copy into the instance buffers (see bake). */
+  private baked = new Map<number, Baked>();
   private clump?: Noise3;
   private lastCenter = 0;
   private lastKey = '';
@@ -53,12 +58,14 @@ export class LodFlora {
   setWater(f: ((x: number, y: number, z: number, cell: number) => boolean) | null) {
     this.inWater = f;
     this.cache.clear();
+    this.baked.clear();
     this.lastKey = '';
   }
 
   setClearing(f: ((x: number, y: number, z: number, cell: number) => number) | null) {
     this.clearing = f;
     this.cache.clear();
+    this.baked.clear();
     this.lastKey = '';
   }
 
@@ -80,6 +87,7 @@ export class LodFlora {
       this.triCount[c]++;
     });
     this.cache.clear();
+    this.baked.clear();
     this.clump = makeSimplex(world.params.seed * 5 + 17);
     this.lastKey = '';
   }
@@ -115,15 +123,12 @@ export class LodFlora {
         if (!seen.has(n) && dot(n) > cosR) { seen.add(n); cells.push(n); }
       }
     }
-    const parts = cells.map((c) => this.cell(c));
+    const parts = cells.map((c) => this.bake(c));
     const counts = new Array(KINDS).fill(0);
-    for (const a of parts) for (let i = 0; i < a.length; i += STRIDE) counts[a[i + 6]]++;
+    for (const b of parts) for (let k = 0; k < KINDS; k++) counts[k] += b.n[k];
     const total = counts.reduce((s, n) => s + n, 0);
     const keep = total > MAX_INSTANCES ? MAX_INSTANCES / total : 1;
 
-    const up = new THREE.Vector3(0, 1, 0), n = new THREE.Vector3(), q = new THREE.Quaternion(), spin = new THREE.Quaternion();
-    const m = new THREE.Matrix4(), p = new THREE.Vector3(), sc = new THREE.Vector3(), color = new THREE.Color();
-    const fill = new Array(KINDS).fill(0);
     for (let k = 0; k < KINDS; k++) {
       const need = Math.ceil(counts[k] * keep);
       let mesh = this.meshes[k];
@@ -134,39 +139,81 @@ export class LodFlora {
         const geo = treeGeometry(k).clone();
         geo.setAttribute('cut', new THREE.InstancedBufferAttribute(new Float32Array(cap), 1));
         mesh = new THREE.InstancedMesh(geo, treeMaterial, cap);
+        mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
         mesh.frustumCulled = false;
         this.meshes[k] = mesh;
         this.group.add(mesh);
       }
     }
-    let skip = 0;
-    for (const a of parts) {
-      for (let i = 0; i < a.length; i += STRIDE) {
-        if (keep < 1 && (skip++ % 1000) / 1000 >= keep) continue;
-        const k = a[i + 6], mesh = this.meshes[k]!, j = fill[k]++;
-        if (j >= mesh.instanceMatrix.count) continue;
-        const s = a[i + 3];
-        n.set(a[i], a[i + 1], a[i + 2]).normalize();
-        q.setFromUnitVectors(up, n);
-        spin.setFromAxisAngle(n, a[i + 4]);
-        q.premultiply(spin);
-        p.set(a[i], a[i + 1], a[i + 2]).addScaledVector(n, -0.05 * s);
-        sc.setScalar(s);
-        m.compose(p, q, sc);
-        mesh.setMatrixAt(j, m);
-        color.setHex(a[i + 7]).multiplyScalar(a[i + 5]);
-        mesh.setColorAt(j, color);
-        (mesh.geometry.getAttribute('cut') as THREE.InstancedBufferAttribute).setX(j, a[i + 8]);
+    // Copy each cell's ready-made blocks; when over budget, every cell gives up the same share
+    // (its plants are in random order, so taking the first ones thins evenly).
+    const fill = new Array(KINDS).fill(0);
+    for (const b of parts) {
+      for (let k = 0; k < KINDS; k++) {
+        const mesh = this.meshes[k]!, cap = mesh.instanceMatrix.count;
+        const take = Math.min(keep < 1 ? Math.round(b.n[k] * keep) : b.n[k], cap - fill[k]);
+        if (take <= 0) continue;
+        const j = fill[k];
+        (mesh.instanceMatrix.array as Float32Array).set(b.mat[k].subarray(0, take * 16), j * 16);
+        (mesh.instanceColor!.array as Float32Array).set(b.col[k].subarray(0, take * 3), j * 3);
+        ((mesh.geometry.getAttribute('cut') as THREE.InstancedBufferAttribute).array as Float32Array).set(b.cut[k].subarray(0, take), j);
+        fill[k] += take;
       }
     }
+    // Upload only the part in use.
     this.meshes.forEach((mesh, k) => {
       if (!mesh) return;
       mesh.count = Math.min(fill[k], mesh.instanceMatrix.count);
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-      mesh.geometry.getAttribute('cut').needsUpdate = true;
+      const attrs: [THREE.BufferAttribute, number][] = [[mesh.instanceMatrix, 16], [mesh.instanceColor!, 3], [mesh.geometry.getAttribute('cut') as THREE.BufferAttribute, 1]];
+      for (const [a, size] of attrs) {
+        a.clearUpdateRanges();
+        a.addUpdateRange(0, Math.max(1, mesh.count) * size);
+        a.needsUpdate = true;
+      }
     });
   }
+
+  /**
+   * One cell's plants as instance data, worked out once: a matrix, colour and clearing year
+   * per plant, grouped by kind. Composing every plant's matrix on each rebuild (whenever the
+   * cell under the camera changed) stalled the page for tens of milliseconds while moving.
+   */
+  private bake(c: number): Baked {
+    const hit = this.baked.get(c);
+    if (hit) return hit;
+    const a = this.cell(c);
+    const n = new Int32Array(KINDS);
+    for (let i = 0; i < a.length; i += STRIDE) n[a[i + 6]]++;
+    const b: Baked = {
+      n,
+      mat: Array.from(n, (m) => new Float32Array(m * 16)),
+      col: Array.from(n, (m) => new Float32Array(m * 3)),
+      cut: Array.from(n, (m) => new Float32Array(m)),
+    };
+    const fill = new Int32Array(KINDS);
+    const { up, n: nn, q, spin, m, p, sc, color } = this.tmp;
+    for (let i = 0; i < a.length; i += STRIDE) {
+      const k = a[i + 6], j = fill[k]++;
+      const s = a[i + 3];
+      nn.set(a[i], a[i + 1], a[i + 2]).normalize();
+      q.setFromUnitVectors(up, nn);
+      spin.setFromAxisAngle(nn, a[i + 4]);
+      q.premultiply(spin);
+      p.set(a[i], a[i + 1], a[i + 2]).addScaledVector(nn, -0.05 * s);
+      sc.setScalar(s);
+      m.compose(p, q, sc);
+      m.toArray(b.mat[k], j * 16);
+      color.setHex(a[i + 7]).multiplyScalar(a[i + 5]);
+      color.toArray(b.col[k], j * 3);
+      b.cut[k][j] = a[i + 8];
+    }
+    this.baked.set(c, b);
+    return b;
+  }
+  private tmp = {
+    up: new THREE.Vector3(0, 1, 0), n: new THREE.Vector3(), q: new THREE.Quaternion(), spin: new THREE.Quaternion(),
+    m: new THREE.Matrix4(), p: new THREE.Vector3(), sc: new THREE.Vector3(), color: new THREE.Color(),
+  };
 
   /** One cell's plants, generated once from the cell's own seed. */
   private cell(c: number): Float32Array {

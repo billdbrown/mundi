@@ -252,14 +252,14 @@ function vertexTemp(y: number, e: number, heat: number): number {
 const ALPINE = new THREE.Color(0x6e6858);
 const LAKEBED = new THREE.Color(0x2c3a30);
 const SEABED_SAND = new THREE.Color(0x8a8064), SEABED_DEEP = new THREE.Color(0x26323a);
-const SNOW = new THREE.Color(0xf2f5f8), ROCK = new THREE.Color(0x776b5f), SAND = new THREE.Color(0xd9c89b);
+const SNOW = new THREE.Color(0xf2f5f8), ROCK = new THREE.Color(0x776b5f);
 
 /**
  * Per-vertex detail the cell biomes are too coarse for: snow where it is cold enough at that
  * height (so snow lines follow the terrain, not cell edges), bare rock on steep slopes, and
  * sand in a thin strip at the waterline.
  */
-function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number, noise: Noise3, lakeSide: number[]) {
+function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number, noise: Noise3) {
   const pos = geo.getAttribute('position'), nor = geo.getAttribute('normal'), col = geo.getAttribute('color');
   const mix = (i: number, c: THREE.Color, t: number) => {
     if (t <= 0) return;
@@ -276,10 +276,8 @@ function naturalShading(geo: THREE.BufferGeometry, relief: number, heat: number,
     const e = above / relief;
     const up = (nor.getX(i) * x + nor.getY(i) * y + nor.getZ(i) * z) / l;
     const slope = 1 - up;                         // 0 flat, ~0.3 steep
-    // Beach sand at the sea's edge only (lowland lakes sit near sea level too).
-    // Thin and partial: from orbit a full-strength strip outlined every continent in yellow.
-    // (Low coastal cells sit only ~0.0012 above the sea, so a wider band painted whole cells.)
-    if (!lakeSide[i]) mix(i, SAND, sm(0.0005, 0.0001, above) * sm(0.25, 0.4, vertexTemp(y / l, e, heat)) * 0.7);
+    // (Beach sand is drawn per pixel in the terrain shader: per vertex, at two mesh steps a
+    // cell, it spread into hexagon-sized beads along every coast.)
     mix(i, ROCK, sm(0.04, 0.12, slope) * 0.6);
     // Altitude zones: vegetation thins to bare rock and alpine scrub above the tree line, so
     // mountains step through rock before snow instead of snow sitting on desert sand.
@@ -452,7 +450,6 @@ function buildSmooth(inp: SurfaceInput): Surface {
       h += near * 0.0011 * (tint(dx * lf + 3.3, dy * lf, dz * lf) + 0.45 * tint(dx * lf * 2.7, dy * lf * 2.7 + 8.1, dz * lf * 2.7));
     }
     pos.push(dx * h, dy * h, dz * h);
-    lakeSide.push(lake ? 1 : 0);
     if (inp.blend) {
       colourAt(dx, dy, dz, blendRGB); r = blendRGB[0]; gg = blendRGB[1]; b = blendRGB[2];
       clim.push(blendRGB[3], blendRGB[4]);
@@ -462,7 +459,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
     // Sea floor colour by depth, not by cell: sand in the shallowest water, dark mud beyond
     // (per-cell "shallows" colour drew a tan hexagon ring round every coast).
     if (inp.natural && w.water[owner] === WATER_OCEAN && w.biome[owner] !== B.SEA_ICE) {
-      const k = Math.max(0, Math.min(1, (lvl - h - 0.0002) / 0.0015));
+      const k = Math.max(0, Math.min(1, (lvl - h - 0.0001) / 0.0008));
       r = SEABED_SAND.r + (SEABED_DEEP.r - SEABED_SAND.r) * k;
       gg = SEABED_SAND.g + (SEABED_DEEP.g - SEABED_SAND.g) * k;
       b = SEABED_SAND.b + (SEABED_DEEP.b - SEABED_SAND.b) * k;
@@ -484,7 +481,6 @@ function buildSmooth(inp: SurfaceInput): Surface {
     depth.push(lake && dd > 0 ? dd + 0.01 * Math.min(1, dd / 0.0007) : dd);
     return i;
   };
-  const lakeSide: number[] = [];
   const lf = 2.2 / spacing;
   // Each fan triangle (cell centre + two corners) becomes a k×k triangular grid. k is picked so
   // the planet stays near a fixed triangle budget: finer on small worlds, coarser on big ones.
@@ -697,7 +693,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
   terrain.setIndex(index);
   terrain.computeVertexNormals();
   if (inp.natural) {
-    naturalShading(terrain, relief, w.params.heat, tint, lakeSide);
+    naturalShading(terrain, relief, w.params.heat, tint);
     // No trees on snow.
     for (let i = trees.length - 1; i >= 0; i--) {
       const t = trees[i], l = Math.hypot(t.x, t.y, t.z);

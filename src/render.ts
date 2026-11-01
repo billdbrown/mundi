@@ -635,7 +635,38 @@ export class PlanetView {
     this.camera.updateProjectionMatrix();
   }
 
+  /**
+   * Resolution follows the frame rate. A Retina screen has four times the pixels of a plain one,
+   * and the terrain shader is heavy close in; when frames run slow the render resolution steps
+   * down (to 1x at worst), and creeps back up when there is room. Raising waits longer than
+   * lowering, and a raise that has to be undone soon after lowers the ceiling for a while, so it
+   * settles instead of see-sawing. Off while frozen (tests and captures stay repeatable).
+   */
+  private res = { max: Math.min(devicePixelRatio, 2), ratio: Math.min(devicePixelRatio, 2), ceil: Math.min(devicePixelRatio, 2), ema: 16, last: 0, slow: 0, fast: 0, raisedAt: -1e9, ceilAt: -1e9 };
+  private adaptResolution() {
+    const r = this.res, now = performance.now(), dt = now - r.last;
+    r.last = now;
+    if (this.frozen !== null || dt <= 0 || dt > 250) { r.slow = r.fast = 0; return; }
+    r.ema += (dt - r.ema) * 0.1;
+    if (now - r.ceilAt > 30000) r.ceil = r.max;
+    r.slow = r.ema > 24 ? r.slow + dt : 0;
+    r.fast = r.ema < 18 ? r.fast + dt : 0;
+    let next = r.ratio;
+    if (r.slow > 800 && r.ratio > 1) {
+      next = Math.max(1, r.ratio - 0.25);
+      if (now - r.raisedAt < 4000) { r.ceil = next; r.ceilAt = now; }
+    } else if (r.fast > 3000 && r.ratio < r.ceil) {
+      next = Math.min(r.ceil, r.ratio + 0.25);
+      r.raisedAt = now;
+    }
+    if (next === r.ratio) return;
+    r.ratio = next; r.slow = r.fast = 0; r.ema = 16;
+    this.renderer.setPixelRatio(next);
+    this.composer?.setPixelRatio(next);
+  }
+
   private frame() {
+    this.adaptResolution();
     const dt = this.frozen === null ? this.clock.getDelta() : 0;
     this.time = this.frozen ?? this.time + dt;
     this.day += dt * this.clockRate;

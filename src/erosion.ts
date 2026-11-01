@@ -48,22 +48,21 @@ export const EROSION_GLSL = /* glsl */`
     return atan(S.y, S.x);
   }
   /**
-   * Hills for the gullies to carve where the mesh is nearly flat: rolling ground 60-120 km
-   * across, strong on uplands, patchy in lowlands (some plains stay plains). Returns the height
-   * gradient (tangent, uphill). hilly: 0..1 from height above the sea.
-   */
-  /**
    * Valleys as connected lines (the zero set of a noise, |n|), not the pits of a noise: water
    * leaves every hollow on real land, and pits drew starbursts of gullies draining into them.
-   * Warped so the valleys wind.
+   * q is the point already warped (so the valleys wind); p unwarped.
    */
-  float eroHills(vec3 p) {
-    vec3 q = p + 0.004 * vec3(snoise(p * 60.0 + 11.0), snoise(p * 60.0 + 23.0), snoise(p * 60.0 + 37.0));
+  float eroHills(vec3 q, vec3 p) {
     // Rounded floors (a hard |n| crease read as folded cloth); one scale only, the gully
     // octaves add the rest.
     float n = snoise(q * 50.0);
     return sqrt(n * n + 0.03) + 0.3 * snoise(p * 25.0 + 3.0);
   }
+  /**
+   * Hills for the gullies to carve where the mesh is nearly flat: rolling ground 60-120 km
+   * across, strong on uplands, patchy in lowlands (some plains stay plains). Returns the height
+   * gradient (tangent, uphill). hilly: 0..1 from height above the sea.
+   */
   vec3 hillGrad(vec3 p, vec3 up, float hilly) {
     // Where hills are at all: broad regions, so lowlands mix plains and hill country.
     float region = smoothstep(-0.3, 0.4, snoise(p * 9.0 + 41.0) + 0.6 * hilly);
@@ -72,7 +71,9 @@ export const EROSION_GLSL = /* glsl */`
     vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
     vec3 t2 = cross(up, t1);
     const float E = 0.0006;
-    float h0 = eroHills(p), h1 = eroHills(p + t1 * E), h2 = eroHills(p + t2 * E);
+    // The warp is broad next to E, so the three samples share it: 9 noise lookups, not 15.
+    vec3 w = 0.004 * vec3(snoise(p * 60.0 + 11.0), snoise(p * 60.0 + 23.0), snoise(p * 60.0 + 37.0));
+    float h0 = eroHills(p + w, p), h1 = eroHills(p + t1 * E + w, p + t1 * E), h2 = eroHills(p + t2 * E + w, p + t2 * E);
     // Scaled to slopes of about 0.3.
     return (t1 * (h1 - h0) + t2 * (h2 - h0)) / E * 0.00045 * a;
   }

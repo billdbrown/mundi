@@ -175,14 +175,30 @@ export function generateWorld(params: WorldParams): World {
     if (isEdge) { boundary[c] = best; sources.push(c); }
   }
 
-  // Spread each boundary's effect inland with a falloff (multi-source BFS).
+  // Smooth the effect along each side of the boundary. Where plates slide past each other the
+  // convergence flips sign from one cell to the next (it is measured toward each neighbour), and
+  // spread inland those flips became parallel streaks of ridge and rift.
+  const isSource = new Uint8Array(N);
+  for (const s of sources) isSource[s] = 1;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = Float32Array.from(boundary);
+    for (const c of sources) {
+      let sum = boundary[c] * 2, n = 2;
+      for (const nb of nbrs[c]) if (isSource[nb] && plate[nb] === plate[c]) { sum += boundary[nb]; n++; }
+      next[c] = sum / n;
+    }
+    boundary.set(next);
+  }
+
+  // Spread each boundary's effect inland with a falloff (multi-source BFS), within its own plate
+  // only: crossing over, the diving plate's trench reached into the continent beside it.
   const dist = new Int32Array(N).fill(-1);
   const src = new Int32Array(N).fill(-1);
   for (const s of sources) { dist[s] = 0; src[s] = s; }
   for (let qi = 0; qi < sources.length; qi++) {
     const c = sources[qi];
     for (const nb of nbrs[c]) {
-      if (dist[nb] < 0) { dist[nb] = dist[c] + 1; src[nb] = src[c]; sources.push(nb); }
+      if (dist[nb] < 0 && plate[nb] === plate[c]) { dist[nb] = dist[c] + 1; src[nb] = src[c]; sources.push(nb); }
     }
   }
   const width = Math.max(1.5, detail / 11);

@@ -341,7 +341,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
         // eroH says how deep in a gully this is; eroGrad bends the normal (below).
         float eroH = 0.0, eroK = 0.0;
         vec3 eroGrad = vec3(0.0);
-        if (uErosion > 0.0 && hAbove > 0.0004 && camDist < 0.3) {
+        if (uErosion > 0.0 && hAbove > 0.0001 && camDist < 0.22 && iceK < 0.99) {
           #ifdef MERCATOR
             vec3 wN = normalize(normalize(vNormal) * mercFrame(vCloudP));
           #else
@@ -350,7 +350,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
           vec3 up = normalize(vCloudP);
           // From high up the gullies read as hatching: they fade out, the orbit-scale relief
           // (landNoise) takes over.
-          float eroFar = 1.0 - smoothstep(0.1, 0.3, camDist);
+          float eroFar = 1.0 - smoothstep(0.08, 0.22, camDist);
           float cz = max(dot(wN, up), 0.3);
           vec3 macro = -(wN - up * dot(wN, up)) / cz;
           // Sand seas are flat between their dunes; rocky desert keeps a few dry channels (wadis).
@@ -360,17 +360,22 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
             float sandE = 0.0;
           #endif
           eroFar *= 1.0 - 0.85 * sandE;
-          // The mesh is nearly flat between ranges: rolling hills (shaded too) give the water
-          // something to carve.
-          vec3 hg = hillGrad(vCloudP, up, smoothstep(0.02, 0.3, hAbove / uRelief)) * (1.0 - iceK);
-          macro += hg;
-          // Strength follows the slope smoothly: flats stay flat, and no hard edge where it starts.
-          eroK = smoothstep(0.0, 0.07, length(macro)) * (1.0 - iceK) * uErosion * eroFar;
-          eroGrad = hg * uErosion * eroFar;
-          if (eroK > 0.0) {
-            vec4 er = erosion(vCloudP, up, macro, foot);
-            eroH = er.x;
-            eroGrad += er.yzw * eroK;
+          // Comes in over the first stretch above the shore rather than at a contour (it ended in
+          // a hard line along every coast), the line itself wavering.
+          eroFar *= smoothstep(0.0001, 0.001, hAbove + 0.0004 * snoise(vCloudP * 150.0));
+          if (eroFar >= 0.01) {
+            // The mesh is nearly flat between ranges: rolling hills (shaded too) give the water
+            // something to carve.
+            vec3 hg = hillGrad(vCloudP, up, smoothstep(0.02, 0.3, hAbove / uRelief)) * (1.0 - iceK);
+            macro += hg;
+            // Strength follows the slope smoothly: flats stay flat, and no hard edge where it starts.
+            eroK = smoothstep(0.0, 0.07, length(macro)) * (1.0 - iceK) * uErosion * eroFar;
+            eroGrad = hg * uErosion * eroFar;
+            if (eroK > 0.0) {
+              vec4 er = erosion(vCloudP, up, macro, foot);
+              eroH = er.x;
+              eroGrad += er.yzw * eroK;
+            }
           }
         }
         #ifdef USE_CLIMATE
@@ -463,6 +468,15 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false): THREE.Me
               float pond = smoothstep(0.82, 0.86, snoise01(vCloudP * 3000.0)) * smoothstep(0.25, 0.5, moist);
               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.06, 0.1, 0.14), pond * k * 0.8);
             }
+          }
+        #endif
+        // Beach: a thin, wavering strip of sand right at the sea's edge, in all but cold climates.
+        // Thin and partial: from orbit a full-strength strip outlined every continent in yellow.
+        #ifdef USE_CLIMATE
+          if (hAbove > -0.0004 && hAbove < 0.0006) {
+            float bk = 1.0 - smoothstep(0.00005, 0.00035, hAbove + 0.00012 * snoise(vCloudP * 300.0));
+            bk *= smoothstep(0.25, 0.4, vClim.y) * 0.7;
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.69, 0.58, 0.33), bk);
           }
         #endif
         // Water gathers in the gullies: their floors are greener and darker, the spurs between
@@ -812,7 +826,9 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         #endif
         col = mix(col, vec3(0.94, 0.97, 0.98) * shade * mix(0.06, 1.0, day), foam * 0.8);
 
-        float a = mix(0.5, 0.95, smoothstep(0.0, 0.35, d));
+        // Shallow water clears only near the shore: with ~60 km mesh steps, depth reaches deep
+        // water across one long triangle, and a wide see-through band read as a flat sandy shelf.
+        float a = mix(0.62, 0.95, smoothstep(0.0, 0.18, d));
         #ifndef USE_FADE
           if (uSeason != 0.0) {
             float mt = meanTemp(Ng, 0.0), st = seasonalTemp(Ng, mt);
