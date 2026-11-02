@@ -1057,6 +1057,19 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
           shallow = mix(mix(uMid, vec3(0.16, 0.33, 0.38), 0.6), uShallow, warmSea);
         #endif
         vec3 col = d < 0.12 ? mix(shallow, uMid, smoothstep(0.0, 0.12, d)) : mix(uMid, uDeep, smoothstep(0.12, 0.6, d));
+        #ifndef USE_FADE
+          // Shallow seas (Maritorena, Morel & Gentili 1994): the floor shows through, dimmed by
+          // the water over it, R = Rdeep (1 - e^-2Kz) + floor e^-2Kz. Red is absorbed within a few
+          // metres and blue lasts longest, so shallows run sand, turquoise, blue. Warm seas are
+          // clear over pale sand; cold ones greener and murkier over darker floors. (Depth on an
+          // exaggerated scale: the mesh's ~0.001 radians of shelf is "metres" of water.)
+          float zm = vDepth / 0.0008 * 12.0;
+          vec3 Kd = mix(vec3(0.55, 0.13, 0.14), vec3(0.42, 0.065, 0.035), warmSea);
+          vec3 floorA = mix(vec3(0.2, 0.23, 0.19), vec3(0.78, 0.7, 0.52), warmSea) * 0.55;
+          vec3 Rdeep = mix(uMid * 0.55, uDeep, smoothstep(0.002, 0.01, vDepth));
+          vec3 att = exp(-2.0 * Kd * zm);
+          col = Rdeep * (1.0 - att) + floorA * att;
+        #endif
         // Light passing through wave crests in shallow water.
         col += shallow * (h0 - 0.5) * 0.25 * near * (1.0 - d);
 
@@ -1064,11 +1077,17 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         col = mix(col, uSky, 0.02 + fres * 0.45);
         float diff = 0.55 + 0.45 * max(dot(N, uSunDir), 0.0);
         vec3 R = reflect(-uSunDir, N);
-        // Glint: broad and soft from orbit, tight and bright up close.
-        // Glint: from orbit a broad, dim, silvery patch (the sea is rough at that scale), up close
-        // a tight bright highlight.
-        float shine = mix(40.0, 380.0, near);
-        float spec = pow(max(dot(R, V), 0.0), shine) * mix(0.15, 2.2, near);
+        // The sun's glitter (Cox & Munk 1954): wave facets' slopes are spread normally, with a
+        // variance that grows with the wind, and each facet tilted to mirror the sun sends it to
+        // the eye. Waves too small to be drawn at this distance aren't lost (Bruneton, Neyret &
+        // Holzschuch 2010): their slopes widen the spread instead, so from orbit the glitter is
+        // a broad, soft patch and up close a tight bright highlight on the drawn waves.
+        float sig2 = 0.006 + 0.03 * (1.0 - near);
+        vec3 Hh = normalize(uSunDir + V);
+        float cb = max(dot(N, Hh), 1e-3), cb2 = cb * cb;
+        float slopes = exp(-(1.0 - cb2) / (cb2 * sig2)) / (3.14159 * sig2);
+        float Fr = 0.02 + 0.98 * pow(1.0 - max(dot(V, Hh), 0.0), 5.0);
+        float spec = 5.0 * Fr * slopes / (4.0 * max(dot(N, V), 0.08) * cb2 * cb2) * step(0.0, dot(N, uSunDir));
         #ifdef USE_FADE
           spec *= 0.12;   // rivers: sparkle on a thin channel reads as whitewater
         #endif
@@ -1122,6 +1141,20 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
               plume *= smoothstep(-0.2, 0.4, swirl + plume - 0.3);
               col = mix(col, vec3(0.44, 0.37, 0.2) * shade * mix(0.06, 1.0, day), plume * 0.65);
             }
+          }
+        #endif
+        // Whitecaps where the wind is up (Monahan & O'Muircheartaigh 1980: the share of sea
+        // covered grows as wind speed to the 3.4, ~0.1% at 6 m/s, ~3% at 14): white flecks up
+        // close, a faint brightening from afar. Wind from drifting broad noise.
+        #if !defined(USE_FADE) && !defined(MERCATOR)
+          {
+            float windN = snoise01(vWorld * 5.0 + vec3(t * 0.004, 0.0, -t * 0.003)) * 0.7 + snoise01(vWorld * 17.0 - vec3(t * 0.006)) * 0.3;
+            float U = 3.0 + 13.0 * smoothstep(0.35, 0.95, windN);
+            float W = 3.84e-6 * pow(U, 3.41);
+            float fleck = snoise01(vWorld * 2600.0 + vec3(t * 0.08, 0.0, t * 0.05)) * 0.7 + snoise01(vWorld * 7000.0 - vec3(t * 0.12)) * 0.3;
+            float cap = smoothstep(1.0 - W * 9.0, 1.0 - W * 6.0, fleck) * near * smoothstep(0.004, 0.012, vDepth);
+            foam = max(foam, cap * 0.9);
+            col += vec3(0.85) * W * 0.6 * (1.0 - near) * shade * day;
           }
         #endif
         #ifdef USE_FADE
