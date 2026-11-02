@@ -174,6 +174,33 @@ export class LodFlora {
       added = true;
     }
     if (added) this.dirty = true;
+    // Spare time: generate ahead, where the view is heading (about 0.6 s on at the current speed
+    // over the ground), so plants are ready on arrival instead of filling in around you. Kept
+    // out of the drawn set until the view gets there.
+    const tnow = performance.now(), dtv = Math.max(1, tnow - this.lastT);
+    if (this.lastDir) {
+      const k = Math.min(1, dtv / 250);
+      this.vel[0] += ((dx - this.lastDir[0]) / dtv - this.vel[0]) * k;
+      this.vel[1] += ((dy - this.lastDir[1]) / dtv - this.vel[1]) * k;
+      this.vel[2] += ((dz - this.lastDir[2]) / dtv - this.vel[2]) * k;
+    }
+    this.lastDir = [dx, dy, dz]; this.lastT = tnow;
+    if (!missing && !all) {
+      const ax = dx + this.vel[0] * 600, ay = dy + this.vel[1] * 600, az = dz + this.vel[2] * 600;
+      const al = Math.hypot(ax, ay, az), ahead = Math.acos(Math.min(1, (ax * dx + ay * dy + az * dz) / al));
+      if (ahead > radius * 0.15) {
+        const px = ax / al, py = ay / al, pz = az / al;
+        let pc = cur;
+        const pdot = (c: number) => P[c * 3] * px + P[c * 3 + 1] * py + P[c * 3 + 2] * pz;
+        for (;;) { let b = pc; for (const n of g.neighbors[pc]) if (pdot(n) > pdot(b)) b = n; if (b === pc) break; pc = b; }
+        const pkey = `${pc}:${Math.round(radius * 600)}`;
+        if (pkey !== this.aheadKey) { this.aheadKey = pkey; this.ahead = this.trianglesNear(pc, radius, px, py, pz); }
+        for (const t of this.ahead) {
+          if (performance.now() - t0 > BUDGET_MS) break;
+          if (!this.baked.has(t)) this.baked.set(t, this.bake(t));
+        }
+      }
+    }
     // Rebuild the instance buffers when the set changed; while plants are still coming in, at
     // most a few times a second (each rebuild copies every plant).
     const now = performance.now();
@@ -184,8 +211,14 @@ export class LodFlora {
     }
   }
 
-  /** The triangles within the radius, nearest first; forget baked ones well outside it. */
-  private selectTriangles(cur: number, radius: number, dx: number, dy: number, dz: number) {
+  private lastDir: number[] | null = null;
+  private lastT = 0;
+  private vel = [0, 0, 0];
+  private ahead: number[] = [];
+  private aheadKey = '';
+
+  /** The triangles within the radius of direction d (cell cur under it), nearest first. */
+  private trianglesNear(cur: number, radius: number, dx: number, dy: number, dz: number): number[] {
     const g = this.world!.grid, P = g.centers, C = this.centroid;
     const cellReach = Math.cos(Math.min(Math.PI, radius + 1.2 * Math.sqrt((4 * Math.PI) / g.count)));
     const dot = (c: number) => P[c * 3] * dx + P[c * 3 + 1] * dy + P[c * 3 + 2] * dz;
@@ -203,12 +236,19 @@ export class LodFlora {
       }
     }
     list.sort((a, b) => b[1] - a[1]);
-    this.wanted = list.map(([t]) => t);
+    return list.map(([t]) => t);
+  }
+
+  /** The triangles to draw now; forget baked ones well outside the radius. */
+  private selectTriangles(cur: number, radius: number, dx: number, dy: number, dz: number) {
+    const C = this.centroid;
+    this.wanted = this.trianglesNear(cur, radius, dx, dy, dz);
     this.dirty = true;
     // Memory: drop triangles far outside the radius.
     const cosKeep = Math.cos(Math.min(Math.PI, radius * 2.5 + 0.01));
+    const keepAhead = new Set(this.ahead);
     for (const t of this.baked.keys()) {
-      if (C[t * 3] * dx + C[t * 3 + 1] * dy + C[t * 3 + 2] * dz < cosKeep) this.baked.delete(t);
+      if (C[t * 3] * dx + C[t * 3 + 1] * dy + C[t * 3 + 2] * dz < cosKeep && !keepAhead.has(t)) this.baked.delete(t);
     }
   }
 
