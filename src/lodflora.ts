@@ -12,6 +12,7 @@
  * forests stay closed, and the radius shrinks with it, so about as many are drawn at any scale.
  */
 import * as THREE from 'three';
+import { baseOf } from './ecology.ts';
 import { B, landBiome } from './biomes.ts';
 import { WATER_LAND, WATER_OCEAN, type World } from './world.ts';
 import type { SurfaceData } from './surface.ts';
@@ -383,12 +384,12 @@ export class LodFlora {
       let spec: Spec | undefined = mountain
         ? [...(table[b] ?? []).map(([k, col, d, sz]): Spec[number] => [k, col, d * 0.6, sz]), ...(FLORA[B.MOUNTAIN] ?? []).filter(([k]) => k === ROCK)]
         : table[b];
-      if (spec && OPEN.has(b)) {
+      if (spec && OPEN.has(baseOf(b))) {
         // Forest edges thin out instead of stopping: trees of a neighbouring forest stray into
         // open country next to it.
-        const fn = g.neighbors[c].find((n) => FOREST.has(w.biome[n]) && w.water[n] === WATER_LAND);
+        const fn = g.neighbors[c].find((n) => FOREST.has(baseOf(w.biome[n])) && w.water[n] === WATER_LAND);
         if (fn !== undefined) {
-          const [k, col] = (FLORA[w.biome[fn]] ?? [])[0] ?? [];
+          const [k, col] = (FLORA[baseOf(w.biome[fn])] ?? [])[0] ?? [];
           if (k !== undefined) spec = [...spec, [k, col, 2.5]];
         }
       }
@@ -397,7 +398,7 @@ export class LodFlora {
         const cn = 0.5 + 0.5 * clump(P[c * 3] * f, P[c * 3 + 1] * f, P[c * 3 + 2] * f);
         // Forest and open country take their shape from the grove pattern (shared with the ground
         // shader's canopy); elsewhere the old cell-scale clumping still varies density.
-        const forest = FOREST.has(b), open = OPEN.has(b);
+        const forest = FOREST.has(baseOf(b)), open = OPEN.has(baseOf(b));
         const groves = forest ? 3.2 : open ? 2.6 : Math.max(0.05, 1.9 * cn * cn);
         const gf = groveFreq(g.count);
         const riverThin = w.river[c] ? 0.85 : 1;   // the channel itself is kept clear (inWater)
@@ -436,7 +437,7 @@ export class LodFlora {
       }
       // Along rivers through dry country, a dense band of trees: date palms in hot desert,
       // poplar and willow elsewhere. Thick at the bank, thinning outward.
-      const dryHere = DRY.has(b) || (mountain && w.moisture[c] < 0.35);
+      const dryHere = DRY.has(baseOf(b)) || (mountain && w.moisture[c] < 0.35);
       if (dryHere && this.riverDist && this.riverNear?.(c)) {
         const hot = w.temperature[c] > 0.62 && w.moisture[c] < 0.2;
         const kind = hot ? PALM : BROADLEAF, col = hot ? 0x4c7d2c : 0x3f6b2a;

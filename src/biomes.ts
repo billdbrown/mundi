@@ -5,6 +5,12 @@ export const B = {
   ICE: 5, TUNDRA: 6, TAIGA: 7, STEPPE: 8, GRASSLAND: 9,
   FOREST: 10, TEMPERATE_RAIN: 11, DESERT: 12, SAVANNA: 13, DRY_FOREST: 14,
   RAINFOREST: 15, BEACH: 16, MOUNTAIN: 17, PEAK: 18,
+  // Finer biomes (ecology.ts, the B switch).
+  SWAMP: 19, MARSH: 20, BOG: 21, FLOODPLAIN: 22, MANGROVE: 23, SALT_MARSH: 24,
+  SALT_FLAT: 25, COLD_DESERT: 26, BADLANDS: 27, CHAPARRAL: 28, DESERT_SCRUB: 29,
+  POLAR_DESERT: 30, ALPINE_MEADOW: 31, MONTANE_FOREST: 32, LARCH: 33, CLOUD_FOREST: 34,
+  MIXED_FOREST: 35, HEATH: 36, PRAIRIE: 37, MONSOON: 38, PALM_SAVANNA: 39,
+  REEF: 40, KELP: 41, LAGOON: 42, KARST: 43, CANYONS: 44,
 } as const;
 
 export const BIOMES: Biome[] = [
@@ -28,6 +34,32 @@ export const BIOMES: Biome[] = [
   { name: 'Mountain', color: 0x7a6c5f },
   // Rock, not white: per-vertex shading puts snow only where it is cold enough (summits, ridges).
   { name: 'Snowy peak', color: 0x857b72 },
+  { name: 'Swamp', color: 0x2f4a2e },
+  { name: 'Marsh', color: 0x5f7346 },
+  { name: 'Bog', color: 0x6a6447 },
+  { name: 'Floodplain', color: 0x5e7e3c },
+  { name: 'Mangrove', color: 0x2d4f34 },
+  { name: 'Salt marsh', color: 0x7d8758 },
+  { name: 'Salt flats', color: 0xe6e1d4 },
+  { name: 'Cold desert', color: 0xb5a586 },
+  { name: 'Badlands', color: 0xb07a5a },
+  { name: 'Chaparral', color: 0x8a8a52 },
+  { name: 'Desert scrub', color: 0xbea170 },
+  { name: 'Polar desert', color: 0x9c968a },
+  { name: 'Alpine meadow', color: 0x7f8f55 },
+  { name: 'Montane forest', color: 0x3c5636 },
+  { name: 'Larch forest', color: 0x6f7340 },
+  { name: 'Cloud forest', color: 0x2f5a3a },
+  { name: 'Mixed forest', color: 0x4a5f34 },
+  { name: 'Heath', color: 0x7a6a5c },
+  { name: 'Tallgrass prairie', color: 0x93984f },
+  { name: 'Monsoon forest', color: 0x4c6a2c },
+  { name: 'Palm savanna', color: 0x8f9a55 },
+  { name: 'Coral reef', color: 0x46b3b0 },
+  { name: 'Kelp forest', color: 0x2f5550 },
+  { name: 'Lagoon', color: 0x6cc2c0 },
+  { name: 'Karst', color: 0x557a44 },
+  { name: 'Canyonlands', color: 0xa86a48 },
 ];
 
 /**

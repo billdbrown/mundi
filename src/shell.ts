@@ -7,6 +7,7 @@
  * (A minimal variant without the almanac was tried side by side and dropped, 2026-10-31.)
  */
 import type { PlanetView, ViewOptions } from './render.ts';
+import { baseOf } from './ecology.ts';
 import type { World, WorldParams } from './world.ts';
 import { DEFAULT_PARAMS, WATER_LAKE, WATER_OCEAN } from './world.ts';
 import type { GameData } from './gamedata.ts';
@@ -465,7 +466,7 @@ export function mountShell(app: App) {
       if (w.water[c] === WATER_OCEAN) continue;
       if (w.water[c] === WATER_LAKE) { lakes++; continue; }
       land++;
-      const b = w.biome[c];
+      const b = baseOf(w.biome[c]);
       if (b === B.ICE || b === B.PEAK) ice++;
       else if (b === B.DESERT) desert++;
       else if (FOREST.has(b)) forest++;

@@ -28,24 +28,28 @@ const PATCH_MAX_DIST = 1.12;
 
 const captureVertex = /* glsl */`
   attribute vec2 climate;
+  attribute vec4 eco;
   varying vec3 vW, vN, vCol;
   varying vec2 vClim;
+  varying vec4 vEco;
   void main() {
     vec4 w = modelMatrix * vec4(position, 1.0);
     vW = w.xyz;
     vN = normalize(mat3(modelMatrix) * normal);
     vCol = color;
     vClim = climate;
+    vEco = eco;
     gl_Position = projectionMatrix * viewMatrix * w;
   }`;
-const captureFragment = (which: 'A' | 'B') => /* glsl */`
+const captureFragment = (which: 'A' | 'B' | 'C') => /* glsl */`
   uniform vec3 uE, uN;
   varying vec3 vW, vN, vCol;
   varying vec2 vClim;
+  varying vec4 vEco;
   void main() {
     ${which === 'A'
       ? 'gl_FragColor = vec4((length(vW) - 1.0) * 50.0, dot(normalize(vN), uE), dot(normalize(vN), uN), vClim.x);'
-      : 'gl_FragColor = vec4(vCol, vClim.y);'}
+      : which === 'B' ? 'gl_FragColor = vec4(vCol, vClim.y);' : 'gl_FragColor = vEco;'}
   }`;
 
 export class DunePatch {
@@ -59,6 +63,7 @@ export class DunePatch {
   private u: PatchUniforms;
   private capA: THREE.WebGLRenderTarget;
   private capB: THREE.WebGLRenderTarget;
+  private capC: THREE.WebGLRenderTarget;
   /** The baked relief, one texel per grid vertex (PatchUniforms.uBake0..2). */
   private bake: THREE.WebGLRenderTarget[];
   private bakeScene = new THREE.Scene();
@@ -72,6 +77,7 @@ export class DunePatch {
   private capMesh = new THREE.Mesh();
   private matA: THREE.ShaderMaterial;
   private matB: THREE.ShaderMaterial;
+  private matC: THREE.ShaderMaterial;
   private source: THREE.Mesh | null = null;
   private center = new THREE.Vector3(0, 0, 1);
   private dirty = true;
@@ -80,11 +86,13 @@ export class DunePatch {
     const opts = { type: THREE.HalfFloatType, format: THREE.RGBAFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true };
     this.capA = new THREE.WebGLRenderTarget(CAPTURE, CAPTURE, opts);
     this.capB = new THREE.WebGLRenderTarget(CAPTURE, CAPTURE, opts);
+    this.capC = new THREE.WebGLRenderTarget(CAPTURE, CAPTURE, opts);
     this.bake = [0, 1, 2].map(() => new THREE.WebGLRenderTarget(PATCH_N, PATCH_N, { ...opts, depthBuffer: false }));
     this.capR = new THREE.WebGLRenderTarget(CAPTURE, CAPTURE, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
     this.u = patchUniforms;
     this.u.uCapA.value = this.capA.texture;
     this.u.uCapB.value = this.capB.texture;
+    this.u.uCapC.value = this.capC.texture;
     this.u.uBake0.value = this.bake[0].texture;
     this.u.uBake1.value = this.bake[1].texture;
     this.u.uBake2.value = this.bake[2].texture;
@@ -92,6 +100,7 @@ export class DunePatch {
     const uniforms = { uE: { value: new THREE.Vector3() }, uN: { value: new THREE.Vector3() } };
     this.matA = new THREE.ShaderMaterial({ vertexShader: captureVertex, fragmentShader: captureFragment('A'), uniforms, vertexColors: true });
     this.matB = new THREE.ShaderMaterial({ vertexShader: captureVertex, fragmentShader: captureFragment('B'), uniforms, vertexColors: true });
+    this.matC = new THREE.ShaderMaterial({ vertexShader: captureVertex, fragmentShader: captureFragment('C'), uniforms, vertexColors: true });
     this.capMesh.matrixAutoUpdate = false;
     this.capMesh.frustumCulled = false;
     this.capScene.add(this.capMesh);
@@ -235,7 +244,7 @@ export class DunePatch {
 
     const prevTarget = renderer.getRenderTarget(), prevClear = renderer.getClearColor(new THREE.Color()), prevAlpha = renderer.getClearAlpha();
     renderer.setClearColor(0x000000, 0);
-    for (const [target, mat] of [[this.capA, this.matA], [this.capB, this.matB]] as const) {
+    for (const [target, mat] of [[this.capA, this.matA], [this.capB, this.matB], [this.capC, this.matC]] as const) {
       this.capMesh.material = mat;
       renderer.setRenderTarget(target);
       renderer.clear();
@@ -283,7 +292,7 @@ export class DunePatch {
   private ready = false;
 
   dispose() {
-    this.capA.dispose(); this.capB.dispose(); this.capR.dispose();
+    this.capA.dispose(); this.capB.dispose(); this.capC.dispose(); this.capR.dispose();
     for (const t of this.bake) t.dispose();
     this.bakeMat.dispose();
     this.riverMat.dispose();

@@ -3,6 +3,7 @@
  * settlement sites, and a JSON export of all of it. Pure, so it is unit-tested.
  */
 import { B, BIOMES } from './biomes.ts';
+import { baseOf } from './ecology.ts';
 import { WATER_LAKE, WATER_LAND, WATER_OCEAN, type World } from './world.ts';
 import { makeRng } from './rng.ts';
 
@@ -77,7 +78,7 @@ export function gameData(w: World): GameData {
   // Resources.
   const resources = new Uint8Array(N);
   for (let c = 0; c < N; c++) {
-    const b = w.biome[c];
+    const b = baseOf(w.biome[c]);
     if (w.water[c] === WATER_LAND) {
       if (w.elevation[c] > 0.45 && b !== B.ICE) resources[c] |= RES_ORE;
       if (FOREST.has(b)) resources[c] |= RES_TIMBER;
@@ -91,7 +92,7 @@ export function gameData(w: World): GameData {
   const score = new Float32Array(N).fill(-1);
   for (let c = 0; c < N; c++) {
     if (w.water[c] !== WATER_LAND || w.temperature[c] < 0.2) continue;
-    const b = w.biome[c];
+    const b = baseOf(w.biome[c]);
     if (b === B.ICE || b === B.PEAK || b === B.MOUNTAIN) continue;
     let s = FARMLAND[b] ?? 0;
     if (w.river[c]) s += 1;

@@ -7,6 +7,7 @@
  *  - tiles:  each cell is a flat terrace with cliff walls down to lower neighbours.
  */
 import * as THREE from 'three';
+import { baseOf } from './ecology.ts';
 import { B } from './biomes.ts';
 import { WATER_LAND, WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { makeRng } from './rng.ts';
@@ -39,6 +40,8 @@ export interface MeshData {
   color?: Float32Array;
   /** Terrain only: blended (moisture, temperature) per vertex, for the ground patterns. */
   climate?: Float32Array;
+  /** Terrain only: the finer biomes' per-pixel signals (ECO), per vertex. */
+  eco?: Float32Array;
   depth?: Float32Array;
   index?: Uint32Array;
 }
@@ -68,7 +71,7 @@ export interface BuildOptions {
 function meshData(geo: THREE.BufferGeometry): MeshData {
   const a = (name: string) => geo.getAttribute(name)?.array as Float32Array | undefined;
   return {
-    position: a('position')!, normal: a('normal'), color: a('color'), climate: a('climate'), depth: a('depth'),
+    position: a('position')!, normal: a('normal'), color: a('color'), climate: a('climate'), eco: a('eco'), depth: a('depth'),
     index: geo.index ? Uint32Array.from(geo.index.array) : undefined,
   };
 }
@@ -95,7 +98,7 @@ export function surfaceTransfer(d: SurfaceData): ArrayBuffer[] {
   const add = (a?: ArrayBufferView | null) => { if (a) out.add(a.buffer as ArrayBuffer); };
   for (const m of [d.terrain, d.water]) {
     if (!m) continue;
-    add(m.position); add(m.normal); add(m.color); add(m.depth); add(m.index);
+    add(m.position); add(m.normal); add(m.color); add(m.climate); add(m.eco); add(m.depth); add(m.index);
   }
   add(d.faces); add(d.cellTop); add(d.cornerH); add(d.grid);
   for (const v of Object.values(d.trees)) add(v as ArrayBufferView);
@@ -183,6 +186,29 @@ function climateColour(m: number, t: number, out: THREE.Color) {
   const lo = r(ti), hi = r(ti + 1);
   out.setRGB(lo[0] + (hi[0] - lo[0]) * tf, lo[1] + (hi[1] - lo[1]) * tf, lo[2] + (hi[2] - lo[2]) * tf);
 }
+/**
+ * The finer biomes (ecology.ts) in natural colours: a tint over the climate palette (colour, how
+ * far toward it), and what the terrain shader draws there per pixel (the 'eco' attribute):
+ * x standing water and reeds, y salt crust, z banded rock, w coral. Blended across cells like
+ * the colours, so a swamp fades into the forest round it. Sea ones tint the sea bed.
+ */
+const ECO: Partial<Record<number, [number, number, [number, number, number, number]?]>> = {
+  [B.SWAMP]: [0x2e4626, 0.45, [0.9, 0, 0, 0]], [B.MARSH]: [0x5a6638, 0.4, [0.8, 0, 0, 0]],
+  [B.BOG]: [0x6b6040, 0.5, [0.6, 0, 0, 0]], [B.FLOODPLAIN]: [0x4f7432, 0.35, [0.3, 0, 0, 0]],
+  [B.MANGROVE]: [0x23402a, 0.55, [0.7, 0, 0, 0]], [B.SALT_MARSH]: [0x6f7a48, 0.45, [0.6, 0, 0, 0]],
+  [B.SALT_FLAT]: [0xb8ad96, 0.5, [0, 1, 0, 0]], [B.COLD_DESERT]: [0xa89c84, 0.45],
+  [B.BADLANDS]: [0xa86a4a, 0.5, [0, 0, 1, 0]], [B.CHAPARRAL]: [0x6a6e3c, 0.45],
+  [B.DESERT_SCRUB]: [0xb69a6a, 0.3], [B.POLAR_DESERT]: [0x8e8a80, 0.6],
+  [B.ALPINE_MEADOW]: [0x6f8a44, 0.4], [B.MONTANE_FOREST]: [0x2e4630, 0.35],
+  [B.LARCH]: [0x6e6c34, 0.4], [B.CLOUD_FOREST]: [0x24502e, 0.4], [B.MIXED_FOREST]: [0x3e5a30, 0.25],
+  [B.HEATH]: [0x6c5a50, 0.45], [B.PRAIRIE]: [0x8a9248, 0.35], [B.MONSOON]: [0x4a6a2c, 0.3],
+  [B.PALM_SAVANNA]: [0x7e8a48, 0.3], [B.KARST]: [0x46703a, 0.3], [B.CANYONS]: [0xa0603e, 0.55, [0, 0, 1, 0]],
+  [B.REEF]: [0x9adbd0, 0.7, [0, 0, 0, 1]], [B.KELP]: [0x1e3a30, 0.5], [B.LAGOON]: [0xcfe0c8, 0.6],
+};
+/** Reefs and lagoons lie in shallow water, where the bed shows (the finer biomes). */
+const SHOAL = new Set<number>([B.REEF, B.LAGOON]);
+const ECO_COL = new Map<number, THREE.Color>(Object.entries(ECO).map(([b, v]) => [Number(b), new THREE.Color(v![0])]));
+
 /** Cells whose own colour stands rather than the climate palette: ice and bare high rock. */
 const OWN_COLOUR = new Set<number>([B.ICE]);   // mountains take the climate's colour; rock is per pixel
 
@@ -214,7 +240,7 @@ function placeTrees(
   sample: (a: number, b: number, cc: number) => [number, number, number] | null, out: TreeSpot[],
   clump = 1,
 ) {
-  const spec = FLORA[world.biome[c]];
+  const spec = FLORA[world.biome[c]] ?? FLORA[baseOf(world.biome[c])];
   if (!spec) return;
   for (const [kind, color, density, size = 1] of spec) {
     const expected = (density * mul * clump) / m;
@@ -325,7 +351,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
   const level = new Float32Array(N).fill(-1);
   for (let c = 0; c < N; c++) {
     if (w.water[c] === WATER_OCEAN) {
-      cellH[c] = w.biome[c] === B.SEA_ICE ? SEA + 0.0016 : seaFloor(w.elevation[c]);
+      cellH[c] = w.biome[c] === B.SEA_ICE ? SEA + 0.0016 : SHOAL.has(w.biome[c]) ? SEA - 0.0009 : seaFloor(w.elevation[c]);
       level[c] = SEA;
     } else if (w.water[c] === WATER_LAKE && w.biome[c] === B.ICE) {
       cellH[c] = landH(w.surface[c]);      // frozen lake: a flat ice sheet, no open water
@@ -417,6 +443,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
     const qz = dz + warpAmp * (tint(dx * wf, dy * wf, dz * wf + 37.1) + 0.5 * tint(dx * wf * 2.3, dy * wf * 2.3, dz * wf * 2.3 + 8.9));
     const side = wetOf(owner);
     let sr = 0, sg = 0, sb = 0, sw = 0, sm = 0, st = 0, so = 0;
+    let tr = 0, tg = 0, tb = 0, tk = 0, e0 = 0, e1 = 0, e2 = 0, e3 = 0;
     const consider = (c: number) => {
       if (wetOf(c) !== side) return;
       const ex = P[c * 3] - qx, ey = P[c * 3 + 1] - qy, ez = P[c * 3 + 2] - qz;
@@ -424,25 +451,37 @@ function buildSmooth(inp: SurfaceInput): Surface {
       sr += cellColor[c * 3] * wt; sg += cellColor[c * 3 + 1] * wt; sb += cellColor[c * 3 + 2] * wt; sw += wt;
       sm += w.moisture[c] * wt; st += w.temperature[c] * wt;
       if (OWN_COLOUR.has(w.biome[c]) || w.water[c] === WATER_OCEAN) so += wt;
+      const eco = ECO[w.biome[c]];
+      if (eco) {
+        const tc = ECO_COL.get(w.biome[c])!, k = eco[1] * wt;
+        tr += tc.r * k; tg += tc.g * k; tb += tc.b * k; tk += k;
+        if (eco[2]) { e0 += eco[2][0] * wt; e1 += eco[2][1] * wt; e2 += eco[2][2] * wt; e3 += eco[2][3] * wt; }
+      }
     };
     consider(owner);
     for (const n of g.neighbors[owner]) consider(n);
     if (sw < 1e-9) {
       out[0] = cellColor[owner * 3]; out[1] = cellColor[owner * 3 + 1]; out[2] = cellColor[owner * 3 + 2];
       out[3] = w.moisture[owner]; out[4] = w.temperature[owner];
+      for (let i = 5; i < 13; i++) out[i] = 0;
       return;
     }
+    // Finer biomes: the tint (applied below on land, in add() on the sea bed) and the eco signals.
+    out[5] = tk / sw; out[6] = tk > 0 ? tr / tk : 0; out[7] = tk > 0 ? tg / tk : 0; out[8] = tk > 0 ? tb / tk : 0;
+    out[9] = e0 / sw; out[10] = e1 / sw; out[11] = e2 / sw; out[12] = e3 / sw;
     out[0] = sr / sw; out[1] = sg / sw; out[2] = sb / sw; out[3] = sm / sw; out[4] = st / sw;
     // Natural colours: the climate palette, except where the cell's own colour stands.
     if (inp.natural && side === 0) {
       climateColour(out[3], out[4], climTmp);
       const k = 1 - so / sw;
       out[0] += (climTmp.r - out[0]) * k; out[1] += (climTmp.g - out[1]) * k; out[2] += (climTmp.b - out[2]) * k;
+      const t = out[5];
+      if (t > 0) { out[0] += (out[6] - out[0]) * t; out[1] += (out[7] - out[1]) * t; out[2] += (out[8] - out[2]) * t; }
     }
   };
   const climTmp = new THREE.Color();
-  const blendRGB = [0, 0, 0, 0, 0];
-  const clim: number[] = [];
+  const blendRGB = new Array(13).fill(0);
+  const clim: number[] = [], ecoA: number[] = [];
   const add = (dx: number, dy: number, dz: number, h: number, r: number, gg: number, b: number, lvl: number, lake = false) => {
     const i = pos.length / 3;
     // Lake shores: a wobble in the ground near the water line, so the shore wanders through
@@ -456,8 +495,12 @@ function buildSmooth(inp: SurfaceInput): Surface {
     if (inp.blend) {
       colourAt(dx, dy, dz, blendRGB); r = blendRGB[0]; gg = blendRGB[1]; b = blendRGB[2];
       clim.push(blendRGB[3], blendRGB[4]);
+      ecoA.push(blendRGB[9], blendRGB[10], blendRGB[11], blendRGB[12]);
     } else {
       clim.push(w.moisture[owner], w.temperature[owner]);
+      const e = ECO[w.biome[owner]]?.[2] ?? [0, 0, 0, 0];
+      ecoA.push(e[0], e[1], e[2], e[3]);
+      blendRGB[5] = 0;
     }
     // Sea floor colour by depth, not by cell: sand in the shallowest water, dark mud beyond
     // (per-cell "shallows" colour drew a tan hexagon ring round every coast).
@@ -466,6 +509,9 @@ function buildSmooth(inp: SurfaceInput): Surface {
       r = SEABED_SAND.r + (SEABED_DEEP.r - SEABED_SAND.r) * k;
       gg = SEABED_SAND.g + (SEABED_DEEP.g - SEABED_SAND.g) * k;
       b = SEABED_SAND.b + (SEABED_DEEP.b - SEABED_SAND.b) * k;
+      // Reefs, kelp and lagoons colour the bed (blended like the land's tints).
+      const t = inp.blend ? blendRGB[5] : 0;
+      if (t > 0) { r += (blendRGB[6] - r) * t; gg += (blendRGB[7] - gg) * t; b += (blendRGB[8] - b) * t; }
     }
     // A lake bed is dark silt and weed, not lake-blue (it shows through the shallows).
     if (inp.natural && lake) {
@@ -693,6 +739,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
   terrain.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   terrain.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   if (inp.natural) terrain.setAttribute('climate', new THREE.Float32BufferAttribute(clim, 2));
+  if (inp.natural) terrain.setAttribute('eco', new THREE.Float32BufferAttribute(ecoA, 4));
   terrain.setIndex(index);
   terrain.computeVertexNormals();
   if (inp.natural) {
@@ -749,7 +796,7 @@ function buildTiles(inp: SurfaceInput): Surface {
 
   const top = new Float32Array(N);
   for (let c = 0; c < N; c++) {
-    if (w.water[c] === WATER_OCEAN) top[c] = w.biome[c] === B.SEA_ICE ? SEA + 0.0018 : seaFloor(w.elevation[c]);
+    if (w.water[c] === WATER_OCEAN) top[c] = w.biome[c] === B.SEA_ICE ? SEA + 0.0018 : SHOAL.has(w.biome[c]) ? SEA - 0.0009 : seaFloor(w.elevation[c]);
     else if (w.water[c] === WATER_LAKE) top[c] = LAND + w.surface[c] * relief;
     else top[c] = LAND + w.elevation[c] * relief;
   }

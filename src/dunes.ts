@@ -136,6 +136,8 @@ export interface PatchUniforms {
   uPatchN: { value: THREE.Vector3 };
   uCapA: { value: THREE.Texture | null };
   uCapB: { value: THREE.Texture | null };
+  /** The finer biomes' signals (surface.ts ECO) under the patch. */
+  uCapC: { value: THREE.Texture | null };
   /** How far the patch moved the ground (see LIFT_GLSL); 1 while the patch is drawn. */
   /**
    * The patch's relief, worked out once per recentre, one texel per grid vertex (see
@@ -152,7 +154,7 @@ export interface PatchUniforms {
 /** One set, shared by the patch and by whatever must follow its ground (trees, rivers). */
 export const patchUniforms: PatchUniforms = {
   uPatchC: { value: new THREE.Vector3(0, 0, 1) }, uPatchE: { value: new THREE.Vector3(1, 0, 0) }, uPatchN: { value: new THREE.Vector3(0, 1, 0) },
-  uCapA: { value: null }, uCapB: { value: null }, uBake0: { value: null }, uBake1: { value: null }, uBake2: { value: null }, uCapR: { value: null }, uPatchOn: { value: 0 },
+  uCapA: { value: null }, uCapB: { value: null }, uCapC: { value: null }, uBake0: { value: null }, uBake1: { value: null }, uBake2: { value: null }, uCapR: { value: null }, uPatchOn: { value: 0 },
 };
 export const PATCH_N = 288;          // vertices along a side
 export const PATCH_A = 0.15;         // grid spacing at the centre, relative to an even grid
@@ -162,7 +164,7 @@ export const CAPTURE_SIZE = 512;     // texels along a side of the patch's captu
 /** Shared by both patch programs: the terrain under a grid vertex, from the captures. */
 const PATCH_BASE_GLSL = /* glsl */`
   uniform vec3 uPatchC, uPatchE, uPatchN;
-  uniform sampler2D uCapA, uCapB;
+  uniform sampler2D uCapA, uCapB, uCapC;
   vec4 capA, capB;
   vec3 base, up, n0;
   vec2 capUv;
@@ -204,6 +206,7 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
 
     // Dunes stand up where the grid resolves them (finer than a third of their spacing).
     float desert = smoothstep(0.24, 0.12, a.w) * smoothstep(0.4, 0.55, b.w) * (1.0 - highland) * smoothstep(0.0003, 0.0008, hAbove);
+    desert *= 1.0 - texture(uCapC, capUv).y;   // salt flats are flat (surface.ts ECO)
     float geo = (1.0 - smoothstep(DUNE * 0.2, DUNE * 0.36, spacing)) * edge;
     float k = 0.0, raw = 0.0;
     vec4 d = vec4(0.0);
@@ -265,6 +268,7 @@ export const PATCH_GLSL = PATCH_BASE_GLSL + /* glsl */`
   varying vec3 vTerrN, vBase, vEroGeo;
   vec3 pSurf, pNorm, pCol;
   vec2 pClim;
+  vec4 pEco;
   void patchSample(vec2 lat) {
     patchBase(lat);
     ivec2 ij = ivec2(gl_VertexID % ${PATCH_N}, gl_VertexID / ${PATCH_N});
@@ -278,6 +282,7 @@ export const PATCH_GLSL = PATCH_BASE_GLSL + /* glsl */`
     pNorm = normalize(n0 - b1.xyz - b2.xyz * farDist);
     pCol = capB.rgb;
     pClim = vec2(capA.w, capB.w);
+    pEco = texture(uCapC, capUv);
     vDuneGeo = b0.z;
     // The erosion slope this vertex carries as relief: the pixel shader shades the rest.
     vEroGeo = b2.xyz * farDist;

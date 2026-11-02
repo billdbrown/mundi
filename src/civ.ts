@@ -10,6 +10,7 @@
  * Pure and deterministic (seeded), so it can be tested and could move to the worker.
  */
 import { B } from './biomes.ts';
+import { baseOf } from './ecology.ts';
 import { WATER_LAND, WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { FARMLAND, nameMaker, type GameData } from './gamedata.ts';
 import { makeRng } from './rng.ts';
@@ -72,7 +73,7 @@ export function simulateHistory(w: World, gd: GameData): History {
   for (let c = 0; c < N; c++) {
     if (w.water[c] === WATER_OCEAN) { cost[c] = Infinity; continue; }
     if (w.water[c] === WATER_LAKE) { cost[c] = 2.5; continue; }
-    const b = w.biome[c];
+    const b = baseOf(w.biome[c]);
     cost[c] = 1 + Math.max(0, w.elevation[c] - 0.25) * 4 + (b === B.MOUNTAIN || b === B.PEAK || b === B.ICE ? 3 : 0)
       + (b === B.RAINFOREST || b === B.TAIGA ? 0.5 : 0);
   }
@@ -357,5 +358,5 @@ export function simulateHistory(w: World, gd: GameData): History {
 /** Whether a cell can be farmed (for drawing fields). */
 export function arable(w: World, c: number): boolean {
   if (w.water[c] !== WATER_LAND) return false;
-  return (FARMLAND[w.biome[c]] ?? 0) >= 0.3 && w.temperature[c] > 0.25;
+  return (FARMLAND[baseOf(w.biome[c])] ?? 0) >= 0.3 && w.temperature[c] > 0.25;
 }

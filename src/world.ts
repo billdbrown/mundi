@@ -2,6 +2,7 @@ import { buildGrid, type Grid } from './grid.ts';
 import { makeRng } from './rng.ts';
 import { makeSimplex, fbm } from './noise.ts';
 import { B, landBiome } from './biomes.ts';
+import { refineBiomes } from './ecology.ts';
 import { erodeLand, EROSION_DEFAULTS } from './erode.ts';
 
 export interface WorldParams {
@@ -22,10 +23,12 @@ export interface WorldParams {
   rivers: number;
   /** River erosion of the land, 0..1 (erode.ts): 0 leaves the plate model's heights as they are. */
   erosion: number;
+  /** Finer biomes (ecology.ts): 1 on, 0 the broad climate biomes only. */
+  ecology: number;
 }
 
 export const DEFAULT_PARAMS: WorldParams = {
-  seed: 1, detail: 60, ocean: 0.68, plates: 12, continents: 3, roughness: 0.45, heat: 0, wetness: 0, rivers: 1, erosion: 1,
+  seed: 1, detail: 60, ocean: 0.68, plates: 12, continents: 3, roughness: 0.45, heat: 0, wetness: 0, rivers: 1, erosion: 1, ecology: 0,
 };
 
 export const WATER_LAND = 0, WATER_OCEAN = 1, WATER_LAKE = 2;
@@ -481,6 +484,8 @@ export function generateWorld(params: WorldParams, stage?: (step: GenStep) => vo
       biome[c] = landBiome(t, moisture[c], e);
     }
   }
+
+  if (params.ecology > 0.5) refineBiomes({ grid, elevation: elev, temperature, moisture, water, river, biome, seed: params.seed });
 
   return { params, grid, elevation: elev, surface, plate, temperature, moisture, water, biome, downstream, flow, river, riverThreshold: threshold };
 }

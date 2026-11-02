@@ -265,6 +265,8 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         #ifdef USE_CLIMATE
           attribute vec2 climate;
           varying vec2 vClim;
+          attribute vec4 eco;
+          varying vec4 vEco;
         #endif
         #ifdef USE_CIV
           attribute vec2 civ;
@@ -290,8 +292,10 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         #ifdef USE_CLIMATE
           #ifdef DUNE_PATCH
             vClim = pClim;
+            vEco = pEco;
           #else
             vClim = climate;
+            vEco = eco;
           #endif
         #endif
         #ifdef USE_CIV
@@ -312,6 +316,8 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         }
         #ifdef USE_CLIMATE
           varying vec2 vClim;
+          // The finer biomes (surface.ts ECO): x standing water, y salt crust, z banded rock, w coral.
+          varying vec4 vEco;
           ${GROVE_GLSL}
         #endif
         #ifdef USE_CIV
@@ -474,6 +480,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
             // Deserts: dune fields (shaded in the normal step below) and the odd white salt pan in
             // low basins.
             desertW = smoothstep(0.24, 0.12, moist) * smoothstep(0.4, 0.55, temp) * lowland;
+            desertW *= 1.0 - vEco.y;   // salt flats: no dunes
             // Hot deserts at the scale seen from orbit: dark, rusty rock on plateaus and massifs
             // (hamada; the Tibesti, the Ahaggar), pale gravel plains (reg) between the sand seas,
             // and the sand seas themselves a warmer orange. Highland is included, unlike dunes.
@@ -571,6 +578,8 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               float wet = max(max(smoothstep(0.45, 0.62, moist) * low, riverWet * low * 1.2), coastWet) * level * (1.0 - iceK);
               // Broad patches: not every wet lowland is marsh.
               wet *= smoothstep(0.05, 0.55, snoise(vCloudP * 22.0 + 17.0) + 0.5 * snoise(vCloudP * 70.0));
+              // Swamps, marshes, bogs, mangroves: wet throughout, not in patches, and on any flat.
+              wet = max(wet, vEco.x * smoothstep(0.93, 0.98, dot(wNw, normalize(vCloudP))) * (0.6 + 0.4 * smoothstep(-0.4, 0.4, snoise(vCloudP * 40.0 + 5.0))) * (1.0 - iceK));
               if (wet > 0.01) {
                 vec3 reed = mix(vec3(0.2, 0.2, 0.09), vec3(0.13, 0.17, 0.07), smoothstep(0.4, 0.7, temp));
                 float rn = snoise01(vCloudP * 1500.0) * 0.6 + snoise01(vCloudP * 4500.0) * 0.4;
@@ -580,6 +589,24 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
                 poolK = smoothstep(0.3, 0.38, pn + 0.3 * (wet - 0.7)) * wet * aaFade(0.0016, foot);
                 diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.035, 0.055, 0.065), poolK * 0.9);
               }
+            }
+            // Salt flats: a white crust cracked into polygons, greyer and damp at the edges.
+            if (vEco.y > 0.01) {
+              // Pans, not one sheet: the crust where the noise is high, damp brown between.
+              float pn2 = 0.6 * snoise(vCloudP * 25.0 + 3.0) + 0.3 * snoise(vCloudP * 80.0) + 0.1 * snoise(vCloudP * 300.0);
+              float sk = 0.8 * vEco.y * smoothstep(-0.15, 0.1, pn2);
+              vec3 salt = mix(vec3(0.52, 0.49, 0.43), vec3(0.7, 0.68, 0.62), smoothstep(-0.3, 0.6, snoise(vCloudP * 300.0)));
+              vec3 qs = vCloudP * 4000.0 + vec3(snoise01(vCloudP * 1500.0), snoise01(vCloudP * 1500.0 + 7.0), 0.0) * 1.2;
+              salt *= 1.0 - 0.25 * (1.0 - smoothstep(0.0, 0.06, voronoiEdge(qs))) * aaFade(0.00025, foot);
+              diffuseColor.rgb = mix(diffuseColor.rgb, salt, sk);
+            }
+            // Badlands and canyonlands: bands of red, buff and grey rock by height, so slopes
+            // show their layers (flats show one band).
+            if (vEco.z > 0.01) {
+              float hb = hAbove / uRelief * 90.0 + 2.0 * snoise(vCloudP * 60.0);
+              float band = 0.5 + 0.5 * sin(hb) * sin(hb * 0.37 + 1.3);
+              vec3 strata = mix(mix(vec3(0.5, 0.26, 0.16), vec3(0.66, 0.52, 0.38), smoothstep(0.3, 0.6, band)), vec3(0.55, 0.5, 0.48), smoothstep(0.75, 0.95, band));
+              diffuseColor.rgb = mix(diffuseColor.rgb, strata * (0.85 + 0.3 * snoise01(vCloudP * 800.0)), vEco.z * 0.75);
             }
             // Tundra: frost polygons, a net of dark cracks with the odd meltwater pond.
             float tundraW = smoothstep(0.08, 0.16, temp) * smoothstep(0.34, 0.24, temp) * lowland;
@@ -679,6 +706,16 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           float vfloor = smoothstep(0.0002, 0.0018, carveS.x) * smoothstep(5.0, 9.0, carveS.y) * carveW;
           diffuseColor.rgb *= mix(vec3(1.0), mix(vec3(0.88, 0.93, 0.84), vec3(0.7, 0.82, 0.6), dryC), vfloor * 0.6);
         }
+        // Coral reefs (the finer biomes): bright sand with dark coral heads and their channels,
+        // on the sea bed, seen through the shallows.
+        #ifdef USE_CLIMATE
+          if (vEco.w > 0.01 && hAbove < 0.0) {
+            float cn = snoise(vCloudP * 900.0) * 0.6 + snoise(vCloudP * 2600.0 + 4.0) * 0.4;
+            float head = smoothstep(0.1, 0.3, cn) * aaFade(0.0008, foot);
+            vec3 reef = mix(vec3(0.62, 0.66, 0.56), vec3(0.18, 0.24, 0.2), head);
+            diffuseColor.rgb = mix(diffuseColor.rgb, reef, vEco.w * 0.8);
+          }
+        #endif
         // Dark lava flows and ash round volcanoes.
         {
           float vk = hAbove > 0.0 ? volcanic(vCloudP) : 0.0;

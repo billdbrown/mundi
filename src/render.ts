@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { baseOf } from './ecology.ts';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -1248,7 +1249,7 @@ export class PlanetView {
       }
       // Corridor segments for the river (not stream) parts, with dryness smoothed along the path
       // so the green fades in and out rather than switching at a cell edge.
-      const dry = out.map((o) => (o.cell >= 0 && DRY.has(w.biome[o.cell]) ? 1 : 0));
+      const dry = out.map((o) => (o.cell >= 0 && DRY.has(baseOf(w.biome[o.cell])) ? 1 : 0));
       for (let i = 1; i < out.length; i++) {
         const a = out[i - 1], b = out[i];
         if (!a.river || !b.river || b.cell < 0) continue;
@@ -1525,6 +1526,7 @@ function toGeometry(m: MeshData): THREE.BufferGeometry {
   if (m.normal) g.setAttribute('normal', new THREE.BufferAttribute(m.normal, 3));
   if (m.color) g.setAttribute('color', new THREE.BufferAttribute(m.color, 3));
   if (m.climate) g.setAttribute('climate', new THREE.BufferAttribute(m.climate, 2));
+  if (m.eco) g.setAttribute('eco', new THREE.BufferAttribute(m.eco, 4));
   if (m.depth) g.setAttribute('depth', new THREE.BufferAttribute(m.depth, 1));
   if (m.index) g.setIndex(new THREE.BufferAttribute(m.index, 1));
   return g;

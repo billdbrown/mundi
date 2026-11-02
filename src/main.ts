@@ -374,3 +374,22 @@ window.addEventListener('hashchange', () => {
   shell.applyLens(lens, false);
   request();
 });
+
+// TEMPORARY (2026-11-02): trial switches for world-changing features, judged by eye. B: finer
+// biomes (ecology.ts). Each key regenerates the world; the state rides in the link (&ecology=1).
+// Remove once decided.
+{
+  const label = document.createElement('div');
+  label.className = 'ui';   // hidden in screenshots (body.capture .ui)
+  label.style.cssText = 'position:fixed;right:16px;top:84px;padding:6px 10px;border-radius:8px;background:rgba(10,14,22,.78);color:#dfe6ef;font:12px/1.5 system-ui;pointer-events:none;z-index:50;white-space:pre';
+  document.body.appendChild(label);
+  const show = () => { label.textContent = `Trial (press the key):${String.fromCharCode(10)}B  More biomes: ${params.ecology > 0.5 ? 'ON' : 'off'}`; };
+  show();
+  window.addEventListener('keydown', (e) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key.toLowerCase() !== 'b') return;
+    params = { ...params, ecology: params.ecology > 0.5 ? 0 : 1 };
+    writeHash(); show(); request();
+  });
+  window.addEventListener('hashchange', show);
+}
