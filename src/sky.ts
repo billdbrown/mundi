@@ -539,7 +539,8 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               // A crisp-edged strip (irrigated and flooded land ends abruptly at the desert), with
               // ragged edges at several scales, and a faint valley floor around it.
               float rag = snoise(vCloudP * 700.0) * 0.55 + snoise(vCloudP * 2200.0) * 0.3 + snoise(vCloudP * 6000.0) * 0.15;
-              float nearR = smoothstep(0.07, 0.13, rv.x + 0.05 * rag);
+              // (Only where the water map is fine enough to draw it: from coarser maps it shimmered.)
+              float nearR = smoothstep(0.07, 0.13, rv.x + 0.05 * rag) * (1.0 - smoothstep(0.0005, 0.0011, uShTexel));
               float wideR = smoothstep(0.02, 0.25, rv.y);
               vec3 lush = vec3(0.075, 0.14, 0.035) * (0.85 + 0.3 * snoise01(vCloudP * 3000.0));
               vec3 valley = mix(diffuseColor.rgb, vec3(0.2, 0.22, 0.1), 0.5);
@@ -564,7 +565,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               if (shore > 0.0) {
                 // How high the land is a few km inland: up the coast field's slope.
                 float e; vec2 uv = groundUv(vCloudP, e);
-                vec2 d = vec2(1.0 / 512.0, 0.0);
+                vec2 d = vec2(1.0 / 1024.0, 0.0);
                 vec2 gr = vec2(texture(uShRiv, uv + d.xy).b - texture(uShRiv, uv - d.xy).b,
                                texture(uShRiv, uv + d.yx).b - texture(uShRiv, uv - d.yx).b);
                 vec2 inland = -gr / max(length(gr), 1e-6);

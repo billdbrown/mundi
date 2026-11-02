@@ -17,6 +17,8 @@ import * as THREE from 'three';
 import type { EroRequest, EroResult } from './eroworker.ts';
 
 const SIZE = 1024;
+/** Water map resolution. */
+const RIV = 1024;
 const STEPS = 64;
 
 export interface ShadowUniforms {
@@ -40,13 +42,44 @@ export interface ShadowUniforms {
   uEroN: { value: THREE.Vector3 };
   uEroR: { value: number };
   uEroOn: { value: number };
+  /** The previous result, cross-faded out as the current one (above) fades in (uEroMix). */
+  uEroMap2: { value: THREE.Texture | null };
+  uEroC2: { value: THREE.Vector3 };
+  uEroE2: { value: THREE.Vector3 };
+  uEroN2: { value: THREE.Vector3 };
+  uEroR2: { value: number };
+  uEroMix: { value: number };
+  /** The water map's texel size (radians), so detail it can't resolve fades out. */
+  uShTexel: { value: number };
 }
+
+/** The analytical erosion, both slots cross-faded: groundCarve(p) = carving, log2 area, weight. */
+const ERO_GLSL = /* glsl */`
+  uniform sampler2D uEroMap, uEroMap2;
+  uniform vec3 uEroC, uEroE, uEroN, uEroC2, uEroE2, uEroN2;
+  uniform float uEroR, uEroR2, uEroOn, uEroMix;
+  vec3 eroSlot(sampler2D m, vec3 p, vec3 c, vec3 e, vec3 n, float r) {
+    if (dot(p, c) < 0.5) return vec3(0.0);
+    vec2 lat = vec2(dot(p, e), dot(p, n)) / r;
+    float w = smoothstep(1.0, 0.8, max(abs(lat.x), abs(lat.y)));
+    if (w <= 0.0) return vec3(0.0);
+    return vec3(texture(m, lat * 0.5 + 0.5).rg, 1.0) * w;
+  }
+  vec3 groundCarve(vec3 p) {
+    if (uEroOn <= 0.0) return vec3(0.0);
+    vec3 a = eroSlot(uEroMap, p, uEroC, uEroE, uEroN, uEroR) * uEroMix;
+    if (uEroMix < 1.0) a += eroSlot(uEroMap2, p, uEroC2, uEroE2, uEroN2, uEroR2) * (1.0 - uEroMix);
+    if (a.z <= 1e-4) return vec3(0.0);
+    return vec3(a.xy / a.z, a.z * uEroOn);
+  }
+`;
 
 /** One set, shared by everything that receives terrain shadows. */
 export const shadowUniforms: ShadowUniforms = {
   uShC: { value: new THREE.Vector3(0, 0, 1) }, uShE: { value: new THREE.Vector3(1, 0, 0) }, uShN: { value: new THREE.Vector3(0, 1, 0) },
   uShR: { value: 0.1 }, uShMap: { value: null }, uShH: { value: null }, uShRiv: { value: null }, uShOn: { value: 0 },
   uEroMap: { value: null }, uEroC: { value: new THREE.Vector3(0, 0, 1) }, uEroE: { value: new THREE.Vector3(1, 0, 0) }, uEroN: { value: new THREE.Vector3(0, 1, 0) }, uEroR: { value: 0.1 }, uEroOn: { value: 0 },
+  uEroMap2: { value: null }, uEroC2: { value: new THREE.Vector3(0, 0, 1) }, uEroE2: { value: new THREE.Vector3(1, 0, 0) }, uEroN2: { value: new THREE.Vector3(0, 1, 0) }, uEroR2: { value: 0.1 }, uEroMix: { value: 1 }, uShTexel: { value: 0.001 },
 };
 
 /**
@@ -57,17 +90,9 @@ export const shadowUniforms: ShadowUniforms = {
 export const SHADOW_GLSL = /* glsl */`
   uniform vec3 uShC, uShE, uShN;
   uniform float uShR, uShOn;
-  uniform sampler2D uShMap, uShH, uShRiv, uEroMap;
-  uniform vec3 uEroC, uEroE, uEroN;
-  uniform float uEroR, uEroOn;
-  /** The analytical erosion at p: x carving (radians), y log2 drainage area; z its weight. */
-  vec3 groundCarve(vec3 p) {
-    if (uEroOn <= 0.0 || dot(p, uEroC) < 0.5) return vec3(0.0);
-    vec2 lat = vec2(dot(p, uEroE), dot(p, uEroN)) / uEroR;
-    float w = smoothstep(1.0, 0.8, max(abs(lat.x), abs(lat.y))) * uEroOn;
-    if (w <= 0.0) return vec3(0.0);
-    return vec3(texture(uEroMap, lat * 0.5 + 0.5).rg, w);
-  }
+  uniform sampler2D uShMap, uShH, uShRiv;
+  uniform float uShTexel;
+  ${ERO_GLSL}
   vec2 groundUv(vec3 p, out float fade) {
     fade = 0.0;
     if (uShOn < 0.5 || dot(p, uShC) < 0.5) return vec2(0.5);
@@ -128,16 +153,14 @@ const heightFragment = /* glsl */`
 
 const shadowFragment = /* glsl */`
   uniform vec3 uSun, uC, uE, uN;
-  uniform sampler2D uHeight, uEroMap;
-  uniform vec3 uEroC, uEroE, uEroN;
-  uniform float uEroR, uEroOn;
+  uniform sampler2D uHeight;
+  ${ERO_GLSL}
   // Height at shadow-map coordinate q (lat), less the analytical erosion's carving.
   float landH(vec2 uv, vec2 q) {
     float h = max(texture(uHeight, uv).r, 0.0) / 50.0;
     if (uEroOn > 0.0) {
-      vec3 p = normalize(uC + uE * q.x + uN * q.y);
-      vec2 el = vec2(dot(p, uEroE), dot(p, uEroN)) / uEroR;
-      if (max(abs(el.x), abs(el.y)) < 1.0) h -= texture(uEroMap, el * 0.5 + 0.5).r * uEroOn;
+      vec3 c = groundCarve(normalize(uC + uE * q.x + uN * q.y));
+      h -= c.x * c.z;
     }
     return h;
   }
@@ -205,6 +228,19 @@ const blurFragment = /* glsl */`
     gl_FragColor = vec4(n / k, w / k, s / k, sw / k);
   }`;
 
+/** A region's frame: east and north at its centre. */
+function frameAt(c: THREE.Vector3) {
+  let e = new THREE.Vector3(c.z, 0, -c.x);
+  if (e.lengthSq() < 1e-8) e = new THREE.Vector3(1, 0, 0);
+  e.normalize();
+  return { e, n: new THREE.Vector3().crossVectors(c, e) };
+}
+/** A direction snapped to a fixed 3D lattice of spacing q, so the same place gives the same one. */
+function snapDir(d: THREE.Vector3, q: number): THREE.Vector3 {
+  const v = d.clone().normalize();
+  return new THREE.Vector3(Math.round(v.x / q) * q, Math.round(v.y / q) * q, Math.round(v.z / q) * q).normalize();
+}
+
 export class TerrainShadow {
   private height = new THREE.WebGLRenderTarget(SIZE, SIZE, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true });
   private shadow = new THREE.WebGLRenderTarget(SIZE, SIZE, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
@@ -225,7 +261,6 @@ export class TerrainShadow {
   // Analytical erosion: one job at a time in a worker; the result fades in.
   private eroWorker: Worker | null = null;
   private eroBusy = false;
-  private eroWanted = false;
   private eroId = 0;
   private eroTex: THREE.DataTexture | null = null;
   private eroFadeStart = 0;
@@ -233,14 +268,14 @@ export class TerrainShadow {
   /** TEMPORARY A/B: analytical erosion on or off (render.ts eroSwitch). */
   setErosion(on: boolean) {
     this.eroEnabled = on;
-    if (!on) { this.u.uEroOn.value = 0; this.eroFadeStart = 0; this.eroId++; }
+    if (!on) { this.u.uEroOn.value = 0; this.eroFadeStart = 0; this.eroId++; this.eroBusy = false; this.eroKey = this.pendingKey = ''; }
     this.heightDirty = true;
   }
   private eroEnabled = true;
   // Water map: rivers drawn from above, then blurred two ways (blurFragment).
-  private riverRaw = new THREE.WebGLRenderTarget(512, 512, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
-  private riverTmp = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
-  private riverMap = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+  private riverRaw = new THREE.WebGLRenderTarget(RIV, RIV, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+  private riverTmp = new THREE.WebGLRenderTarget(RIV, RIV, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+  private riverMap = new THREE.WebGLRenderTarget(RIV, RIV, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
   private riverScene = new THREE.Scene();
   private riverMats = [1, 0.45].map((v) => new THREE.MeshBasicMaterial({
     color: new THREE.Color(v, v, v), side: THREE.DoubleSide, depthTest: false, depthWrite: false,
@@ -252,6 +287,10 @@ export class TerrainShadow {
   constructor() {
     this.u.uShMap.value = this.shadow.texture;
     this.u.uShH.value = this.height.texture;
+    this.eroCopy.matrixAutoUpdate = false;
+    this.eroCopy.frustumCulled = false;
+    this.eroCopy.material = this.heightMat;
+    this.eroScene.add(this.eroCopy);
     this.u.uShRiv.value = this.riverMap.texture;
     this.blurMat = new THREE.ShaderMaterial({
       uniforms: { uSrc: { value: null }, uHeight: { value: this.height.texture }, uDir: { value: new THREE.Vector2() }, uNear: { value: 1 }, uWide: { value: 4 }, uCoast: { value: 1 }, uSeaWide: { value: 6 }, uFirst: { value: 1 } },
@@ -270,6 +309,7 @@ export class TerrainShadow {
         uHeight: { value: this.height.texture }, uSun: { value: new THREE.Vector3() },
         uC: this.u.uShC, uE: this.u.uShE, uN: this.u.uShN, uR: { value: 0.1 }, uTexel: { value: 2 / SIZE },
         uEroMap: this.u.uEroMap, uEroC: this.u.uEroC, uEroE: this.u.uEroE, uEroN: this.u.uEroN, uEroR: this.u.uEroR, uEroOn: this.u.uEroOn,
+        uEroMap2: this.u.uEroMap2, uEroC2: this.u.uEroC2, uEroE2: this.u.uEroE2, uEroN2: this.u.uEroN2, uEroR2: this.u.uEroR2, uEroMix: this.u.uEroMix,
       },
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: shadowFragment,
@@ -286,48 +326,87 @@ export class TerrainShadow {
     this.heightDirty = true;
     this.u.uEroOn.value = 0;
     this.eroId++;                    // results for the old terrain are stale
+    this.eroKey = this.pendingKey = '';
+    this.eroBusy = false;
     if (!terrain) this.u.uShOn.value = 0;
   }
 
-  /** Read back the height map just captured and send it to the erosion worker. */
-  private startErosion(renderer: THREE.WebGLRenderer, c: THREE.Vector3, e: THREE.Vector3, n: THREE.Vector3, r: number) {
-    if (typeof Worker === 'undefined' || !this.eroEnabled) return;
-    if (this.eroBusy) { this.eroWanted = true; return; }
+  /**
+   * Capture the terrain (only: the moving ground patch would change the result) over an erosion
+   * region snapped to a fixed grid on the planet, read it back, and send it to the worker. The
+   * same place always gives the same region, so the same valleys; a region worked from wherever
+   * the view happened to be gave different valleys every time.
+   */
+  private startErosion(renderer: THREE.WebGLRenderer, c: THREE.Vector3, r: number) {
+    if (typeof Worker === 'undefined' || !this.eroEnabled || this.eroBusy) return;
     this.eroBusy = true;
-    this.eroWanted = false;
     this.eroWorker ??= this.makeWorker();
+    const { e, n } = frameAt(c);
+    const cam = this.eroCam;
+    cam.left = -r; cam.right = r; cam.top = r; cam.bottom = -r;
+    cam.position.copy(c).multiplyScalar(1.1);
+    cam.up.copy(n);
+    cam.lookAt(0, 0, 0);
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+    const src = this.source!;
+    src.updateWorldMatrix(true, false);
+    this.eroCopy.geometry = src.geometry;
+    this.eroCopy.matrix.copy(src.matrixWorld);
+    this.eroCopy.matrixWorld.copy(src.matrixWorld);
+    const prev = renderer.getRenderTarget(), prevClear = renderer.getClearColor(new THREE.Color()), prevAlpha = renderer.getClearAlpha();
+    renderer.setClearColor(0x000000, 1);
+    renderer.setRenderTarget(this.eroHeight);
+    renderer.clear();
+    renderer.render(this.eroScene, cam);
+    renderer.setRenderTarget(prev);
+    renderer.setClearColor(prevClear, prevAlpha);
     const id = ++this.eroId, half = new Uint16Array(SIZE * SIZE * 4);
     const frame = { c: c.toArray(), e: e.toArray(), nn: n.toArray(), r };
-    renderer.readRenderTargetPixelsAsync(this.height, 0, 0, SIZE, SIZE, half).then(() => {
+    renderer.readRenderTargetPixelsAsync(this.eroHeight, 0, 0, SIZE, SIZE, half).then(() => {
       const req: EroRequest = { id, half, size: SIZE, ...frame };
       this.eroWorker!.postMessage(req, [half.buffer]);
-    }).catch(() => { this.eroBusy = false; });
+    }).catch(() => { this.eroBusy = false; this.pendingKey = ''; });
     this.pendingFrame = frame;
   }
   private pendingFrame: { c: number[]; e: number[]; nn: number[]; r: number } | null = null;
+  private pendingKey = '';
+  /** The erosion region now shown (key of snapped centre and size). */
+  private eroKey = '';
+  private eroSpare: THREE.DataTexture | null = null;
+  private eroMixStart = 0;
+  private eroHeight = new THREE.WebGLRenderTarget(SIZE, SIZE, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true });
+  private eroCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.001, 1.1);
+  private eroScene = new THREE.Scene();
+  private eroCopy = new THREE.Mesh();
   private makeWorker(): Worker {
     const w = new Worker(new URL('./eroworker.ts', import.meta.url), { type: 'module' });
     w.onmessage = (ev: MessageEvent<EroResult>) => {
       this.eroBusy = false;
       const { id, n, packed } = ev.data;
       if (id === this.eroId && this.pendingFrame) {
-        if (!this.eroTex || this.eroTex.image.width !== n) {
-          this.eroTex?.dispose();
-          this.eroTex = new THREE.DataTexture(packed, n, n, THREE.RGFormat, THREE.HalfFloatType);
-          this.eroTex.minFilter = this.eroTex.magFilter = THREE.LinearFilter;
-          this.u.uEroMap.value = this.eroTex;
-        } else {
-          (this.eroTex.image.data as Uint16Array).set(packed);
-        }
-        this.eroTex.needsUpdate = true;
+        // The current result becomes the previous one, cross-fading out under the new one.
+        const u = this.u;
+        const old = this.eroTex;
+        u.uEroMap2.value = old; u.uEroC2.value.copy(u.uEroC.value); u.uEroE2.value.copy(u.uEroE.value);
+        u.uEroN2.value.copy(u.uEroN.value); u.uEroR2.value = u.uEroR.value;
+        this.eroSpare?.dispose();
+        this.eroSpare = old;
+        const tex = new THREE.DataTexture(packed, n, n, THREE.RGFormat, THREE.HalfFloatType);
+        tex.minFilter = tex.magFilter = THREE.LinearFilter;
+        tex.needsUpdate = true;
+        this.eroTex = tex;
+        u.uEroMap.value = tex;
         const f = this.pendingFrame;
-        this.u.uEroC.value.fromArray(f.c); this.u.uEroE.value.fromArray(f.e); this.u.uEroN.value.fromArray(f.nn);
-        this.u.uEroR.value = f.r;
-        // Fade in the first; later ones (the region moved on a little) swap straight in.
-        if (this.u.uEroOn.value < 1) this.eroFadeStart = performance.now();
+        u.uEroC.value.fromArray(f.c); u.uEroE.value.fromArray(f.e); u.uEroN.value.fromArray(f.nn);
+        u.uEroR.value = f.r;
+        u.uEroMix.value = old ? 0 : 1;
+        this.eroMixStart = performance.now();
+        if (u.uEroOn.value < 1) this.eroFadeStart = performance.now();
+        this.eroKey = this.pendingKey;
         this.needCast = true;
       }
-      if (this.eroWanted) this.heightDirty = true;   // the view moved on meanwhile: go again
+      this.pendingKey = '';     // (a stale result must not block the next request)
     };
     return w;
   }
@@ -390,11 +469,26 @@ export class TerrainShadow {
     const alt = Math.max(0.002, dist - 1);
     const want = Math.min(0.7, Math.max(1.3 * alt, 0.8 * Math.sqrt(2 * alt)));
     const r = 0.04 * Math.pow(1.25, Math.round(Math.log(want / 0.04) / Math.log(1.25)));
-    const c = centre.clone().normalize();
-    if (this.heightDirty || r !== this.radius || c.angleTo(this.centre) > r * 0.15) this.captureHeight(renderer, c, r);
-    // A new erosion result fades in over half a second (the shadows follow it).
+    // The region's centre snaps to a fixed grid on the planet, so maps are always taken from the
+    // same places: panning back and forth reproduces them exactly instead of shifting their
+    // texels (which made thin features like riverside green shimmer).
+    const c = snapDir(centre, r * 0.12);
+    if (this.heightDirty || r !== this.radius || c.distanceTo(this.centre) > 1e-9) this.captureHeight(renderer, c, r);
+    // Erosion over its own, coarser-snapped region (same size): new results only when the view
+    // has moved well away, and then cross-faded in.
+    if (this.eroEnabled) {
+      const ce = snapDir(centre, r * 0.35), key = `${r}:${ce.x.toFixed(6)},${ce.y.toFixed(6)},${ce.z.toFixed(6)}`;
+      if (key !== this.eroKey && key !== this.pendingKey && !this.eroBusy) { this.pendingKey = key; this.startErosion(renderer, ce, r); }
+    }
+    const now = performance.now();
+    if (this.eroMixStart > 0) {
+      const k = Math.min(1, (now - this.eroMixStart) / 1200);
+      this.u.uEroMix.value = k * k * (3 - 2 * k);
+      if (k >= 1) this.eroMixStart = 0;
+      this.needCast = true;
+    }
     if (this.eroFadeStart > 0) {
-      const k = Math.min(1, (performance.now() - this.eroFadeStart) / 500);
+      const k = Math.min(1, (now - this.eroFadeStart) / 800);
       this.u.uEroOn.value = k;
       if (k >= 1) this.eroFadeStart = 0;
       this.needCast = true;
@@ -407,10 +501,7 @@ export class TerrainShadow {
   private captureHeight(renderer: THREE.WebGLRenderer, c: THREE.Vector3, r: number) {
     this.centre.copy(c);
     this.radius = r;
-    let e = new THREE.Vector3(c.z, 0, -c.x);
-    if (e.lengthSq() < 1e-8) e = new THREE.Vector3(1, 0, 0);
-    e.normalize();
-    const n = new THREE.Vector3().crossVectors(c, e);
+    const { e, n } = frameAt(c);
     this.u.uShC.value.copy(c); this.u.uShE.value.copy(e); this.u.uShN.value.copy(n);
     this.u.uShR.value = r;
     this.shadowMat.uniforms.uR.value = r;
@@ -433,17 +524,17 @@ export class TerrainShadow {
     renderer.setRenderTarget(this.height);
     renderer.clear();
     renderer.render(this.heightScene, cam);
-    this.startErosion(renderer, c, e, n, r);
     // The water map: rivers from above, blurred across then down. Widths in radians: ~5 km for
     // the strip along the water, ~25 km for the valley floor (on an Earth-sized world).
     renderer.setRenderTarget(this.riverRaw);
     renderer.clear();
     renderer.render(this.riverScene, cam);
-    const texel = (2 * r) / 512, b = this.blurMat.uniforms;
-    b.uNear.value = Math.max(1, 0.0014 / texel) / 512;
-    b.uWide.value = Math.max(1, 0.004 / texel) / 512;
-    b.uCoast.value = Math.max(0.7, 0.0005 / texel) / 512;
-    b.uSeaWide.value = Math.max(1, 0.006 / texel) / 512;
+    const texel = (2 * r) / RIV, b = this.blurMat.uniforms;
+    this.u.uShTexel.value = texel;
+    b.uNear.value = Math.max(1, 0.0014 / texel) / RIV;
+    b.uWide.value = Math.max(1, 0.004 / texel) / RIV;
+    b.uCoast.value = Math.max(0.7, 0.0005 / texel) / RIV;
+    b.uSeaWide.value = Math.max(1, 0.006 / texel) / RIV;
     b.uSrc.value = this.riverRaw.texture; b.uDir.value.set(1, 0); b.uFirst.value = 1;
     renderer.setRenderTarget(this.riverTmp);
     renderer.render(this.blurScene, this.quadCam);
@@ -482,6 +573,7 @@ export class TerrainShadow {
   dispose() {
     this.height.dispose(); this.shadow.dispose();
     this.riverRaw.dispose(); this.riverTmp.dispose(); this.riverMap.dispose(); this.blurMat.dispose();
+    this.eroHeight.dispose(); this.eroTex?.dispose(); this.eroSpare?.dispose();
     for (const m of this.riverMats) m.dispose();
     this.heightMat.dispose(); this.shadowMat.dispose();
   }
