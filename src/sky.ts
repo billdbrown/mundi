@@ -1087,7 +1087,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         vec4 w = modelMatrix * vec4(position, 1.0);
         // Rivers follow the ground as the high-detail patch shapes it (dunepatch.ts).
         #if defined(USE_FADE) && !defined(MERCATOR)
-          w.xyz += normalize(w.xyz) * patchLift(w.xyz);
+          w.xyz += normalize(w.xyz) * patchLiftK(w.xyz, 0.0);
         #endif
         vWorld = w.xyz;
         #ifdef MERCATOR

@@ -71,7 +71,12 @@ export class DunePatch {
   /** River mask: rivers and streams drawn from above, white on black. */
   private capR: THREE.WebGLRenderTarget;
   private riverScene = new THREE.Scene();
-  private riverMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+  /** River mask: r 1 where water runs, g its surface height (x50), for the patch's channels. */
+  private riverMat = new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
+    vertexShader: 'varying float vH; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vH = length(w.xyz) - 1.0; gl_Position = projectionMatrix * viewMatrix * w; }',
+    fragmentShader: 'varying float vH; void main() { gl_FragColor = vec4(1.0, vH * 50.0, 0.0, 1.0); }',
+  });
   private capCam = new THREE.OrthographicCamera(-PATCH_R, PATCH_R, PATCH_R, -PATCH_R, 0.01, 0.4);
   private capScene = new THREE.Scene();
   private capMesh = new THREE.Mesh();
@@ -88,7 +93,7 @@ export class DunePatch {
     this.capB = new THREE.WebGLRenderTarget(CAPTURE, CAPTURE, opts);
     this.capC = new THREE.WebGLRenderTarget(CAPTURE, CAPTURE, opts);
     this.bake = [0, 1, 2].map(() => new THREE.WebGLRenderTarget(PATCH_N, PATCH_N, { ...opts, depthBuffer: false }));
-    this.capR = new THREE.WebGLRenderTarget(CAPTURE, CAPTURE, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
+    this.capR = new THREE.WebGLRenderTarget(CAPTURE, CAPTURE, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
     this.u = patchUniforms;
     this.u.uCapA.value = this.capA.texture;
     this.u.uCapB.value = this.capB.texture;

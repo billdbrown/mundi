@@ -191,6 +191,27 @@ const PATCH_BASE_GLSL = /* glsl */`
 export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
   uniform sampler2D uCapR;
   uniform float uRelief;
+  const float CHANNEL = 0.0003;   // river bed below the water (radians; exaggerated, like all relief)
+  /** How far the ground at uv (height h above the sea) drops for a river channel (0 or less). */
+  float channelLift(vec2 uv, float h) {
+    float t = 1.0 / ${CAPTURE_SIZE}.0;
+    vec4 c = texture(uCapR, uv);
+    // The water's height nearby: its own texel, else a ring at 2 and 4 texels (premultiplied:
+    // g is the height where r is 1, and both filter alike).
+    float sm = c.r, sg = c.g, bank = c.r;
+    for (int i = 0; i < 8; i++) {
+      float ang = float(i) * 0.785398;
+      vec2 o = vec2(cos(ang), sin(ang)) * t;
+      vec4 a = texture(uCapR, uv + o * 2.0), b = texture(uCapR, uv + o * 4.0);
+      sm += a.r + b.r * 0.5; sg += a.g + b.g * 0.5;
+      bank = max(bank, max(a.r * 0.75, b.r * 0.4));
+    }
+    if (sm < 0.02) return 0.0;
+    float wH = sg / sm / 50.0;
+    float inWater = smoothstep(0.1, 0.7, c.r);
+    float ceilH = wH + 0.00008 + 0.0005 * (1.0 - bank);   // banks rise away from the water
+    return min(0.0, mix(ceilH, wH - CHANNEL, inWater) - h);
+  }
   vec4 bake0, bake1, bake2;   // see PatchUniforms.uBake0..2
   void patchBake(vec2 lat) {
     const float R = ${PATCH_R};
@@ -252,8 +273,25 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
         }
       }
     }
-    bake0 = vec4(raw * DUNE_CELL * hk, liftEro, geo, 0.0);
-    bake1 = vec4((east * d.z + north * d.w) * hk, 0.0);
+    // River channels. The river mask holds where water runs and its surface height (dunepatch.ts
+    // riverMat). Under the water the ground drops to a bed CHANNEL below the surface; beside it,
+    // to no more than a little above the surface, rising away: a channel between low banks. The
+    // water keeps its level, so it is never buried (a river across a sideways slope was: its
+    // middle stood higher than its water).
+    float chanLift = 0.0;
+    vec3 chanG = vec3(0.0);
+    if (hAbove > 0.0002) {
+      float texel = 2.0 * R / ${CAPTURE_SIZE}.0;
+      float c0 = channelLift(capUv, hAbove);
+      vec2 uE = capUv + vec2(1.0 / ${CAPTURE_SIZE}.0, 0.0), uN = capUv + vec2(0.0, 1.0 / ${CAPTURE_SIZE}.0);
+      float cE = channelLift(uE, texture(uCapA, uE).x / 50.0);
+      float cN = channelLift(uN, texture(uCapA, uN).x / 50.0);
+      chanLift = c0 * edge;
+      // Its slope (uphill, tangent) for the normal: d(lift)/d(ground distance).
+      chanG = (east * (cE - c0) + north * (cN - c0)) / texel * edge;
+    }
+    bake0 = vec4(raw * DUNE_CELL * hk, liftEro, geo, chanLift);
+    bake1 = vec4((east * d.z + north * d.w) * hk + chanG, 0.0);
     bake2 = vec4(eroG, 0.0);
   }
 `;
@@ -274,7 +312,7 @@ export const PATCH_GLSL = PATCH_BASE_GLSL + /* glsl */`
     ivec2 ij = ivec2(gl_VertexID % ${PATCH_N}, gl_VertexID / ${PATCH_N});
     vec4 b0 = texelFetch(uBake0, ij, 0), b1 = texelFetch(uBake1, ij, 0), b2 = texelFetch(uBake2, ij, 0);
     float farDist = 1.0 - smoothstep(0.08, 0.22, length(cameraPosition - base));
-    pSurf = base + up * (b0.x + b0.y * farDist);
+    pSurf = base + up * (b0.x + b0.y * farDist + b0.w);
     // At sea the patch sinks out of the way and the plain seabed shows: its depth offset (to sit
     // in front of the terrain) made the water fail its depth test in the shallows, which drew
     // the patch's square edge across the sea.
@@ -306,13 +344,16 @@ export const LIFT_GLSL = /* glsl */`
     float ax = min(abs(x) / ${PATCH_R}, 1.0);
     return sign(x) * (-A + sqrt(A * A + 4.0 * (1.0 - A) * ax)) / (2.0 * (1.0 - A));
   }
-  float patchLift(vec3 p) {
+  float patchLiftK(vec3 p, float chan) {
     if (uPatchOn < 0.5 || dot(normalize(p), uPatchC) < 0.9) return 0.0;
     vec2 lat = vec2(dot(p, uPatchE), dot(p, uPatchN));
     if (abs(lat.x) >= ${PATCH_R} || abs(lat.y) >= ${PATCH_R}) return 0.0;
     vec2 t = vec2(gridT(lat.x), gridT(lat.y)) * 0.5 + 0.5;            // 0..1 across the grid
     vec2 uv = (t * ${PATCH_N - 1}.0 + 0.5) / ${PATCH_N}.0;           // texel centres
-    vec2 l = texture(uBake0, uv).xy;
-    return l.x + l.y * (1.0 - smoothstep(0.08, 0.22, length(cameraPosition - p)));
+    vec4 l = texture(uBake0, uv);
+    // (w: river channels and their banks, PATCH_BAKE_GLSL. The water itself keeps its level: chan 0.)
+    return l.x + l.y * (1.0 - smoothstep(0.08, 0.22, length(cameraPosition - p))) + chan * l.w;
+  }
+  float patchLift(vec3 p) { return patchLiftK(p, 1.0);
   }
 `;
