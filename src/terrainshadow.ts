@@ -230,6 +230,13 @@ export class TerrainShadow {
   private eroTex: THREE.DataTexture | null = null;
   private eroFadeStart = 0;
   private needCast = false;
+  /** TEMPORARY A/B: analytical erosion on or off (render.ts eroSwitch). */
+  setErosion(on: boolean) {
+    this.eroEnabled = on;
+    if (!on) { this.u.uEroOn.value = 0; this.eroFadeStart = 0; this.eroId++; }
+    this.heightDirty = true;
+  }
+  private eroEnabled = true;
   // Water map: rivers drawn from above, then blurred two ways (blurFragment).
   private riverRaw = new THREE.WebGLRenderTarget(512, 512, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
   private riverTmp = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
@@ -284,7 +291,7 @@ export class TerrainShadow {
 
   /** Read back the height map just captured and send it to the erosion worker. */
   private startErosion(renderer: THREE.WebGLRenderer, c: THREE.Vector3, e: THREE.Vector3, n: THREE.Vector3, r: number) {
-    if (typeof Worker === 'undefined') return;
+    if (typeof Worker === 'undefined' || !this.eroEnabled) return;
     if (this.eroBusy) { this.eroWanted = true; return; }
     this.eroBusy = true;
     this.eroWanted = false;
