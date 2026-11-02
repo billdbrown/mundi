@@ -63,6 +63,8 @@ const cases = CASES.filter((c) => !only || c.name.includes(only));
 
 for (const d of [BASE, CUR, DIFF]) fs.mkdirSync(d, { recursive: true });
 
+// Page-load limit; VISUAL_TIMEOUT (seconds) raises it when the machine is busy (shader compiles slow).
+const LOAD_MS = Number(process.env.VISUAL_TIMEOUT ?? 30) * 1000;
 const server = await createServer({ root: ROOT, logLevel: 'error', server: { host: '127.0.0.1', port: 0, strictPort: false } });
 await server.listen();
 const url = server.resolvedUrls.local[0];
@@ -78,7 +80,7 @@ try {
   page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('404')) errors.push(m.text()); });
   const openPage = async () => {
     for (let attempt = 1; ; attempt++) {
-      try { await page.goto(url); await page.waitForFunction(() => window.mundi?.world, null, { timeout: 30000 }); await page.evaluate(() => window.mundi.ready()); return; }
+      try { await page.goto(url, { timeout: LOAD_MS }); await page.waitForFunction(() => window.mundi?.world, null, { timeout: LOAD_MS }); await page.evaluate(() => window.mundi.ready()); return; }
       catch (e) { if (attempt >= 3) throw e; console.log(`load failed (${e.message.split(/\r?\n/)[0]}), retrying`); }
     }
   };
