@@ -686,6 +686,7 @@ export class PlanetView {
     this.day += dt * this.clockRate;
     const season = Math.sin((2 * Math.PI * (this.day - EQUINOX_DAY)) / YEAR_DAYS);
     this.cloudU.uSeason.value = season;
+    this.cloudU.uSeasonCos.value = Math.cos((2 * Math.PI * (this.day - EQUINOX_DAY)) / YEAR_DAYS);
     this.cloudU.uSnow.value = this.opts.mode === 'biome' ? 1 : 0;
     if (this.opts.light === 'cycle' && !this.mapMode) {
       // The sun goes round once a day, and swings north and south with the season (the tilt).

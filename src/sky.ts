@@ -22,6 +22,8 @@ export interface CloudUniforms extends DuneUniforms {
   uCloudSun: { value: THREE.Vector3 };
   /** −1..1: +1 is northern midsummer, −1 northern midwinter, 0 an equinox. */
   uSeason: { value: number };
+  /** The season's phase partner: cos where uSeason is sin (spring equinox 0, summer pi/2...). */
+  uSeasonCos: { value: number };
   /** World heat offset and vertical scale, so shaders can reproduce the generator's temperatures. */
   uHeat: { value: number };
   uRelief: { value: number };
@@ -42,7 +44,7 @@ export interface CloudUniforms extends DuneUniforms {
 
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
-    uSeason: { value: 0 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uErosion: { value: 1 }, uYear: { value: -1 },
+    uSeason: { value: 0 }, uSeasonCos: { value: 1 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uErosion: { value: 1 }, uYear: { value: -1 },
     uWeather: { value: 0 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, ...makeDuneUniforms() };
 }
 
@@ -101,7 +103,7 @@ export const NOISE_GLSL = /* glsl */`
  */
 const CLOUD_GLSL = /* glsl */`
   uniform sampler2D uCloudMap;
-  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uHeat, uRelief, uSnow, uMapDist, uWeather;
+  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uSeasonCos, uHeat, uRelief, uSnow, uMapDist, uWeather;
   uniform vec3 uCloudSun;
   uniform vec4 uStorms[8];
   /**
@@ -114,6 +116,28 @@ const CLOUD_GLSL = /* glsl */`
     return 1.0 - 1.1 * pow(lat, 1.25) - 0.55 * max(0.0, above) / uRelief + uHeat;
   }
   float seasonalTemp(vec3 n, float mean) { return mean + 0.24 * n.y * uSeason; }
+  /**
+   * Where in its own year a place is, 0..1: 0 spring equinox, 0.25 midsummer, 0.5 autumn
+   * equinox, 0.75 midwinter. The hemispheres are half a year apart.
+   */
+  float seasonPhase(vec3 n) {
+    float h = n.y >= 0.0 ? 1.0 : -1.0;
+    float a = atan(h * uSeason, h * uSeasonCos) / 6.2831853;
+    return a < 0.0 ? a + 1.0 : a;
+  }
+  /** Deciduous trees by phase: x autumn colour, y bare in winter, z fresh spring green. */
+  vec3 leafSeason(float p) {
+    float autumn = smoothstep(0.37, 0.46, p) * (1.0 - smoothstep(0.55, 0.62, p));
+    float bare = smoothstep(0.56, 0.64, p) * (1.0 - smoothstep(0.89, 0.96, p));
+    float spring = max(smoothstep(0.92, 0.99, p), 1.0 - smoothstep(0.03, 0.13, p));
+    return vec3(autumn, bare, spring);
+  }
+  /** Autumn foliage: yellow, orange or red by place, a little brighter than the green it replaces. */
+  vec3 autumnColour(vec3 c, float pick) {
+    float l = dot(c, vec3(0.3, 0.55, 0.15));
+    vec3 hue = pick < 0.4 ? vec3(1.85, 1.5, 0.35) : pick < 0.8 ? vec3(2.0, 1.05, 0.3) : vec3(1.85, 0.62, 0.3);
+    return l * hue * 1.35;
+  }
   // Own noise (distinct names), so this chunk can sit beside NOISE_GLSL in one shader.
   float cnHash(vec3 p) {
     p = fract(p * 0.3183099 + 0.1);
@@ -337,6 +361,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         float desertW = 0.0;
         vec4 duneS = vec4(0.0);   // dunes(): height, slip face, slope east, north
         float duneK = 0.0, duneRaw = 0.0;
+        float canopyK = 0.0;   // forest canopy cover here (for the seasons)
         // Erosion (erosion.ts): gullies running down the meshed slope, branching as they go.
         // eroH says how deep in a gully this is; eroGrad bends the normal (below).
         // On the dune patch the point and slope are the terrain's, before the patch's own relief,
@@ -466,6 +491,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               // Wetter forest has fewer clearings (matches the offsets in lodflora.ts).
               float closed = smoothstep(0.6, 0.72, moist) * mix(0.35, 0.5, smoothstep(0.65, 0.75, temp));
               float inGrove = mix(mix(0.45 + closed, 0.85 + closed * 0.3, broad), smoothstep(-0.35, 0.25, gv + closed), groveNear);
+              canopyK = forestW * inGrove;
               float crowns = snoise01(vCloudP * 3200.0) * 0.6 + snoise01(vCloudP * 9000.0) * 0.4;
               // Under the canopy the ground takes the trees' own colours (flora.ts), as forest looks
               // from the air: dark, bluer in the north. Past the drawn trees (plants are small, so
@@ -644,14 +670,43 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
             }
           }
         #endif
-        if (uSeason != 0.0 && hAbove > 0.0006) {
-          vec3 sn = normalize(vCloudP);
-          // Winter browns the mid-latitude vegetation of the cold hemisphere.
-          float winter = max(0.0, -sign(sn.y) * uSeason) * smoothstep(0.2, 0.55, abs(sn.y));
-          float green = clamp((diffuseColor.g - max(diffuseColor.r, diffuseColor.b)) * 6.0, 0.0, 1.0);
-          float l = dot(diffuseColor.rgb, vec3(0.3, 0.55, 0.15));
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.12, 0.98, 0.7) * l, green * winter * 0.55);
-        }
+        // Seasons on the ground: autumn colour, bare winter woods and fresh spring green in the
+        // temperate forests; golden late-summer grass at mid latitudes; green wet seasons and
+        // golden dry ones in the tropics; dormant brown in winter away from the forests.
+        #ifdef USE_CLIMATE
+          if (hAbove > 0.0004) {
+            vec3 sn = normalize(vCloudP);
+            float p = seasonPhase(sn), absLat = abs(asin(clamp(sn.y, -1.0, 1.0)));
+            float moist = vClim.x, temp = vClim.y;
+            vec3 ls = leafSeason(p);
+            float l = dot(diffuseColor.rgb, vec3(0.3, 0.55, 0.15));
+            float temperate = smoothstep(0.38, 0.5, absLat);
+            // Broadleaf forest: temperate, wet enough for trees. (Larches in the taiga turn gold.)
+            // (Only under the canopy: grass and bare hills don't turn red.)
+            float decid = smoothstep(0.3, 0.42, moist) * smoothstep(0.3, 0.36, temp) * (1.0 - smoothstep(0.58, 0.66, temp)) * temperate * canopyK;
+            float larch = smoothstep(0.3, 0.42, moist) * smoothstep(0.19, 0.23, temp) * (1.0 - smoothstep(0.28, 0.33, temp)) * temperate * 0.45 * canopyK;
+            float pick = snoise01(vCloudP * 260.0 + 13.0) * 0.7 + snoise01(vCloudP * 900.0) * 0.3;
+            float leafyK = max(decid, larch);
+            diffuseColor.rgb = mix(diffuseColor.rgb, autumnColour(diffuseColor.rgb, decid > larch ? pick : 0.1), ls.x * leafyK * 0.7);
+            diffuseColor.rgb = mix(diffuseColor.rgb, l * vec3(1.15, 0.98, 0.78) * 1.1, ls.y * decid * 0.8);
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.95, 1.2, 0.78) * 1.1, ls.z * decid * 0.7);
+            // Mid-latitude grass and steppe: green in spring, gold by late summer.
+            float grassS = smoothstep(0.1, 0.18, moist) * (1.0 - smoothstep(0.38, 0.48, moist)) * smoothstep(0.3, 0.38, temp) * temperate;
+            float gold = smoothstep(0.24, 0.36, p) * (1.0 - smoothstep(0.55, 0.7, p));
+            diffuseColor.rgb = mix(diffuseColor.rgb, l * vec3(1.35, 1.1, 0.6) * 1.15, gold * grassS * 0.6);
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.92, 1.15, 0.82), ls.z * grassS * 0.6);
+            // Winter away from the forests: dormant, browner.
+            float winter = smoothstep(0.6, 0.68, p) * (1.0 - smoothstep(0.88, 0.96, p)) * temperate * (1.0 - decid) * 0.7;
+            float green = clamp((diffuseColor.g - max(diffuseColor.r, diffuseColor.b)) * 6.0, 0.0, 1.0);
+            diffuseColor.rgb = mix(diffuseColor.rgb, l * vec3(1.12, 0.98, 0.7), green * winter * 0.5);
+            // Tropics: the rains follow the sun, so savanna and dry forest are green in the local
+            // summer and golden-brown in the dry season.
+            float trop = (1.0 - smoothstep(0.32, 0.45, absLat)) * smoothstep(0.55, 0.65, temp) * smoothstep(0.12, 0.2, moist) * (1.0 - smoothstep(0.5, 0.62, moist));
+            float dry = 0.5 - 0.5 * sin(6.2831853 * p);
+            diffuseColor.rgb = mix(diffuseColor.rgb, l * vec3(1.35, 1.08, 0.62) * 1.2, trop * smoothstep(0.45, 0.9, dry) * 0.7);
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.88, 1.15, 0.85), trop * smoothstep(0.55, 0.1, dry) * 0.5);
+          }
+        #endif
         diffuseColor.rgb *= cloudShade(vCloudP);`)
       .replace('#include <roughnessmap_fragment>', /* glsl */`#include <roughnessmap_fragment>
         roughnessFactor = mix(roughnessFactor, 0.12, poolK);`)
@@ -819,6 +874,26 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
  * With `sun`, it also darkens things past the terminator: small objects like trees have faces
  * that point at a sun below their horizon, and with no shadows those would glow at night.
  */
+/**
+ * Broadleaf trees through the year, in the temperate belt: autumn colour, bare grey-brown crowns
+ * in winter, light green in spring; and dry-season browning in the tropics. (vLeafy: 1 for
+ * broadleaf trees and scrub, from their geometry.)
+ */
+const TREE_SEASON = `
+  if (vLeafy > 0.5) {
+    vec3 tn = normalize(vCloudP);
+    float tp = seasonPhase(tn), tlat = abs(asin(clamp(tn.y, -1.0, 1.0)));
+    vec3 tls = leafSeason(tp);
+    float tw = smoothstep(0.42, 0.52, tlat) * (1.0 - smoothstep(1.0, 1.1, tlat));
+    float tpick = fract(sin(dot(floor(vCloudP * 4000.0), vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    diffuseColor.rgb = mix(diffuseColor.rgb, autumnColour(diffuseColor.rgb, tpick), tls.x * tw * 0.9);
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.2, 0.16, 0.12) * (0.8 + 0.4 * tpick), tls.y * tw * 0.85);
+    diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.95, 1.25, 0.75) * 1.15, tls.z * tw * 0.7);
+    float tdry = (0.5 - 0.5 * sin(6.2831853 * tp)) * (1.0 - smoothstep(0.32, 0.45, tlat));
+    float tl = dot(diffuseColor.rgb, vec3(0.3, 0.55, 0.15));
+    diffuseColor.rgb = mix(diffuseColor.rgb, tl * vec3(1.4, 1.1, 0.6) * 1.2, smoothstep(0.5, 0.95, tdry) * 0.55);
+  }`;
+
 export function applyCloudShadow(
   mat: THREE.Material, u: CloudUniforms, sun?: { uSunDir: { value: THREE.Vector3 } },
   fade?: { uFadeNear: { value: number }; uFadeFar: { value: number } },
@@ -836,7 +911,7 @@ export function applyCloudShadow(
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u, sun ?? {}, fade ?? {}, fade ? patchUniforms : {}, fade ? shadowUniforms : {});
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;' + (fade ? '\nuniform float uFadeNear, uFadeFar, uYear;\nattribute float cut;\n' + LIFT_GLSL : ''))
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;' + (fade ? '\nuniform float uFadeNear, uFadeFar, uYear;\nattribute float cut;\nattribute float leafy;\nvarying float vLeafy;\n' + LIFT_GLSL : ''))
       // Plants stand on the ground as the high-detail patch shapes it (dunepatch.ts).
       .replace('#include <project_vertex>', fade ? `
         vec4 mvPosition = vec4(transformed, 1.0);
@@ -851,10 +926,10 @@ export function applyCloudShadow(
         #ifdef USE_INSTANCING
           cloudP = instanceMatrix * cloudP;
         #endif
-        vCloudP = (modelMatrix * cloudP).xyz;`);
+        vCloudP = (modelMatrix * cloudP).xyz;${fade ? 'vLeafy = leafy;' : ''}`);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;\n' + CLOUD_GLSL + (sun ? 'uniform vec3 uSunDir;\n' : ''))
-      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= cloudShade(vCloudP);' +
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCloudP;\n' + CLOUD_GLSL + (sun ? 'uniform vec3 uSunDir;\n' : '') + (fade ? 'varying float vLeafy;\n' : ''))
+      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= cloudShade(vCloudP);' + (fade ? TREE_SEASON : '') +
         (sun ? '\ndiffuseColor.rgb *= mix(0.12, 1.0, smoothstep(-0.12, 0.12, dot(normalize(vCloudP), uSunDir)));' : ''));
     // Plants stand in the terrain's shadows too.
     if (fade) sh.fragmentShader = shadowLights(sh.fragmentShader.replace('#include <common>', '#include <common>\n' + SHADOW_GLSL), 'vCloudP');

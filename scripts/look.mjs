@@ -90,6 +90,7 @@ for (const spec of specs) {
   if (process.env.ERO) await page.evaluate((e) => { window.mundi.view.cloudU.uErosion.value = Number(e); }, process.env.ERO);
   if (process.env.HOUR) await page.evaluate((h) => { const v = window.mundi.view; v.setOptions({ light: 'cycle' }); v.setLocalHour(Number(h)); }, process.env.HOUR);
   if (process.env.NOSHADOW) await page.evaluate(() => { window.mundi.view.terrainShadow.update = () => { window.mundi.view.terrainShadow.u.uShOn.value = 0; }; });
+  if (process.env.DAY) await page.evaluate((d) => { window.mundi.view.day = Number(d); }, process.env.DAY);
   if (process.env.NOPATCH) await page.evaluate(() => { const p = window.mundi.view.dunePatch; p.update = () => { p.mesh.visible = false; }; });
   if (process.env.NOWATER) await page.evaluate(() => { const v = window.mundi.view; v.water.visible = false; v.applyVisibility = () => {}; });
   await page.waitForTimeout(1300);

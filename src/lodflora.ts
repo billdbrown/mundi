@@ -15,7 +15,7 @@ import * as THREE from 'three';
 import { B, landBiome } from './biomes.ts';
 import { WATER_LAND, WATER_OCEAN, type World } from './world.ts';
 import type { SurfaceData } from './surface.ts';
-import { FLORA, ICEBERG, CACTUS, ROCK, PALM, BROADLEAF, treeGeometry, treeMaterial } from './flora.ts';
+import { FLORA, ICEBERG, CACTUS, ROCK, PALM, BROADLEAF, SCRUB, treeGeometry, treeMaterial } from './flora.ts';
 import { groveField, groveFreq, forestMask, openMask, REF_SPACING } from './groves.ts';
 import { makeRng } from './rng.ts';
 import { makeSimplex, type Noise3 } from './noise.ts';
@@ -229,6 +229,9 @@ export class LodFlora {
         // Own geometry per mesh, for the per-instance 'cut' attribute.
         const geo = treeGeometry(k).clone();
         geo.setAttribute('cut', new THREE.InstancedBufferAttribute(new Float32Array(cap), 1));
+        // Broadleaf trees and scrub change with the seasons (sky.ts TREE_SEASON); conifers don't.
+        const leafy = k === BROADLEAF || k === SCRUB ? 1 : 0;
+        geo.setAttribute('leafy', new THREE.BufferAttribute(new Float32Array(geo.getAttribute('position').count).fill(leafy), 1));
         mesh = new THREE.InstancedMesh(geo, treeMaterial, cap);
         mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
         mesh.frustumCulled = false;
