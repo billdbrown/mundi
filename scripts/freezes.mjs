@@ -47,6 +47,17 @@ await page.evaluate(() => new Promise((res) => {
 await page.waitForTimeout(3000);
 await report('first descent', t0);
 
+// The Map layer (button): the map look on the globe, a rebuild with other shaders.
+if (process.env.LAYER !== '0') {
+  await reset(); t0 = Date.now();
+  await page.evaluate(() => document.querySelector('#lenses [data-lens=map]').click());
+  await page.waitForFunction(() => window.mundi.view.gateReady, null, { timeout: 240000, polling: 200 }); await page.waitForTimeout(3000);
+  await report('Map layer', t0);
+  await reset(); t0 = Date.now();
+  await page.evaluate(() => document.querySelector('#lenses [data-lens=earth]').click());
+  await page.waitForFunction(() => window.mundi.view.gateReady, null, { timeout: 240000, polling: 200 }); await page.waitForTimeout(3000);
+  await report('Earth layer', t0);
+}
 await reset(); t0 = Date.now();
 await page.evaluate(() => window.mundi.orbit(-90.6, 4.9, 2.2));
 await page.waitForTimeout(1500);

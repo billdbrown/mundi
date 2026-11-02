@@ -461,9 +461,14 @@ export class PlanetView {
   /** Visibility-only options apply at once; mesh options take effect with the next setData. */
   setOptions(o: Partial<ViewOptions>) {
     const light = o.light !== undefined && o.light !== this.opts.light;
+    const look = o.look !== undefined && o.look !== this.opts.look;
     this.opts = { ...this.opts, ...o };
     if (light) this.applyLighting();
     this.applyVisibility();
+    // A new look draws to another target (the photo look's buffer, or the screen), and three.js
+    // builds every shader again for it: done on the next frame, that froze the page for ~50 s.
+    // Through the gate instead: compiled in the background behind the stand-in.
+    if (look && this.world) this.startGate();
   }
 
   /** Follow: the sun is parented to the camera. Cycle: it lives in the scene and orbits the planet. */
@@ -892,8 +897,11 @@ export class PlanetView {
       this.virtualPos.copy(this.camera.position);
       this.applyTilt(d);
       // The patch centres on the point in the middle of the view: the untilted camera's nadir.
-      if (this.gateReady) this.dunePatch.update(this.renderer, this.virtualPos, d, this.opts.mode === 'biome' && this.opts.style === 'smooth', this.frozen === null);
+      if (this.lowReady) this.dunePatch.update(this.renderer, this.virtualPos, d, this.opts.mode === 'biome' && this.opts.style === 'smooth', this.frozen === null);
     }
+    // The patch's shaders compile in the gate's second stage: until then it isn't drawn at all
+    // (drawn early, low down after a change of look, it compiled on the spot: a 35 s freeze).
+    if (!this.lowReady) this.dunePatch.mesh.visible = this.dunePatch.heightMesh.visible = false;
 
     this.sun.getWorldPosition(this.sunDir).normalize();
     if (this.lowReady) this.terrainShadow.update(this.renderer, this.virtualPos, this.mapMode ? 99 : this.virtualPos.length(), this.sunDir, !this.mapMode);
