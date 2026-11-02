@@ -59,12 +59,32 @@ export const DUNES_GLSL = /* glsl */`
     return vec4(dot(h0 / uDuneMax, w), dot(hu - h0, w), dot(hv - h0, w), dot(h0, w));
   }
   // The tiles' wind blows toward +u. Facing west (trade winds) mirrors u.
+  /**
+   * Hex-tiling (Mikkelsen 2022), translations only (dunes must keep facing the wind): the plane is
+   * cut into a triangle grid; each corner reads the tile at its own random offset, and the three
+   * are blended by position, favouring whichever stands highest, so seams run along the dunes'
+   * own crests and troughs. A single tile, however bent, repeats visibly across a sand sea.
+   */
+  vec2 dHash2(vec2 p) { return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453); }
+  vec4 duneHex(vec2 uv, vec4 w) {
+    vec2 sk = mat2(1.0, 0.0, -0.57735027, 1.15470054) * (uv * 1.1);
+    vec2 base = floor(sk);
+    vec3 f = vec3(fract(sk), 0.0);
+    f.z = 1.0 - f.x - f.y;
+    vec3 bw; vec2 v1, v2, v3;
+    if (f.z > 0.0) { bw = vec3(f.z, f.y, f.x); v1 = base; v2 = base + vec2(0.0, 1.0); v3 = base + vec2(1.0, 0.0); }
+    else { bw = vec3(-f.z, 1.0 - f.y, 1.0 - f.x); v1 = base + 1.0; v2 = base + vec2(1.0, 0.0); v3 = base + vec2(0.0, 1.0); }
+    vec4 a = duneTap(uv + dHash2(v1), w), b = duneTap(uv + dHash2(v2), w), c = duneTap(uv + dHash2(v3), w);
+    vec3 k = pow(bw, vec3(9.0)) * pow(vec3(a.w, b.w, c.w) + 0.2, vec3(2.0));
+    k /= max(k.x + k.y + k.z, 1e-6);
+    return a * k.x + b * k.y + c * k.z;
+  }
   vec4 duneFacing(vec2 g, vec4 w, float west) {
     vec2 uv = g / DUNE_TILE;
-    vec4 a = duneTap(vec2(-uv.x, uv.y), w);
+    vec4 a = duneHex(vec2(-uv.x, uv.y), w);
     a.y = -a.y;
     if (west > 0.999) return a;
-    vec4 b = duneTap(uv, w);
+    vec4 b = duneHex(uv, w);
     return mix(b, a, west);
   }
   /**
