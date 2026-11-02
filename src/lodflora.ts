@@ -90,10 +90,6 @@ export class LodFlora {
     this.forget();
   }
 
-  /** Richer planting (FLORA_RICH, coastal palms, forest edges): the P switch. */
-  private rich = false;
-  setRich(on: boolean) { this.rich = on; this.forget(); }
-  getRich() { return this.rich; }
 
   /** Plant size relative to the original (1); density and radius follow (see the top). */
   setScale(s: number) {
@@ -383,11 +379,11 @@ export class LodFlora {
       const mountain = w.biome[c] === B.MOUNTAIN || w.biome[c] === B.PEAK;
       const b = mountain ? landBiome(w.temperature[c], w.moisture[c], 0) : w.biome[c];
       type Spec = NonNullable<(typeof FLORA)[number]>;
-      const table = this.rich ? FLORA_RICH : FLORA;
+      const table = FLORA_RICH;
       let spec: Spec | undefined = mountain
         ? [...(table[b] ?? []).map(([k, col, d, sz]): Spec[number] => [k, col, d * 0.6, sz]), ...(FLORA[B.MOUNTAIN] ?? []).filter(([k]) => k === ROCK)]
         : table[b];
-      if (this.rich && spec && OPEN.has(b)) {
+      if (spec && OPEN.has(b)) {
         // Forest edges thin out instead of stopping: trees of a neighbouring forest stray into
         // open country next to it.
         const fn = g.neighbors[c].find((n) => FOREST.has(w.biome[n]) && w.water[n] === WATER_LAND);
@@ -428,8 +424,8 @@ export class LodFlora {
           }
         }
       }
-      // Palms along warm coasts (the P switch): near the shore, on low ground.
-      if (this.rich && w.temperature[c] > 0.66 && w.moisture[c] > 0.18 && g.neighbors[c].some((n) => w.water[n] === WATER_OCEAN)) {
+      // Palms along warm coasts: near the shore, on low ground.
+      if (w.temperature[c] > 0.66 && w.moisture[c] > 0.18 && g.neighbors[c].some((n) => w.water[n] === WATER_OCEAN)) {
         const n = count(10 * DENSITY * area);
         for (let i = 0; i < n; i++) {
           const pt = this.randomPoint(t, rng, false);

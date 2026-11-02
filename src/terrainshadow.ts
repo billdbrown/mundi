@@ -297,7 +297,7 @@ export class TerrainShadow {
   private layerKey: string[] = new Array(LAYERS).fill('');
   private layerFade: number[] = new Array(LAYERS).fill(0);
   private wanted: string[] = [];
-  /** Analytical erosion on or off (trial E). */
+  /** Analytical erosion on or off (parked: off). */
   setErosion(on: boolean) {
     this.eroEnabled = on;
     if (!on) { this.u.uEroOn.value = 0; this.eroFadeStart = 0; }
@@ -305,8 +305,9 @@ export class TerrainShadow {
     this.heightDirty = true;
   }
   /**
-   * Off by default: the trial E switch. (The view-centred regions before it, parked 2026-11-02,
-   * changed visibly as the view moved; tiles fixed to the planet are the fix being tried.)
+   * PARKED again (2026-11-02): world-fixed tiles fixed the jitter on a round trip, but Bill still
+   * saw valleys disappear and reappear as he moved (tiles arriving, being evicted, the altitude
+   * fade). setErosion(true) brings them back. Nothing runs while off.
    */
   private eroEnabled = false;
   // Water map: rivers drawn from above, then blurred two ways (blurFragment).

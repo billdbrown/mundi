@@ -36,13 +36,10 @@ export interface CloudUniforms extends DuneUniforms {
   /** Erosion filter strength, 0..1 (erosion.ts). */
   uErosion: { value: number };
   /**
-   * Trial R: regional rock (uGeo 0/1) and volcanoes (uVolc: direction xyz, radius w; w 0 unused),
+   * Volcanoes (uVolc: direction xyz, radius w; w 0 unused),
    * which darken the ground round them with lava and ash.
    */
-  uGeo: { value: number };
   uVolc: { value: THREE.Vector4[] };
-  /** Trial L (0/1): relief too fine to draw still shadows itself (see leanShadow). */
-  uLean: { value: number };
   /** Centuries: the year shown (−1: no civilisation drawn). */
   uYear: { value: number };
   /** Weather time in days, and the active storms (weather.ts). */
@@ -52,7 +49,7 @@ export interface CloudUniforms extends DuneUniforms {
 
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
-    uSeason: { value: 0 }, uSeasonCos: { value: 1 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uErosion: { value: 1 }, uGeo: { value: 0 }, uLean: { value: 0 }, uVolc: { value: Array.from({ length: 24 }, () => new THREE.Vector4()) }, uYear: { value: -1 },
+    uSeason: { value: 0 }, uSeasonCos: { value: 1 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uErosion: { value: 1 }, uVolc: { value: Array.from({ length: 24 }, () => new THREE.Vector4()) }, uYear: { value: -1 },
     uWeather: { value: 0 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, ...makeDuneUniforms() };
 }
 
@@ -324,14 +321,12 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         // --- Ground patterns, by climate. Each fades out once its features get smaller than a
         // few pixels (fwidth), so it adds detail up close without shimmering from orbit.
         // (aaFade, which fades patterns out below a few pixels, is in erosion.ts.)
-        // Trial R. Rock by region: a broad 'geology' field picks red sandstone, dark basalt, pale
+        // Rock by region: a broad 'geology' field picks red sandstone, dark basalt, pale
         // limestone or grey granite, with mottling, wherever bare rock shows (rock faces, desert
-        // plateaus, cliffs). Off (uGeo 0): the old uniform grey-brown.
-        uniform float uGeo;
+        // plateaus, cliffs).
         uniform vec4 uVolc[24];
-        uniform float uLean;
         /**
-         * Trial L. Relief below the pixel still shadows itself. When gully octaves fade out (too
+         * Relief below the pixel still shadows itself. When gully octaves fade out (too
          * fine to draw) their slopes are lost from the normal, and the ground lights like a
          * polished surface. As in LEAN mapping, keep their statistics instead: the variance of
          * the slopes not drawn (s2, per axis), and light the pixel by the fraction of that rough
@@ -345,7 +340,6 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           return a >= 1.6 ? 1.0 : (3.535 * a + 2.181 * a * a) / (1.0 + 2.276 * a + 2.577 * a * a);
         }
         vec3 geoRock(vec3 p, vec3 fallback) {
-          if (uGeo < 0.5) return fallback;
           float a = snoise(p * 7.0 + 31.0) + 0.4 * snoise(p * 19.0 + 7.0);
           float b = snoise(p * 6.0 + 77.0) + 0.4 * snoise(p * 17.0 + 3.0);
           vec3 sandstone = vec3(0.46, 0.25, 0.15), basalt = vec3(0.13, 0.12, 0.12);
@@ -356,7 +350,6 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         }
         /** Near a volcano: 0..1 (1 at the cone), for dark lava and ash on the ground round it. */
         float volcanic(vec3 p) {
-          if (uGeo < 0.5) return 0.0;
           vec3 n = normalize(p);
           float k = 0.0;
           for (int i = 0; i < 24; i++) {
@@ -495,7 +488,10 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               vec3 base = diffuseColor.rgb;
               vec3 reg = base * vec3(1.03, 1.0, 0.95) * 1.04;
               vec3 erg = base * vec3(1.08, 0.97, 0.84);
-              vec3 rock = geoRock(vCloudP, base * vec3(0.62, 0.5, 0.42) * (0.9 + 0.2 * snoise(vCloudP * 220.0)));
+              // Desert pavement keeps the desert's own colour; regional rock only tints it (at full
+              // strength whole deserts went grey).
+              vec3 rock0 = base * vec3(0.62, 0.5, 0.42) * (0.9 + 0.2 * snoise(vCloudP * 220.0));
+              vec3 rock = mix(rock0, geoRock(vCloudP, rock0), 0.25);
               vec3 surf = mix(reg, erg, seaMask);
               surf = mix(surf, rock, hamada);
               diffuseColor.rgb = mix(base, surf, aridW);
@@ -683,7 +679,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           float vfloor = smoothstep(0.0002, 0.0018, carveS.x) * smoothstep(5.0, 9.0, carveS.y) * carveW;
           diffuseColor.rgb *= mix(vec3(1.0), mix(vec3(0.88, 0.93, 0.84), vec3(0.7, 0.82, 0.6), dryC), vfloor * 0.6);
         }
-        // Trial R: dark lava flows and ash round volcanoes.
+        // Dark lava flows and ash round volcanoes.
         {
           float vk = hAbove > 0.0 ? volcanic(vCloudP) : 0.0;
           if (vk > 0.0) diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.09, 0.085, 0.08) * (0.8 + 0.4 * snoise01(vCloudP * 1500.0)), vk * 0.85);
@@ -841,11 +837,11 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           float amp = (1.0 + 3.0 * highland) * farFade * (1.0 - 0.6 * iceK) * (1.0 - 0.7 * carveW);
           normal = normalize(normal - TOVIEW(grad * amp));
         }
-        // Trial L: shadowing by the relief not drawn here (leanShadow). The gullies' strength
+        // Shadowing by the relief not drawn here (leanShadow). The gullies' strength
         // where they would be (rug: the ground's slope, as eroK, plus the rolling hills), less
         // what is drawn; the octaves too fine for this pixel count in full.
         #ifndef MERCATOR
-          if (uLean > 0.5 && hAbove > 0.0001) {
+          if (hAbove > 0.0001) {
             vec3 lup = normalize(vCloudP);
             vec3 lN = normalize((vec4(normalize(normal), 0.0) * viewMatrix).xyz);
             vec3 gN = normalize((vec4(geoN, 0.0) * viewMatrix).xyz);

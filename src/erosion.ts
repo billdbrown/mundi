@@ -131,7 +131,7 @@ export const EROSION_GLSL = /* glsl */`
     Ero e = erosionSplit(p, up, macro, foot, 0.0);
     return vec4(e.h, e.shade);
   }
-  /** Slope variance (per axis) of the octaves too fine to draw at footprint foot (trial L). */
+  /** Slope variance (per axis) of the octaves too fine to draw at footprint foot (leanShadow, sky.ts). */
   float eroLostVar(float foot) {
     float v = 0.0, lambda = ERO_L0, amp = 1.0;
     for (int i = 0; i < ERO_OCT; i++) {

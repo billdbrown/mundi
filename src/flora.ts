@@ -5,7 +5,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { B } from './biomes.ts';
 
 export const CONIFER = 0, BROADLEAF = 1, SCRUB = 2, PALM = 3, ROCK = 4, CACTUS = 5, ICEBERG = 6;
-/** Richer plant life (the P switch): savanna acacias, birches, low tufts of grass and shrub. */
+/** Savanna acacias, birches, low tufts of grass and shrub. */
 export const ACACIA = 7, BIRCH = 8, TUFT = 9;
 export type TreeKind = typeof CONIFER | typeof BROADLEAF | typeof SCRUB | typeof PALM | typeof ROCK | typeof CACTUS | typeof ICEBERG
   | typeof ACACIA | typeof BIRCH | typeof TUFT;
@@ -63,7 +63,7 @@ export const FLORA: Partial<Record<number, [TreeKind, number, number, number?][]
 };
 
 /**
- * Richer planting (the P switch): flat-topped acacias across savanna and dry forest, birches
+ * Richer planting (locked in 2026-11-02): flat-topped acacias across savanna and dry forest, birches
  * among the conifers and at the forest's edge, tussocks of grass and low shrub over open
  * country and tundra. (Palms on tropical coasts and trees spilling out of forests into open
  * country are placed in lodflora.ts.)
