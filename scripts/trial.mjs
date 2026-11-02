@@ -1,7 +1,7 @@
 /**
  * Screenshot pairs with a trial switch (render.ts trials) off and on: same page, same framing.
  *
- *   node scripts/trial.mjs <outdir> <key> name=seed:bBIOME[+BIOME]:alt ...
+ *   node scripts/trial.mjs <outdir> <key> name=seed:bBIOME[+BIOME]:alt ...   (or volcN: the Nth volcano)
  */
 import { chromium } from 'playwright-core';
 const [out, key, ...shots] = process.argv.slice(2);
@@ -14,6 +14,7 @@ for (const spec of shots) {
   await page.evaluate(async (s) => { const m = window.mundi; await m.load('seed=' + s, { look: 'photo', grid: false, clouds: false }); m.capture(true); await m.view.whenReady(); }, seed);
   await page.evaluate(([t, a]) => {
     const m = window.mundi, w = m.world, P = w.grid.centers;
+    if (t.startsWith('volc')) { const v = m.view.cloudU.uVolc.value[Number(t.slice(4) || 0)]; m.orbit(Math.atan2(v.x, v.z) * 57.2958, Math.asin(v.y) * 57.2958, Number(a)); return; }
     const bs = t.slice(1).split('+').map(Number);
     let best = -1, bd = -1;
     for (let c = 0; c < w.grid.count; c++) { if (!bs.includes(w.biome[c])) continue; let n = 0; for (const nb of w.grid.neighbors[c]) if (bs.includes(w.biome[nb])) n++; if (n > bd) { bd = n; best = c; } }

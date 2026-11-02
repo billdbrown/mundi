@@ -192,6 +192,7 @@ export class PlanetView {
    */
   private trials: { key: string; name: string; on: boolean; set: (on: boolean) => void }[] = [
     { key: 'p', name: 'Plants', on: false, set: (on) => this.flora.setRich(on) },
+    { key: 'r', name: 'Rock & lava fields', on: false, set: (on) => { this.cloudU.uGeo.value = on ? 1 : 0; } },
   ];
   private trialSwitches() {
     const label = document.createElement('div');
@@ -213,6 +214,41 @@ export class PlanetView {
       const t = this.trials.find((x) => x.key === e.key.toLowerCase());
       if (!t) return;
       t.on = !t.on; t.set(t.on); show();
+    });
+  }
+  /**
+   * Trial R: volcanoes. Arc volcanoes on high ground near the coast (where an ocean plate dives
+   * under a continent: the Andes, the Cascades), and the odd volcanic island; spaced apart,
+   * chosen by a hash so a world always has the same ones. The terrain shader lays dark lava and
+   * ash on the ground round each (uVolc). (A cone mesh on top was tried and dropped: a separate
+   * mesh can't blend into the terrain, so it floated or poked through; a real cone needs the
+   * terrain itself raised.)
+   */
+  private buildVolcanoes(w: World) {
+    const g = w.grid, N = g.count, P = g.centers, spacing = Math.sqrt((4 * Math.PI) / N);
+    const coast = new Int32Array(N).fill(-1), q: number[] = [];
+    for (let c = 0; c < N; c++) if (w.water[c] === WATER_OCEAN) { coast[c] = 0; q.push(c); }
+    for (let i = 0; i < q.length; i++) for (const n of g.neighbors[q[i]]) if (coast[n] < 0) { coast[n] = coast[q[i]] + 1; q.push(n); }
+    const cand: [number, number][] = [];
+    for (let c = 0; c < N; c++) {
+      if (w.water[c] !== WATER_LAND || w.temperature[c] < 0.05) continue;
+      const seaN = g.neighbors[c].filter((n) => w.water[n] === WATER_OCEAN).length;
+      const h = hash01(w.params.seed * 977 + c);
+      if (w.elevation[c] > 0.45 && coast[c] <= 4) cand.push([c, w.elevation[c] * (0.5 + h)]);           // arc
+      else if (seaN >= 4 && w.elevation[c] > 0.05 && h > 0.6) cand.push([c, 0.3 * h]);                     // island
+    }
+    cand.sort((a, b) => b[1] - a[1]);
+    const chosen: number[] = [], minCos = Math.cos(spacing * 7);
+    for (const [c] of cand) {
+      if (chosen.length >= 24) break;
+      if (chosen.some((k) => P[k * 3] * P[c * 3] + P[k * 3 + 1] * P[c * 3 + 1] + P[k * 3 + 2] * P[c * 3 + 2] > minCos)) continue;
+      chosen.push(c);
+    }
+    const U = this.cloudU.uVolc.value;
+    for (const v of U) v.set(0, 0, 0, 0);
+    if (!chosen.length) return;
+    chosen.forEach((c, i) => {
+      U[i].set(P[c * 3], P[c * 3 + 1], P[c * 3 + 2], spacing * (0.16 + 0.08 * hash01(c * 31 + 5)));
     });
   }
   /** A small notice while a switch to the map waits for its shaders. */
@@ -1035,6 +1071,7 @@ export class PlanetView {
     this.planet.add(this.gridLines);
 
     this.buildRivers(w, s, P, C);
+    this.buildVolcanoes(w);
     this.buildSites();
     this.buildCiv();
     if (this.mapMode) setMercator(this.planet, true);

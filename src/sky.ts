@@ -35,6 +35,12 @@ export interface CloudUniforms extends DuneUniforms {
   uGrove: { value: number };
   /** Erosion filter strength, 0..1 (erosion.ts). */
   uErosion: { value: number };
+  /**
+   * Trial R: regional rock (uGeo 0/1) and volcanoes (uVolc: direction xyz, radius w; w 0 unused),
+   * which darken the ground round them with lava and ash.
+   */
+  uGeo: { value: number };
+  uVolc: { value: THREE.Vector4[] };
   /** Centuries: the year shown (−1: no civilisation drawn). */
   uYear: { value: number };
   /** Weather time in days, and the active storms (weather.ts). */
@@ -44,7 +50,7 @@ export interface CloudUniforms extends DuneUniforms {
 
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
-    uSeason: { value: 0 }, uSeasonCos: { value: 1 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uErosion: { value: 1 }, uYear: { value: -1 },
+    uSeason: { value: 0 }, uSeasonCos: { value: 1 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uErosion: { value: 1 }, uGeo: { value: 0 }, uVolc: { value: Array.from({ length: 24 }, () => new THREE.Vector4()) }, uYear: { value: -1 },
     uWeather: { value: 0 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, ...makeDuneUniforms() };
 }
 
@@ -316,6 +322,35 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         // --- Ground patterns, by climate. Each fades out once its features get smaller than a
         // few pixels (fwidth), so it adds detail up close without shimmering from orbit.
         // (aaFade, which fades patterns out below a few pixels, is in erosion.ts.)
+        // Trial R. Rock by region: a broad 'geology' field picks red sandstone, dark basalt, pale
+        // limestone or grey granite, with mottling, wherever bare rock shows (rock faces, desert
+        // plateaus, cliffs). Off (uGeo 0): the old uniform grey-brown.
+        uniform float uGeo;
+        uniform vec4 uVolc[24];
+        vec3 geoRock(vec3 p, vec3 fallback) {
+          if (uGeo < 0.5) return fallback;
+          float a = snoise(p * 7.0 + 31.0) + 0.4 * snoise(p * 19.0 + 7.0);
+          float b = snoise(p * 6.0 + 77.0) + 0.4 * snoise(p * 17.0 + 3.0);
+          vec3 sandstone = vec3(0.46, 0.25, 0.15), basalt = vec3(0.13, 0.12, 0.12);
+          vec3 limestone = vec3(0.6, 0.57, 0.5), granite = vec3(0.4, 0.37, 0.36);
+          vec3 c = mix(mix(granite, sandstone, smoothstep(0.0, 0.5, a)), mix(limestone, basalt, smoothstep(0.0, 0.5, a)), smoothstep(-0.1, 0.4, b));
+          float mott = 0.85 + 0.3 * snoise01(p * 900.0);
+          return mix(fallback, c * mott, 0.85);
+        }
+        /** Near a volcano: 0..1 (1 at the cone), for dark lava and ash on the ground round it. */
+        float volcanic(vec3 p) {
+          if (uGeo < 0.5) return 0.0;
+          vec3 n = normalize(p);
+          float k = 0.0;
+          for (int i = 0; i < 24; i++) {
+            vec4 v = uVolc[i];
+            if (v.w <= 0.0) break;
+            float d = acos(clamp(dot(n, v.xyz), -1.0, 1.0)) / v.w;
+            float flows = 0.75 + 0.5 * snoise(p * 300.0 + float(i) * 7.0);
+            k = max(k, 1.0 - smoothstep(0.6, 2.6 * flows, d));
+          }
+          return k;
+        }
         vec3 hash3(vec3 p) {
           p = vec3(dot(p, vec3(127.1, 311.7, 74.7)), dot(p, vec3(269.5, 183.3, 246.1)), dot(p, vec3(113.5, 271.9, 124.6)));
           return fract(sin(p) * 43758.5453);
@@ -443,7 +478,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               vec3 base = diffuseColor.rgb;
               vec3 reg = base * vec3(1.03, 1.0, 0.95) * 1.04;
               vec3 erg = base * vec3(1.08, 0.97, 0.84);
-              vec3 rock = base * vec3(0.62, 0.5, 0.42) * (0.9 + 0.2 * snoise(vCloudP * 220.0));
+              vec3 rock = geoRock(vCloudP, base * vec3(0.62, 0.5, 0.42) * (0.9 + 0.2 * snoise(vCloudP * 220.0)));
               vec3 surf = mix(reg, erg, seaMask);
               surf = mix(surf, rock, hamada);
               diffuseColor.rgb = mix(base, surf, aridW);
@@ -598,7 +633,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
                 float km = 0.0005 / (2.0 * uShR);   // ~3 km in uv
                 float hIn = texture(uShH, uv + inland * km * 2.0).r / 50.0;
                 float cliff = smoothstep(0.0016, 0.0035, hIn + 0.0006 * snoise(vCloudP * 200.0));
-                vec3 rockC = vec3(0.3, 0.28, 0.25) * (0.85 + 0.3 * snoise01(vCloudP * 2400.0));
+                vec3 rockC = geoRock(vCloudP, vec3(0.3, 0.28, 0.25) * (0.85 + 0.3 * snoise01(vCloudP * 2400.0)));
                 vec3 sand = vec3(0.69, 0.58, 0.33);
                 diffuseColor.rgb = mix(diffuseColor.rgb, mix(sand, rockC, cliff), shore * mix(0.75 * warmB, 0.85, cliff));
               }
@@ -630,6 +665,11 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           #endif
           float vfloor = smoothstep(0.0002, 0.0018, carveS.x) * smoothstep(5.0, 9.0, carveS.y) * carveW;
           diffuseColor.rgb *= mix(vec3(1.0), mix(vec3(0.88, 0.93, 0.84), vec3(0.7, 0.82, 0.6), dryC), vfloor * 0.6);
+        }
+        // Trial R: dark lava flows and ash round volcanoes.
+        {
+          float vk = hAbove > 0.0 ? volcanic(vCloudP) : 0.0;
+          if (vk > 0.0) diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.09, 0.085, 0.08) * (0.8 + 0.4 * snoise01(vCloudP * 1500.0)), vk * 0.85);
         }
         // Centuries: farmland (a patchwork of fields with hedges) and towns (blocks and streets),
         // each from the year the history says it reached this spot.
@@ -795,7 +835,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           #endif
           float hiK = smoothstep(0.15, 0.55, hAbove / uRelief);
           float rockK = smoothstep(0.16, 0.34, rslope + 0.08 * hiK) * smoothstep(0.1, 0.35, hAbove / uRelief);
-          vec3 rock = vec3(0.30, 0.28, 0.25) * (0.85 + 0.3 * rn);
+          vec3 rock = geoRock(vCloudP, vec3(0.30, 0.28, 0.25) * (0.85 + 0.3 * rn));
           diffuseColor.rgb = mix(diffuseColor.rgb, rock, clamp(rockK * (0.55 + 0.45 * hiK), 0.0, 0.9));
         }
         // Snow, per pixel: where it is cold enough for the height, latitude and season. Done
