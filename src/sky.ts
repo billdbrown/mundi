@@ -53,6 +53,30 @@ export function makeCloudUniforms(): CloudUniforms {
     uWeather: { value: 0 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, ...makeDuneUniforms() };
 }
 
+/**
+ * Simplex noise's 49 corner gradients, as Ashima's snoise works them out from its hash (the
+ * hash mod 49 picks one), already normalised as it normalises them. The terrain shader inlines
+ * snoise over a hundred times, and that working was a large share of its compile time (tens of
+ * seconds on Windows); a table gives the same numbers.
+ */
+const SN_GRAD = (() => {
+  const f = Math.fround, out: string[] = [];
+  for (let j = 0; j < 49; j++) {
+    const xi = Math.floor(j / 7), yi = j - 7 * xi;
+    // In 32-bit floats step by step, dividing as the GPU does (times 1/7): four gradients have h
+    // within a rounding of 0, and which side of it they fall picks the gradient. (Read back from
+    // the GPU under Windows/D3D11: 3 and 21 land above, 34 and 46 below. Other GPUs may differ,
+    // as they always did with the original working.)
+    const r7 = f(1 / 7);
+    const x = f(f(f(xi * 2 + 0.5) * r7) - 1), y = f(f(f(yi * 2 + 0.5) * r7) - 1), h = f(f(1 - Math.abs(x)) - Math.abs(y));
+    const sh = h <= 0 ? -1 : 0;
+    const g = [x + (Math.floor(x) * 2 + 1) * sh, y + (Math.floor(y) * 2 + 1) * sh, h];
+    const n = 1.79284291400159 - 0.85373472095314 * (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+    out.push(`vec3(${g.map((v) => (v * n).toFixed(9)).join(', ')})`);
+  }
+  return out.join(', ');
+})();
+
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
 export const NOISE_GLSL = /* glsl */`
   float hash(vec3 p) {
@@ -72,7 +96,7 @@ export const NOISE_GLSL = /* glsl */`
   // 3D simplex noise (Ashima Arts / Stefan Gustavson, MIT), about −1..1. Unlike the value noise
   // above it has no grid to show once thresholded, so the ground patterns use it.
   vec4 snPermute(vec4 x) { return mod(((x * 34.0) + 10.0) * x, 289.0); }
-  vec4 snTaylor(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+  const vec3 SN_GRAD[49] = vec3[](${SN_GRAD});
   float snoise(vec3 v) {
     const vec2 C = vec2(1.0 / 6.0, 1.0 / 3.0);
     vec3 i = floor(v + dot(v, C.yyy));
@@ -82,16 +106,9 @@ export const NOISE_GLSL = /* glsl */`
     vec3 x1 = x0 - i1 + C.xxx, x2 = x0 - i2 + C.yyy, x3 = x0 - 0.5;
     i = mod(i, 289.0);
     vec4 p = snPermute(snPermute(snPermute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0));
-    vec4 j = p - 49.0 * floor(p / 49.0);
-    vec4 x_ = floor(j / 7.0), y_ = floor(j - 7.0 * x_);
-    vec4 x = (x_ * 2.0 + 0.5) / 7.0 - 1.0, y = (y_ * 2.0 + 0.5) / 7.0 - 1.0;
-    vec4 h = 1.0 - abs(x) - abs(y);
-    vec4 b0 = vec4(x.xy, y.xy), b1 = vec4(x.zw, y.zw);
-    vec4 s0 = floor(b0) * 2.0 + 1.0, s1 = floor(b1) * 2.0 + 1.0, sh = -step(h, vec4(0.0));
-    vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy, a1 = b1.xzyw + s1.xzyw * sh.zzww;
-    vec3 g0 = vec3(a0.xy, h.x), g1 = vec3(a0.zw, h.y), g2 = vec3(a1.xy, h.z), g3 = vec3(a1.zw, h.w);
-    vec4 norm = snTaylor(vec4(dot(g0, g0), dot(g1, g1), dot(g2, g2), dot(g3, g3)));
-    g0 *= norm.x; g1 *= norm.y; g2 *= norm.z; g3 *= norm.w;
+    // The corner gradients: 49 possible, from a table (SN_GRAD) instead of worked out here.
+    ivec4 j = ivec4(p - 49.0 * floor(p / 49.0) + 0.5);
+    vec3 g0 = SN_GRAD[j.x], g1 = SN_GRAD[j.y], g2 = SN_GRAD[j.z], g3 = SN_GRAD[j.w];
     vec4 m = max(0.5 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
     m = m * m;
     return 105.0 * dot(m * m, vec4(dot(g0, x0), dot(g1, x1), dot(g2, x2), dot(g3, x3)));

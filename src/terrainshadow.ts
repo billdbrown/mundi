@@ -55,7 +55,16 @@ const LAYERS = 16;
  * overlap (half-width = pitch) and blend by weights that depend only on where p is, so what is
  * shown never depends on where the view is; only a tile arriving changes anything, once.
  */
-const ERO_GLSL = /* glsl */`
+/**
+ * Whether the tiles' shader code is built at all. Parked, it is a stub: the loop over 16 texture
+ * layers, unused, still cost every terrain shader compile time (it is called three times there).
+ * Turn this on with setErosion(true) to bring the valleys back.
+ */
+const ERO_TILES = false;
+const ERO_GLSL = !ERO_TILES ? /* glsl */`
+  uniform float uEroR, uEroOn;
+  vec3 groundCarve(vec3 p) { return vec3(0.0); }
+` : /* glsl */`
   uniform highp sampler2DArray uEroTiles;
   uniform vec3 uTileC[${LAYERS}], uTileE[${LAYERS}], uTileN[${LAYERS}];
   uniform float uTileW[${LAYERS}];

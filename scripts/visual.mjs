@@ -80,7 +80,12 @@ try {
   page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('404')) errors.push(m.text()); });
   const openPage = async () => {
     for (let attempt = 1; ; attempt++) {
-      try { await page.goto(url, { timeout: LOAD_MS }); await page.waitForFunction(() => window.mundi?.world, null, { timeout: LOAD_MS }); await page.evaluate(() => window.mundi.ready()); return; }
+      try { await page.goto(url, { timeout: LOAD_MS }); await page.waitForFunction(() => window.mundi?.world, null, { timeout: LOAD_MS }); await page.evaluate(async () => {
+        await window.mundi.ready(); await window.mundi.view.whenReady();
+        // Every look's shaders before the first case (the background compile, hurried).
+        const v = window.mundi.view; v.hurryCompiles();
+        await new Promise((res) => { const c = () => (v.otherLookReady ? res() : setTimeout(c, 200)); c(); });
+      }); return; }
       catch (e) { if (attempt >= 3) throw e; console.log(`load failed (${e.message.split(/\r?\n/)[0]}), retrying`); }
     }
   };

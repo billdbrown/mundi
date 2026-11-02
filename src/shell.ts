@@ -6,7 +6,7 @@
  * corner with legends for the data lenses; an almanac card describing the planet; the clock.
  * (A minimal variant without the almanac was tried side by side and dropped, 2026-10-31.)
  */
-import type { PlanetView, ViewOptions } from './render.ts';
+import type { PlanetView, Quality, ViewOptions } from './render.ts';
 import { baseOf } from './ecology.ts';
 import type { World, WorldParams } from './world.ts';
 import { DEFAULT_PARAMS, WATER_LAKE, WATER_OCEAN } from './world.ts';
@@ -170,6 +170,7 @@ export function mountShell(app: App) {
       <button data-proj="flat" title="The whole planet laid flat (Mercator projection)"><span class="ico">▭</span> Flat map</button>
       <i class="sep"></i>
       <button id="clouds-toggle" class="on" title="Show or hide the clouds"><span class="ico">☁</span> Clouds</button>
+      <button id="quality" title=""><span class="ico">◈</span> <span id="quality-lbl"></span></button>
     </div>
     <div class="hint" id="hint">Drag to spin · scroll to dive · hover a place</div>
     <div class="toast" id="toast" hidden></div>
@@ -228,6 +229,9 @@ export function mountShell(app: App) {
     if (lg) { $('legend-lo').textContent = lg[0]; $('legend-hi').textContent = lg[1]; $('legend-bar').style.background = lg[2]; }
   };
   root.querySelectorAll<HTMLButtonElement>('#lenses [data-lens]').forEach((b) => { b.onclick = () => applyLens(b.dataset.lens as Lens); });
+  // A hand on the layers or the globe/flat switch: a switch looks likely, so the background
+  // shader compiles stop waiting for the view to rest (PlanetView.hurryCompiles).
+  for (const id of ['lenses', 'proj']) $(id).addEventListener('pointerenter', () => r.hurryCompiles());
   syncLensToggle();
   const syncCloudButton = () => $('clouds-toggle').classList.toggle('on', cloudsOn);
   $('clouds-toggle').onclick = () => {
@@ -237,6 +241,27 @@ export function mountShell(app: App) {
     applyLens(app.lens());
   };
   syncCloudButton();
+  // Quality: a standing preference for this device. Auto lowers the resolution when frames run
+  // slow; Fast keeps it low; Sharp never lowers it.
+  const QUALITY: { id: Quality; label: string; title: string }[] = [
+    { id: 'auto', label: 'Auto', title: 'Quality: automatic. Lowers the resolution when frames run slow. Click for Fast' },
+    { id: 'fast', label: 'Fast', title: 'Quality: fast. Low resolution, for slower computers. Click for Sharp' },
+    { id: 'sharp', label: 'Sharp', title: 'Quality: sharp. Full resolution always, however slow. Click for Auto' },
+  ];
+  let quality = (QUALITY.find((q) => q.id === pref('mundi-quality')) ?? QUALITY[0]).id;
+  const syncQuality = () => {
+    const q = QUALITY.find((x) => x.id === quality)!;
+    $('quality-lbl').textContent = q.label;
+    $('quality').title = q.title;
+    $('quality').classList.toggle('on', quality !== 'auto');
+    r.setQuality(quality);
+  };
+  $('quality').onclick = () => {
+    quality = QUALITY[(QUALITY.findIndex((q) => q.id === quality) + 1) % QUALITY.length].id;
+    setPref('mundi-quality', quality);
+    syncQuality();
+  };
+  syncQuality();
 
   // --- New world menu: a kind of world (fresh seed), or a custom one ---
   const openMenu = (on: boolean) => {

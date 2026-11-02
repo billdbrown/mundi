@@ -29,6 +29,9 @@ import type { ViewMode, TerrainStyle } from './colors.ts';
 
 export type { ViewMode, TerrainStyle };
 
+/** Render quality, a per-device setting (PlanetView.setQuality). */
+export type Quality = 'auto' | 'sharp' | 'fast';
+
 export interface ViewOptions {
   mode: ViewMode;
   style: TerrainStyle;
@@ -258,6 +261,7 @@ export class PlanetView {
     // One object per task: setting up all the map programs in one call blocked the page for
     // 0.5-2 s. Each object's materials get the map define just for their own compile().
     for (const o of objs) {
+      await this.settled();
       if (this.mapMode) break;
       const prev = r.getRenderTarget();
       r.setRenderTarget(this.opts.look === 'photo' && this.composer ? this.composer.readBuffer : null);
@@ -268,9 +272,12 @@ export class PlanetView {
       for (const x of mats) { (x as THREE.ShaderMaterial).defines!.MERCATOR = ''; x.needsUpdate = true; }
       // compile(), then wait on the map programs themselves: compileAsync watches the materials,
       // which go straight back to their globe programs (ready), so it reports ready too soon.
-      progs.push(...this.programsOf(r.compile(o, this.mapCam, this.scene)));
+      const mine = this.programsOf(r.compile(o, this.mapCam, this.scene));
+      progs.push(...mine);
       mats.forEach((x, i) => { if (!had[i]) delete (x as THREE.ShaderMaterial).defines!.MERCATOR; x.needsUpdate = true; });
       r.setRenderTarget(prev);
+      // One object's programs at a time (unless a switch to the map is waiting).
+      if (!this.pendingMap) await programsReady(mine, r);
       await new Promise((res) => setTimeout(res, 0));
     }
     await programsReady(progs, r);
@@ -283,6 +290,10 @@ export class PlanetView {
    * the first switch of layer waited ~45 s behind the stand-in. (A change of look keeps the
    * meshes and materials: only the target differs.) Grid lines and site markers count as shown,
    * and each object is compiled on the globe and on the flat map.
+   *
+   * (Drawing the map look through the composer too would share every shader and drop all this,
+   * tried 2026-11-02: but overlays then blend in linear light, and the grid lines and water
+   * turned pale and heavy. Matching the look would mean retuning each overlay.)
    */
   private async compileOtherLook(run: number) {
     this.otherLookReady = false;
@@ -297,6 +308,7 @@ export class PlanetView {
     // The globe's first (the usual switch), then the flat map's.
     for (const merc of [false, true]) {
       for (const o of objs) {
+        await this.settled();
         if (run !== this.gateRun) return;
         const mesh = o as THREE.Mesh, own = mesh.material, vis = o.visible;
         if (o === this.gridLines || o === this.siteMarks || o === this.terrain || o === this.water) o.visible = true;
@@ -307,14 +319,17 @@ export class PlanetView {
         const prev = r.getRenderTarget();
         r.setRenderTarget(target);
         if (merc) this.updateMapCam();
+        let mine: { isReady(): boolean }[] = [];
         try {
-          if (o.visible) progs.push(...this.programsOf(r.compile(o, merc ? this.mapCam : this.camera, this.scene)));
+          if (o.visible) mine = this.programsOf(r.compile(o, merc ? this.mapCam : this.camera, this.scene));
+          progs.push(...mine);
         } finally {
           r.setRenderTarget(prev);
           if (merc) mats.forEach((x, i) => { if (!had[i]) delete (x as THREE.ShaderMaterial).defines!.MERCATOR; x.needsUpdate = true; });
           mesh.material = own;
           o.visible = vis;
         }
+        if (!this.hurry) await programsReady(mine, r);
         await new Promise((res) => setTimeout(res, 0));
       }
     }
@@ -323,6 +338,22 @@ export class PlanetView {
   }
   /** The other look's shaders are compiled (compileOtherLook): for tests. */
   otherLookReady = false;
+  /**
+   * Background compiles (the flat map's shaders, the other look's) go one object at a time, and
+   * wait while the view moves: each terrain shader takes the driver tens of seconds, and building
+   * them while someone flew round made the whole first few minutes stutter. hurryCompiles() (the
+   * layers menu opening: a switch looks likely) stops the waiting.
+   */
+  private movedAt = 0;
+  private lastView = new THREE.Vector4();
+  private hurry = false;
+  hurryCompiles() { this.hurry = true; }
+  private settled(): Promise<void> {
+    return new Promise((res) => {
+      const check = () => (this.hurry || this.pendingMap || performance.now() - this.movedAt > 1500 ? res() : setTimeout(check, 100));
+      check();
+    });
+  }
   /** Resolves once the full view draws, low-altitude shaders included (and the map's, if a switch to it is waiting). */
   whenReady(): Promise<void> {
     return new Promise((res) => {
@@ -882,31 +913,53 @@ export class PlanetView {
   /**
    * Resolution follows the frame rate. A Retina screen has four times the pixels of a plain one,
    * and the terrain shader is heavy close in; when frames run slow the render resolution steps
-   * down (to 1x at worst), and creeps back up when there is room. Raising waits longer than
-   * lowering, and a raise that has to be undone soon after lowers the ceiling for a while, so it
-   * settles instead of see-sawing. Off while frozen (tests and captures stay repeatable).
+   * down, and creeps back up when there is room. Raising waits longer than lowering, and a raise
+   * that has to be undone soon after lowers the ceiling for a while, so it settles instead of
+   * see-sawing. Off while frozen (tests and captures stay repeatable).
+   *
+   * The quality setting (setQuality) bounds it. auto: from the screen's own density down to 0.6
+   * of a CSS pixel (a slow laptop on a plain screen had nowhere to go when the floor was 1).
+   * sharp: always the screen's density. fast: at most 0.75, down to 0.5.
    */
-  private res = { max: Math.min(devicePixelRatio, 2), ratio: Math.min(devicePixelRatio, 2), ceil: Math.min(devicePixelRatio, 2), ema: 16, last: 0, slow: 0, fast: 0, raisedAt: -1e9, ceilAt: -1e9 };
+  private res = { min: 0.6, max: Math.min(devicePixelRatio, 2), ratio: Math.min(devicePixelRatio, 2), ceil: Math.min(devicePixelRatio, 2), ema: 16, last: 0, slow: 0, fast: 0, raisedAt: -1e9, ceilAt: -1e9 };
+  quality: Quality = 'auto';
+  setQuality(q: Quality) {
+    this.quality = q;
+    const r = this.res, dpr = Math.min(devicePixelRatio, 2);
+    r.max = q === 'fast' ? Math.min(dpr, 0.75) : dpr;
+    r.min = q === 'sharp' ? dpr : q === 'fast' ? 0.5 : Math.min(dpr, 0.6);
+    r.ceil = r.max;
+    this.setResolution(Math.min(r.max, Math.max(r.min, q === 'auto' ? r.ratio : r.max)));
+  }
+  /** The render resolution now, in pixels per CSS pixel. */
+  get resolution() { return this.res.ratio; }
+  private setResolution(next: number) {
+    const r = this.res;
+    r.ratio = next; r.slow = r.fast = 0; r.ema = 16;
+    if (this.renderer.getPixelRatio() === next) return;
+    this.renderer.setPixelRatio(next);
+    this.composer?.setPixelRatio(next);
+  }
   private adaptResolution() {
     const r = this.res, now = performance.now(), dt = now - r.last;
     r.last = now;
-    if (this.frozen !== null || dt <= 0 || dt > 250) { r.slow = r.fast = 0; return; }
+    if (this.frozen !== null || dt <= 0 || dt > 250 || r.min >= r.max) { r.slow = r.fast = 0; return; }
     r.ema += (dt - r.ema) * 0.1;
     if (now - r.ceilAt > 30000) r.ceil = r.max;
     r.slow = r.ema > 24 ? r.slow + dt : 0;
     r.fast = r.ema < 18 ? r.fast + dt : 0;
+    // Steps of a quarter above 1x, an eighth below (each a big share of the pixels there).
+    const step = r.ratio > 1 ? 0.25 : 0.125;
     let next = r.ratio;
-    if (r.slow > 800 && r.ratio > 1) {
-      next = Math.max(1, r.ratio - 0.25);
+    if (r.slow > 800 && r.ratio > r.min) {
+      // Very slow (under 20 fps): two steps at once.
+      next = Math.max(r.min, r.ratio - (r.ema > 50 ? 2 : 1) * step);
       if (now - r.raisedAt < 4000) { r.ceil = next; r.ceilAt = now; }
     } else if (r.fast > 3000 && r.ratio < r.ceil) {
-      next = Math.min(r.ceil, r.ratio + 0.25);
+      next = Math.min(r.ceil, r.ratio + (r.ratio >= 1 ? 0.25 : 0.125));
       r.raisedAt = now;
     }
-    if (next === r.ratio) return;
-    r.ratio = next; r.slow = r.fast = 0; r.ema = 16;
-    this.renderer.setPixelRatio(next);
-    this.composer?.setPixelRatio(next);
+    if (next !== r.ratio) this.setResolution(next);
   }
 
   private frame() {
@@ -952,6 +1005,12 @@ export class PlanetView {
     // The patch's shaders compile in the gate's second stage: until then it isn't drawn at all
     // (drawn early, low down after a change of look, it compiled on the spot: a 35 s freeze).
     if (!this.lowReady) this.dunePatch.mesh.visible = this.dunePatch.heightMesh.visible = false;
+    // Has the view moved (background compiles wait for it to rest)?
+    const vk = this.mapMode ? [this.map.x, this.map.y, this.map.half, 1] : [this.virtualPos.x, this.virtualPos.y, this.virtualPos.z, 0];
+    if (Math.abs(vk[0] - this.lastView.x) + Math.abs(vk[1] - this.lastView.y) + Math.abs(vk[2] - this.lastView.z) + Math.abs(vk[3] - this.lastView.w) > 1e-6) {
+      this.movedAt = performance.now();
+      this.lastView.set(vk[0], vk[1], vk[2], vk[3]);
+    }
 
     this.sun.getWorldPosition(this.sunDir).normalize();
     if (this.lowReady) this.terrainShadow.update(this.renderer, this.virtualPos, this.mapMode ? 99 : this.virtualPos.length(), this.sunDir, !this.mapMode);
