@@ -33,44 +33,45 @@ export interface ShadowUniforms {
   uShRiv: { value: THREE.Texture | null };
   uShOn: { value: number };
   /**
-   * Analytical erosion (analyticerosion.ts) of the height map, in its own frame (it arrives a
-   * moment after the capture it was worked from): r carving, g log2 drainage area.
+   * Analytical erosion (analyticerosion.ts) in world-fixed tiles (trial E): a cube-sphere grid
+   * of tiles, each worked once from the terrain and cached in a layer of uEroTiles (r carving,
+   * g log2 drainage area). Layer i shows the tile centred on uTileC[i] (frame E, N, half-width
+   * uEroR), faded in by uTileW[i] (0: empty).
    */
-  uEroMap: { value: THREE.Texture | null };
-  uEroC: { value: THREE.Vector3 };
-  uEroE: { value: THREE.Vector3 };
-  uEroN: { value: THREE.Vector3 };
+  uEroTiles: { value: THREE.DataArrayTexture | null };
+  uTileC: { value: THREE.Vector3[] };
+  uTileE: { value: THREE.Vector3[] };
+  uTileN: { value: THREE.Vector3[] };
+  uTileW: { value: number[] };
   uEroR: { value: number };
   uEroOn: { value: number };
-  /** The previous result, cross-faded out as the current one (above) fades in (uEroMix). */
-  uEroMap2: { value: THREE.Texture | null };
-  uEroC2: { value: THREE.Vector3 };
-  uEroE2: { value: THREE.Vector3 };
-  uEroN2: { value: THREE.Vector3 };
-  uEroR2: { value: number };
-  uEroMix: { value: number };
   /** The water map's texel size (radians), so detail it can't resolve fades out. */
   uShTexel: { value: number };
 }
 
-/** The analytical erosion, both slots cross-faded: groundCarve(p) = carving, log2 area, weight. */
+const LAYERS = 16;
+/**
+ * The analytical erosion, from the tiles: groundCarve(p) = carving, log2 area, weight. Tiles
+ * overlap (half-width = pitch) and blend by weights that depend only on where p is, so what is
+ * shown never depends on where the view is; only a tile arriving changes anything, once.
+ */
 const ERO_GLSL = /* glsl */`
-  uniform sampler2D uEroMap, uEroMap2;
-  uniform vec3 uEroC, uEroE, uEroN, uEroC2, uEroE2, uEroN2;
-  uniform float uEroR, uEroR2, uEroOn, uEroMix;
-  vec3 eroSlot(sampler2D m, vec3 p, vec3 c, vec3 e, vec3 n, float r) {
-    if (dot(p, c) < 0.5) return vec3(0.0);
-    vec2 lat = vec2(dot(p, e), dot(p, n)) / r;
-    float w = smoothstep(1.0, 0.8, max(abs(lat.x), abs(lat.y)));
-    if (w <= 0.0) return vec3(0.0);
-    return vec3(texture(m, lat * 0.5 + 0.5).rg, 1.0) * w;
-  }
+  uniform highp sampler2DArray uEroTiles;
+  uniform vec3 uTileC[${LAYERS}], uTileE[${LAYERS}], uTileN[${LAYERS}];
+  uniform float uTileW[${LAYERS}];
+  uniform float uEroR, uEroOn;
   vec3 groundCarve(vec3 p) {
     if (uEroOn <= 0.0) return vec3(0.0);
-    vec3 a = eroSlot(uEroMap, p, uEroC, uEroE, uEroN, uEroR) * uEroMix;
-    if (uEroMix < 1.0) a += eroSlot(uEroMap2, p, uEroC2, uEroE2, uEroN2, uEroR2) * (1.0 - uEroMix);
+    vec3 a = vec3(0.0);
+    for (int i = 0; i < ${LAYERS}; i++) {
+      if (uTileW[i] <= 0.0 || dot(p, uTileC[i]) < 0.95) continue;
+      vec2 lat = vec2(dot(p, uTileE[i]), dot(p, uTileN[i])) / uEroR;
+      float w = smoothstep(1.0, 0.5, max(abs(lat.x), abs(lat.y))) * uTileW[i];
+      if (w <= 0.0) continue;
+      a += vec3(texture(uEroTiles, vec3(lat * 0.5 + 0.5, float(i))).rg, 1.0) * w;
+    }
     if (a.z <= 1e-4) return vec3(0.0);
-    return vec3(a.xy / a.z, a.z * uEroOn);
+    return vec3(a.xy / a.z, min(a.z, 1.0) * uEroOn);
   }
 `;
 
@@ -78,8 +79,11 @@ const ERO_GLSL = /* glsl */`
 export const shadowUniforms: ShadowUniforms = {
   uShC: { value: new THREE.Vector3(0, 0, 1) }, uShE: { value: new THREE.Vector3(1, 0, 0) }, uShN: { value: new THREE.Vector3(0, 1, 0) },
   uShR: { value: 0.1 }, uShMap: { value: null }, uShH: { value: null }, uShRiv: { value: null }, uShOn: { value: 0 },
-  uEroMap: { value: null }, uEroC: { value: new THREE.Vector3(0, 0, 1) }, uEroE: { value: new THREE.Vector3(1, 0, 0) }, uEroN: { value: new THREE.Vector3(0, 1, 0) }, uEroR: { value: 0.1 }, uEroOn: { value: 0 },
-  uEroMap2: { value: null }, uEroC2: { value: new THREE.Vector3(0, 0, 1) }, uEroE2: { value: new THREE.Vector3(1, 0, 0) }, uEroN2: { value: new THREE.Vector3(0, 1, 0) }, uEroR2: { value: 0.1 }, uEroMix: { value: 1 }, uShTexel: { value: 0.001 },
+  uEroTiles: { value: null }, uEroR: { value: 0.1 }, uEroOn: { value: 0 },
+  uTileC: { value: Array.from({ length: LAYERS }, () => new THREE.Vector3(0, 0, 1)) },
+  uTileE: { value: Array.from({ length: LAYERS }, () => new THREE.Vector3(1, 0, 0)) },
+  uTileN: { value: Array.from({ length: LAYERS }, () => new THREE.Vector3(0, 1, 0)) },
+  uTileW: { value: new Array(LAYERS).fill(0) }, uShTexel: { value: 0.001 },
 };
 
 /**
@@ -241,6 +245,29 @@ function snapDir(d: THREE.Vector3, q: number): THREE.Vector3 {
   return new THREE.Vector3(Math.round(v.x / q) * q, Math.round(v.y / q) * q, Math.round(v.z / q) * q).normalize();
 }
 
+/**
+ * The erosion tiles: an equal-angle cube-sphere grid, TILES x TILES a face. Tile pitch is TILE_T
+ * radians at a face's centre (~830 km on an Earth-sized world); each is worked over a square of
+ * half-width TILE_T, so neighbours overlap by half and every point is well inside some tile.
+ */
+const TILES = 12, TILE_T = Math.PI / 2 / TILES;
+function tileAt(d: THREE.Vector3): string {
+  const ax = Math.abs(d.x), ay = Math.abs(d.y), az = Math.abs(d.z);
+  let f: number, u: number, v: number;
+  if (ax >= ay && ax >= az) { f = d.x > 0 ? 0 : 1; u = d.y / ax; v = d.z / ax; }
+  else if (ay >= az) { f = d.y > 0 ? 2 : 3; u = d.z / ay; v = d.x / ay; }
+  else { f = d.z > 0 ? 4 : 5; u = d.x / az; v = d.y / az; }
+  const ix = (t: number) => Math.min(TILES - 1, Math.max(0, Math.floor((Math.atan(t) + Math.PI / 4) / TILE_T)));
+  return `${f}:${ix(u)}:${ix(v)}`;
+}
+function tileCentre(key: string): THREE.Vector3 {
+  const [f, i, j] = key.split(':').map(Number);
+  const u = Math.tan(-Math.PI / 4 + (i + 0.5) * TILE_T), v = Math.tan(-Math.PI / 4 + (j + 0.5) * TILE_T);
+  const s = f % 2 === 0 ? 1 : -1, ax = f >> 1;
+  const p = ax === 0 ? new THREE.Vector3(s, u, v) : ax === 1 ? new THREE.Vector3(v, s, u) : new THREE.Vector3(u, v, s);
+  return p.normalize();
+}
+
 export class TerrainShadow {
   private height = new THREE.WebGLRenderTarget(SIZE, SIZE, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true });
   private shadow = new THREE.WebGLRenderTarget(SIZE, SIZE, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
@@ -258,22 +285,28 @@ export class TerrainShadow {
   private lastSun = new THREE.Vector3();
   private heightDirty = true;
   private u = shadowUniforms;
-  // Analytical erosion: one job at a time in a worker; the result fades in.
+  // Analytical erosion in world-fixed tiles: one job at a time in a worker; each result goes in a
+  // layer of the tile array and fades in.
   private eroWorker: Worker | null = null;
   private eroBusy = false;
   private eroId = 0;
-  private eroTex: THREE.DataTexture | null = null;
   private eroFadeStart = 0;
   private needCast = false;
-  /** Analytical erosion on or off. */
+  private tileTex = new THREE.DataArrayTexture(new Uint16Array((SIZE / 2) * (SIZE / 2) * 2 * LAYERS), SIZE / 2, SIZE / 2, LAYERS);
+  /** Tile key in each layer ('' empty), and when each began to fade in. */
+  private layerKey: string[] = new Array(LAYERS).fill('');
+  private layerFade: number[] = new Array(LAYERS).fill(0);
+  private wanted: string[] = [];
+  /** Analytical erosion on or off (trial E). */
   setErosion(on: boolean) {
     this.eroEnabled = on;
-    if (!on) { this.u.uEroOn.value = 0; this.eroFadeStart = 0; this.eroId++; this.eroBusy = false; this.eroKey = this.pendingKey = ''; }
+    if (!on) { this.u.uEroOn.value = 0; this.eroFadeStart = 0; }
+    else if (this.layerKey.some((k) => k)) this.eroFadeStart = performance.now();
     this.heightDirty = true;
   }
   /**
-   * PARKED (2026-11-02): the carved valleys still changed visibly as the view moved, so they are
-   * off; setErosion(true) brings them back. Nothing runs or is uploaded while off.
+   * Off by default: the trial E switch. (The view-centred regions before it, parked 2026-11-02,
+   * changed visibly as the view moved; tiles fixed to the planet are the fix being tried.)
    */
   private eroEnabled = false;
   // Water map: rivers drawn from above, then blurred two ways (blurFragment).
@@ -295,6 +328,12 @@ export class TerrainShadow {
     this.eroCopy.frustumCulled = false;
     this.eroCopy.material = this.heightMat;
     this.eroScene.add(this.eroCopy);
+    this.tileTex.format = THREE.RGFormat;
+    this.tileTex.type = THREE.HalfFloatType;
+    this.tileTex.minFilter = this.tileTex.magFilter = THREE.LinearFilter;
+    this.tileTex.needsUpdate = true;
+    this.u.uEroTiles.value = this.tileTex;
+    this.u.uEroR.value = TILE_T;
     this.u.uShRiv.value = this.riverMap.texture;
     this.blurMat = new THREE.ShaderMaterial({
       uniforms: { uSrc: { value: null }, uHeight: { value: this.height.texture }, uDir: { value: new THREE.Vector2() }, uNear: { value: 1 }, uWide: { value: 4 }, uCoast: { value: 1 }, uSeaWide: { value: 6 }, uFirst: { value: 1 } },
@@ -312,8 +351,7 @@ export class TerrainShadow {
       uniforms: {
         uHeight: { value: this.height.texture }, uSun: { value: new THREE.Vector3() },
         uC: this.u.uShC, uE: this.u.uShE, uN: this.u.uShN, uR: { value: 0.1 }, uTexel: { value: 2 / SIZE },
-        uEroMap: this.u.uEroMap, uEroC: this.u.uEroC, uEroE: this.u.uEroE, uEroN: this.u.uEroN, uEroR: this.u.uEroR, uEroOn: this.u.uEroOn,
-        uEroMap2: this.u.uEroMap2, uEroC2: this.u.uEroC2, uEroE2: this.u.uEroE2, uEroN2: this.u.uEroN2, uEroR2: this.u.uEroR2, uEroMix: this.u.uEroMix,
+        uEroTiles: this.u.uEroTiles, uTileC: this.u.uTileC, uTileE: this.u.uTileE, uTileN: this.u.uTileN, uTileW: this.u.uTileW, uEroR: this.u.uEroR, uEroOn: this.u.uEroOn,
       },
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: shadowFragment,
@@ -330,16 +368,16 @@ export class TerrainShadow {
     this.heightDirty = true;
     this.u.uEroOn.value = 0;
     this.eroId++;                    // results for the old terrain are stale
-    this.eroKey = this.pendingKey = '';
+    this.pendingKey = '';
     this.eroBusy = false;
+    this.layerKey.fill(''); this.layerFade.fill(0); this.u.uTileW.value.fill(0);
     if (!terrain) this.u.uShOn.value = 0;
   }
 
   /**
    * Capture the terrain (only: the moving ground patch would change the result) over an erosion
-   * region snapped to a fixed grid on the planet, read it back, and send it to the worker. The
-   * same place always gives the same region, so the same valleys; a region worked from wherever
-   * the view happened to be gave different valleys every time.
+   * tile, read it back, and send it to the worker. A tile is fixed to the planet, so the same
+   * place always gives the same valleys.
    */
   private startErosion(renderer: THREE.WebGLRenderer, c: THREE.Vector3, r: number) {
     if (typeof Worker === 'undefined' || !this.eroEnabled || this.eroBusy) return;
@@ -375,10 +413,6 @@ export class TerrainShadow {
   }
   private pendingFrame: { c: number[]; e: number[]; nn: number[]; r: number } | null = null;
   private pendingKey = '';
-  /** The erosion region now shown (key of snapped centre and size). */
-  private eroKey = '';
-  private eroSpare: THREE.DataTexture | null = null;
-  private eroMixStart = 0;
   private eroHeight = new THREE.WebGLRenderTarget(SIZE, SIZE, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true });
   private eroCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.001, 1.1);
   private eroScene = new THREE.Scene();
@@ -388,29 +422,26 @@ export class TerrainShadow {
     w.onmessage = (ev: MessageEvent<EroResult>) => {
       this.eroBusy = false;
       const { id, n, packed } = ev.data;
-      if (id === this.eroId && this.pendingFrame) {
-        // The current result becomes the previous one, cross-fading out under the new one.
-        const u = this.u;
-        const old = this.eroTex;
-        u.uEroMap2.value = old; u.uEroC2.value.copy(u.uEroC.value); u.uEroE2.value.copy(u.uEroE.value);
-        u.uEroN2.value.copy(u.uEroN.value); u.uEroR2.value = u.uEroR.value;
-        this.eroSpare?.dispose();
-        this.eroSpare = old;
-        const tex = new THREE.DataTexture(packed, n, n, THREE.RGFormat, THREE.HalfFloatType);
-        tex.minFilter = tex.magFilter = THREE.LinearFilter;
-        tex.needsUpdate = true;
-        this.eroTex = tex;
-        u.uEroMap.value = tex;
-        const f = this.pendingFrame;
-        u.uEroC.value.fromArray(f.c); u.uEroE.value.fromArray(f.e); u.uEroN.value.fromArray(f.nn);
-        u.uEroR.value = f.r;
-        u.uEroMix.value = old ? 0 : 1;
-        this.eroMixStart = performance.now();
-        if (u.uEroOn.value < 1) this.eroFadeStart = performance.now();
-        this.eroKey = this.pendingKey;
-        this.needCast = true;
-      }
+      const key = this.pendingKey;
       this.pendingKey = '';     // (a stale result must not block the next request)
+      if (id !== this.eroId || !this.pendingFrame || n !== SIZE / 2) return;
+      // A free layer, else the one whose tile is least wanted (not wanted, then furthest down).
+      let layer = this.layerKey.indexOf('');
+      if (layer < 0) {
+        let worst = -1;
+        this.layerKey.forEach((k, i) => { const r = this.wanted.indexOf(k); const score = r < 0 ? 1e9 : r; if (score > worst) { worst = score; layer = i; } });
+      }
+      const data = this.tileTex.image.data as Uint16Array;
+      data.set(packed, layer * n * n * 2);
+      this.tileTex.addLayerUpdate(layer);
+      this.tileTex.needsUpdate = true;
+      const f = this.pendingFrame, u = this.u;
+      u.uTileC.value[layer].fromArray(f.c); u.uTileE.value[layer].fromArray(f.e); u.uTileN.value[layer].fromArray(f.nn);
+      this.layerKey[layer] = key;
+      this.layerFade[layer] = performance.now();
+      u.uTileW.value[layer] = 0;
+      if (u.uEroOn.value < 1 && this.eroFadeStart === 0) this.eroFadeStart = performance.now();
+      this.needCast = true;
     };
     return w;
   }
@@ -478,24 +509,40 @@ export class TerrainShadow {
     // texels (which made thin features like riverside green shimmer).
     const c = snapDir(centre, r * 0.12);
     if (this.heightDirty || r !== this.radius || c.distanceTo(this.centre) > 1e-9) this.captureHeight(renderer, c, r);
-    // Erosion over its own, coarser-snapped region (same size): new results only when the view
-    // has moved well away, and then cross-faded in.
-    if (this.eroEnabled) {
-      const ce = snapDir(centre, r * 0.35), key = `${r}:${ce.x.toFixed(6)},${ce.y.toFixed(6)},${ce.z.toFixed(6)}`;
-      if (key !== this.eroKey && key !== this.pendingKey && !this.eroBusy) { this.pendingKey = key; this.startErosion(renderer, ce, r); }
-    }
+    // Erosion tiles: the ones round the view, nearest first, one job at a time. Shown at mid
+    // heights (the gullies take over close up); faded out from high up, where the tiles round
+    // the view would show as a patch.
     const now = performance.now();
-    if (this.eroMixStart > 0) {
-      const k = Math.min(1, (now - this.eroMixStart) / 1200);
-      this.u.uEroMix.value = k * k * (3 - 2 * k);
-      if (k >= 1) this.eroMixStart = 0;
+    const altFade = 1 - Math.min(1, Math.max(0, (alt - 0.2) / 0.15));
+    if (this.eroEnabled && altFade > 0) {
+      const cn = centre.clone().normalize();
+      const { e, n } = frameAt(cn);
+      const seen = new Map<string, number>();
+      for (let y = -2; y <= 2; y++) for (let x = -2; x <= 2; x++) {
+        const p = cn.clone().addScaledVector(e, x * 0.8 * TILE_T).addScaledVector(n, y * 0.8 * TILE_T).normalize();
+        const k = tileAt(p);
+        if (!seen.has(k)) seen.set(k, tileCentre(k).distanceTo(cn));
+      }
+      this.wanted = [...seen.entries()].sort((a, b) => a[1] - b[1]).slice(0, LAYERS).map(([k]) => k);
+      if (!this.eroBusy) {
+        const next = this.wanted.find((k) => !this.layerKey.includes(k));
+        if (next) { this.pendingKey = next; this.startErosion(renderer, tileCentre(next), TILE_T); }
+      }
+    }
+    for (let i = 0; i < LAYERS; i++) {
+      if (!this.layerKey[i] || this.u.uTileW.value[i] >= 1) continue;
+      const k = Math.min(1, (now - this.layerFade[i]) / 1200);
+      this.u.uTileW.value[i] = k * k * (3 - 2 * k);
       this.needCast = true;
     }
     if (this.eroFadeStart > 0) {
       const k = Math.min(1, (now - this.eroFadeStart) / 800);
-      this.u.uEroOn.value = k;
+      this.u.uEroOn.value = k * altFade;
       if (k >= 1) this.eroFadeStart = 0;
       this.needCast = true;
+    } else if (this.eroEnabled && this.layerKey.some((k) => k)) {
+      if (Math.abs(this.u.uEroOn.value - altFade) > 1e-3) this.needCast = true;
+      this.u.uEroOn.value = altFade;
     }
     if (this.heightDirty || this.needCast || sun.dot(this.lastSun) < Math.cos(0.0015)) this.castShadows(renderer, sun);
     this.heightDirty = false;
@@ -577,7 +624,7 @@ export class TerrainShadow {
   dispose() {
     this.height.dispose(); this.shadow.dispose();
     this.riverRaw.dispose(); this.riverTmp.dispose(); this.riverMap.dispose(); this.blurMat.dispose();
-    this.eroHeight.dispose(); this.eroTex?.dispose(); this.eroSpare?.dispose();
+    this.eroHeight.dispose(); this.tileTex.dispose();
     for (const m of this.riverMats) m.dispose();
     this.heightMat.dispose(); this.shadowMat.dispose();
   }

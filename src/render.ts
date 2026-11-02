@@ -194,6 +194,7 @@ export class PlanetView {
     { key: 'p', name: 'Plants', on: false, set: (on) => this.flora.setRich(on) },
     { key: 'r', name: 'Rock & lava fields', on: false, set: (on) => { this.cloudU.uGeo.value = on ? 1 : 0; } },
     { key: 'l', name: 'Detail at distance', on: false, set: (on) => { this.cloudU.uLean.value = on ? 1 : 0; } },
+    { key: 'e', name: 'Carved valleys (tiles)', on: false, set: (on) => this.terrainShadow.setErosion(on) },
   ];
   private trialSwitches() {
     const label = document.createElement('div');

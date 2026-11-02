@@ -2,7 +2,7 @@
  * Screenshot pairs with a trial switch (render.ts trials) off and on: same page, same framing.
  *
  *   node scripts/trial.mjs <outdir> <key> name=seed:bBIOME[+BIOME]:alt ...   (or volcN: the Nth volcano)
- *   HOUR=17 lights by the sun at that local hour (as look.mjs).
+ *   HOUR=17 lights by the sun at that local hour (as look.mjs). WAIT=ms after switching on.
  */
 import { chromium } from 'playwright-core';
 const [out, key, ...shots] = process.argv.slice(2);
@@ -25,7 +25,7 @@ for (const spec of shots) {
   for (const on of [false, true]) {
     const cur = await page.evaluate((k) => window.mundi.view.trials.find((t) => t.key === k).on, key);
     if (cur !== on) await page.keyboard.press(key);
-    await page.waitForTimeout(3500);
+    await page.waitForTimeout(on ? Number(process.env.WAIT || 3500) : 3500);
     await page.screenshot({ path: `${out}/${name}-${on ? 'on' : 'off'}.png` });
   }
 }
