@@ -185,6 +185,36 @@ export class PlanetView {
       });
     });
   }
+  /**
+   * TEMPORARY (overnight 2026-11-02): features to judge by comparison, each off by default,
+   * toggled by a key (and ?key=1 in the address), listed in a small label. Remove the switches
+   * once each is decided.
+   */
+  private trials: { key: string; name: string; on: boolean; set: (on: boolean) => void }[] = [
+    { key: 'p', name: 'Plants', on: false, set: (on) => this.flora.setRich(on) },
+  ];
+  private trialSwitches() {
+    const label = document.createElement('div');
+    label.className = 'ui';   // hidden in screenshots (body.capture .ui)
+    label.style.cssText = 'position:fixed;right:16px;top:84px;padding:6px 10px;border-radius:8px;background:rgba(10,14,22,.78);color:#dfe6ef;font:12px/1.5 system-ui;pointer-events:none;z-index:50;white-space:pre';
+    document.body.appendChild(label);
+    const q = new URLSearchParams(location.search);
+    const show = () => {
+      label.textContent = ['Trials (press the key):', ...this.trials.map((t) => `${t.key.toUpperCase()}  ${t.name}: ${t.on ? 'ON' : 'off'}`)].join(String.fromCharCode(10));
+      const u = new URLSearchParams(location.search);
+      for (const t of this.trials) { if (t.on) u.set(t.key, '1'); else u.delete(t.key); }
+      const qs = u.toString();
+      history.replaceState(null, '', (qs ? '?' + qs : location.pathname) + location.hash);
+    };
+    for (const t of this.trials) { t.on = q.get(t.key) === '1'; t.set(t.on); }
+    show();
+    window.addEventListener('keydown', (e) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = this.trials.find((x) => x.key === e.key.toLowerCase());
+      if (!t) return;
+      t.on = !t.on; t.set(t.on); show();
+    });
+  }
   /** A small notice while a switch to the map waits for its shaders. */
   private notice: HTMLElement | null = null;
   private mapNotice(on: boolean) {
@@ -351,6 +381,7 @@ export class PlanetView {
     this.stars = makeStars();
     this.scene.add(this.stars);
     this.scene.add(this.atmo.sky);
+    this.trialSwitches();
     this.graticule = makeGraticule();
     this.planet.add(this.graticule);
     this.civ = new CivLayer(this.cloudU.uYear);

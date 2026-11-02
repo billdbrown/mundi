@@ -5,8 +5,11 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { B } from './biomes.ts';
 
 export const CONIFER = 0, BROADLEAF = 1, SCRUB = 2, PALM = 3, ROCK = 4, CACTUS = 5, ICEBERG = 6;
-export type TreeKind = typeof CONIFER | typeof BROADLEAF | typeof SCRUB | typeof PALM | typeof ROCK | typeof CACTUS | typeof ICEBERG;
-const KINDS = 7;
+/** Richer plant life (the P switch): savanna acacias, birches, low tufts of grass and shrub. */
+export const ACACIA = 7, BIRCH = 8, TUFT = 9;
+export type TreeKind = typeof CONIFER | typeof BROADLEAF | typeof SCRUB | typeof PALM | typeof ROCK | typeof CACTUS | typeof ICEBERG
+  | typeof ACACIA | typeof BIRCH | typeof TUFT;
+export const KINDS = 10;
 
 export interface TreeSpot {
   x: number; y: number; z: number;
@@ -59,6 +62,23 @@ export const FLORA: Partial<Record<number, [TreeKind, number, number, number?][]
   [B.MOUNTAIN]: [[CONIFER, 0x385036, 0.6], [ROCK, 0x6d645a, 2.2, 0.7]],
 };
 
+/**
+ * Richer planting (the P switch): flat-topped acacias across savanna and dry forest, birches
+ * among the conifers and at the forest's edge, tussocks of grass and low shrub over open
+ * country and tundra. (Palms on tropical coasts and trees spilling out of forests into open
+ * country are placed in lodflora.ts.)
+ */
+export const FLORA_RICH: Partial<Record<number, [TreeKind, number, number, number?][]>> = {
+  ...FLORA,
+  [B.TAIGA]: [[CONIFER, 0x2d4a30, 8, 1.1], [BIRCH, 0x5a7432, 1.6, 0.95]],
+  [B.FOREST]: [[BROADLEAF, 0x3d6b2c, 6], [BROADLEAF, 0x5a7a2c, 1.2], [CONIFER, 0x33553a, 1.5], [BIRCH, 0x60793a, 0.8]],
+  [B.DRY_FOREST]: [[BROADLEAF, 0x687a35, 3], [ACACIA, 0x6a7a35, 1.4], [SCRUB, 0x7b8440, 1], [TUFT, 0x7a7640, 4, 0.8]],
+  [B.SAVANNA]: [[ACACIA, 0x6f7a34, 1.3], [SCRUB, 0x7c873d, 0.9], [TUFT, 0x847c3e, 7, 0.8], [ROCK, 0x9a8466, 0.2, 0.5]],
+  [B.GRASSLAND]: [[BROADLEAF, 0x4b7834, 0.4], [TUFT, 0x52663a, 8, 0.8]],
+  [B.STEPPE]: [[SCRUB, 0x86884e, 0.2], [TUFT, 0x7c7a4c, 6, 0.8], [ROCK, 0x8d8670, 0.4, 0.5]],
+  [B.TUNDRA]: [[CONIFER, 0x485b43, 0.35], [TUFT, 0x5a5c3e, 5, 0.7], [ROCK, 0x77776f, 1, 0.55]],
+};
+
 function trunk(): THREE.BufferGeometry {
   return new THREE.CylinderGeometry(0.05, 0.07, 0.3, 4).translate(0, 0.15, 0).toNonIndexed();
 }
@@ -102,7 +122,24 @@ function treeGeometries(): THREE.BufferGeometry[] {
     new THREE.CylinderGeometry(0.04, 0.04, 0.16, 4).rotateZ(Math.PI / 2).translate(-0.08, 0.38, 0).toNonIndexed(),
   ]);
   const iceberg = new THREE.IcosahedronGeometry(0.5, 0).scale(1.4, 0.75, 1.1).translate(0, 0.02, 0);
-  return [conifer, broadleaf, scrub, palm, rock, cactus, iceberg];
+  // Acacia: a thin trunk forking into a wide, flat umbrella of a crown.
+  const acacia = mergeGeometries([
+    new THREE.CylinderGeometry(0.03, 0.05, 0.62, 4).translate(0, 0.31, 0).toNonIndexed(),
+    new THREE.CylinderGeometry(0.02, 0.03, 0.3, 4).rotateZ(0.5).translate(0.08, 0.68, 0).toNonIndexed(),
+    blob(0.36, 0, 0, 0, 5).scale(1.7, 0.3, 1.5).translate(0.05, 0.84, 0),
+  ]);
+  // Birch: slender, a tall narrow crown.
+  const birch = mergeGeometries([
+    new THREE.CylinderGeometry(0.025, 0.035, 0.5, 4).translate(0, 0.25, 0).toNonIndexed(),
+    blob(0.24, 0, 0, 0, 6).scale(0.75, 1.7, 0.75).translate(0, 0.78, 0),
+  ]);
+  // Tuft: a tussock of grass or a low shrub, a few low blades.
+  const tuft = mergeGeometries([
+    new THREE.ConeGeometry(0.16, 0.42, 5).translate(0, 0.21, 0).toNonIndexed(),
+    new THREE.ConeGeometry(0.12, 0.32, 5).rotateZ(0.35).translate(0.13, 0.15, 0.03).toNonIndexed(),
+    new THREE.ConeGeometry(0.12, 0.3, 5).rotateZ(-0.3).translate(-0.11, 0.14, -0.06).toNonIndexed(),
+  ]);
+  return [conifer, broadleaf, scrub, palm, rock, cactus, iceberg, acacia, birch, tuft];
 }
 
 let shared: THREE.BufferGeometry[] | null = null;

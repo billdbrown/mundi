@@ -15,7 +15,7 @@ import * as THREE from 'three';
 import { B, landBiome } from './biomes.ts';
 import { WATER_LAND, WATER_OCEAN, type World } from './world.ts';
 import type { SurfaceData } from './surface.ts';
-import { FLORA, ICEBERG, CACTUS, ROCK, PALM, BROADLEAF, SCRUB, treeGeometry, treeMaterial } from './flora.ts';
+import { FLORA, FLORA_RICH, KINDS, ICEBERG, CACTUS, ROCK, PALM, BROADLEAF, SCRUB, ACACIA, BIRCH, TUFT, treeGeometry, treeMaterial } from './flora.ts';
 import { groveField, groveFreq, forestMask, openMask, REF_SPACING } from './groves.ts';
 import { makeRng } from './rng.ts';
 import { makeSimplex, type Noise3 } from './noise.ts';
@@ -33,7 +33,6 @@ const SEA = 1.0;
 export const FADE_NEAR = 0.15, FADE_FAR = 0.26;
 /** Plants per cell-sized area relative to the FLORA table's numbers, at scale 1. */
 const DENSITY = 36;
-const KINDS = 7;
 /** Floats per plant: x, y, z, size, spin, shade, kind, colour, cut year (0 = never). */
 const STRIDE = 9;
 const MAX_INSTANCES = 320000;
@@ -90,6 +89,11 @@ export class LodFlora {
     this.clearing = f;
     this.forget();
   }
+
+  /** Richer planting (FLORA_RICH, coastal palms, forest edges): the P switch. */
+  private rich = false;
+  setRich(on: boolean) { this.rich = on; this.forget(); }
+  getRich() { return this.rich; }
 
   /** Plant size relative to the original (1); density and radius follow (see the top). */
   setScale(s: number) {
@@ -270,7 +274,7 @@ export class LodFlora {
         const geo = treeGeometry(k).clone();
         geo.setAttribute('cut', new THREE.InstancedBufferAttribute(new Float32Array(cap), 1));
         // Broadleaf trees and scrub change with the seasons (sky.ts TREE_SEASON); conifers don't.
-        const leafy = k === BROADLEAF || k === SCRUB ? 1 : 0;
+        const leafy = k === BROADLEAF || k === SCRUB || k === ACACIA || k === BIRCH || k === TUFT ? 1 : 0;
         geo.setAttribute('leafy', new THREE.BufferAttribute(new Float32Array(geo.getAttribute('position').count).fill(leafy), 1));
         mesh = new THREE.InstancedMesh(geo, treeMaterial, cap);
         mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
@@ -379,9 +383,19 @@ export class LodFlora {
       const mountain = w.biome[c] === B.MOUNTAIN || w.biome[c] === B.PEAK;
       const b = mountain ? landBiome(w.temperature[c], w.moisture[c], 0) : w.biome[c];
       type Spec = NonNullable<(typeof FLORA)[number]>;
-      const spec: Spec | undefined = mountain
-        ? [...(FLORA[b] ?? []).map(([k, col, d, sz]): Spec[number] => [k, col, d * 0.6, sz]), ...(FLORA[B.MOUNTAIN] ?? []).filter(([k]) => k === ROCK)]
-        : FLORA[b];
+      const table = this.rich ? FLORA_RICH : FLORA;
+      let spec: Spec | undefined = mountain
+        ? [...(table[b] ?? []).map(([k, col, d, sz]): Spec[number] => [k, col, d * 0.6, sz]), ...(FLORA[B.MOUNTAIN] ?? []).filter(([k]) => k === ROCK)]
+        : table[b];
+      if (this.rich && spec && OPEN.has(b)) {
+        // Forest edges thin out instead of stopping: trees of a neighbouring forest stray into
+        // open country next to it.
+        const fn = g.neighbors[c].find((n) => FOREST.has(w.biome[n]) && w.water[n] === WATER_LAND);
+        if (fn !== undefined) {
+          const [k, col] = (FLORA[w.biome[fn]] ?? [])[0] ?? [];
+          if (k !== undefined) spec = [...spec, [k, col, 2.5]];
+        }
+      }
       if (spec) {
         const f = 0.45 / REF_SPACING, clump = this.clump!;
         const cn = 0.5 + 0.5 * clump(P[c * 3] * f, P[c * 3 + 1] * f, P[c * 3 + 2] * f);
@@ -394,7 +408,8 @@ export class LodFlora {
         const nearRiver = !!w.river[c] || g.neighbors[c].some((nb) => w.river[nb]);
         for (const [kind, col, density, size = 1] of spec) {
           const n = count(density * DENSITY * groves * riverThin * area * (0.85 + 0.3 * rng()));
-          const shaped = (forest || open) && kind !== ROCK && kind !== CACTUS;
+          // (Grass tufts cover open ground evenly; only trees follow the groves.)
+          const shaped = (forest || open) && kind !== ROCK && kind !== CACTUS && kind !== TUFT;
           for (let i = 0; i < n; i++) {
             const pt = this.randomPoint(t, rng, false);
             if (!pt) continue;
@@ -411,6 +426,16 @@ export class LodFlora {
             const cut = this.clearing && kind !== ROCK && kind !== CACTUS && rng() < 0.88 ? this.clearing(pt[0], pt[1], pt[2], c) : 0;
             out.push(pt[0], pt[1], pt[2], spacing * size * (0.022 + 0.032 * r * r), rng() * Math.PI * 2, 0.8 + 0.32 * rng(), kind, col, cut);
           }
+        }
+      }
+      // Palms along warm coasts (the P switch): near the shore, on low ground.
+      if (this.rich && w.temperature[c] > 0.66 && w.moisture[c] > 0.18 && g.neighbors[c].some((n) => w.water[n] === WATER_OCEAN)) {
+        const n = count(10 * DENSITY * area);
+        for (let i = 0; i < n; i++) {
+          const pt = this.randomPoint(t, rng, false);
+          if (!pt || Math.hypot(pt[0], pt[1], pt[2]) > SEA + 0.0022) continue;
+          const r = rng();
+          out.push(pt[0], pt[1], pt[2], spacing * (0.024 + 0.03 * r * r), rng() * Math.PI * 2, 0.8 + 0.32 * rng(), PALM, 0x4a8a30, 0);
         }
       }
       // Along rivers through dry country, a dense band of trees: date palms in hot desert,
