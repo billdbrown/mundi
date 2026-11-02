@@ -271,7 +271,11 @@ export class TerrainShadow {
     if (!on) { this.u.uEroOn.value = 0; this.eroFadeStart = 0; this.eroId++; this.eroBusy = false; this.eroKey = this.pendingKey = ''; }
     this.heightDirty = true;
   }
-  private eroEnabled = true;
+  /**
+   * PARKED (2026-11-02): the carved valleys still changed visibly as the view moved, so they are
+   * off; setErosion(true) brings them back. Nothing runs or is uploaded while off.
+   */
+  private eroEnabled = false;
   // Water map: rivers drawn from above, then blurred two ways (blurFragment).
   private riverRaw = new THREE.WebGLRenderTarget(RIV, RIV, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
   private riverTmp = new THREE.WebGLRenderTarget(RIV, RIV, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
