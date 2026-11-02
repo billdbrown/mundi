@@ -87,7 +87,7 @@ try {
   await openPage();
   // A case that never finishes (say, the page threw while drawing) fails after this long
   // instead of hanging the whole run.
-  const CASE_TIMEOUT = 60000;
+  const CASE_TIMEOUT = Math.max(60000, 2 * LOAD_MS);
   const withTimeout = (p) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timed out after ${CASE_TIMEOUT / 1000} s`)), CASE_TIMEOUT))]);
   for (const tc of cases) {
     errors = [];
@@ -115,6 +115,7 @@ try {
       if (tc.view.orbit) wg.orbit(...tc.view.orbit);
       else wg.flyTo(tc.view.spot, tc.view.alt);
       if (tc.map) wg.view.setMap(true);   // the flat map opens centred on where the globe looked
+      await wg.view.whenReady();          // shaders compiled (render.ts's gate), map switch done
       // Two frames: one to apply the camera, one to draw with it.
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       return wg.timings;

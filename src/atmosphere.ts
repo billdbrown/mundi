@@ -352,20 +352,39 @@ export class Atmosphere {
     this.sky.visible = false;
   }
 
+  // The one-off tables' programs, kept (not disposed) so a background compile of them sticks.
+  private transMat = new THREE.ShaderMaterial({ vertexShader: quadVert, fragmentShader: transFrag, depthTest: false, depthWrite: false });
+  private multiMat = new THREE.ShaderMaterial({ uniforms: { uAtTrans: { value: null } }, vertexShader: quadVert, fragmentShader: multiFrag, depthTest: false, depthWrite: false });
+
   private precompute(renderer: THREE.WebGLRenderer) {
     const prev = renderer.getRenderTarget();
-    const run = (frag: string, target: THREE.WebGLRenderTarget, uniforms: Record<string, THREE.IUniform>) => {
-      const m = new THREE.ShaderMaterial({ uniforms, vertexShader: quadVert, fragmentShader: frag, depthTest: false, depthWrite: false });
+    this.multiMat.uniforms.uAtTrans.value = this.trans.texture;
+    for (const [m, target] of [[this.transMat, this.trans], [this.multiMat, this.multi]] as const) {
       this.quad.material = m;
       renderer.setRenderTarget(target);
       renderer.render(this.quadScene, this.quadCam);
-      m.dispose();
-    };
-    run(transFrag, this.trans, {});
-    run(multiFrag, this.multi, { uAtTrans: { value: this.trans.texture } });
+    }
     this.quad.material = this.apMat;
     renderer.setRenderTarget(prev);
     this.ready = true;
+  }
+
+  /** Compile the passes' shaders in the background (each against the target it draws into). */
+  /** The passes' shaders have been compiled once (they're cached from then on). */
+  warmed = false;
+  prewarm(renderer: THREE.WebGLRenderer): Promise<unknown> {
+    if (this.warmed) return Promise.resolve();
+    const prev = renderer.getRenderTarget(), jobs: Promise<unknown>[] = [];
+    const mats: [THREE.Material, THREE.WebGLRenderTarget | THREE.WebGL3DRenderTarget][] = [[this.transMat, this.trans], [this.multiMat, this.multi], [this.apMat, this.ap]];
+    for (const [m, target] of mats) {
+      const scene = new THREE.Scene(), q = new THREE.Mesh(this.quad.geometry, m);
+      q.frustumCulled = false;
+      scene.add(q);
+      renderer.setRenderTarget(target as THREE.WebGLRenderTarget);
+      jobs.push(renderer.compileAsync(scene, this.quadCam));
+    }
+    renderer.setRenderTarget(prev);
+    return Promise.all(jobs).then(() => { this.warmed = true; });
   }
 
   /** Each frame, after the camera is placed, before rendering. on: the new atmosphere is in use. */

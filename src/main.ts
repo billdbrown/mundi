@@ -335,7 +335,7 @@ view.renderer.domElement.addEventListener('pointerleave', () => { info.hidden = 
   },
   /** Resolves once the current request (if any) has been drawn. */
   ready: (): Promise<void> => (inFlight || queued ? new Promise<void>((r) => waiters.push(r)) : Promise.resolve())
-    .then(() => loaderGone),
+    .then(() => loaderGone).then(() => view.whenReady()),
 };
 
 readHash();

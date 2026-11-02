@@ -27,6 +27,7 @@ async function aim(seed, target, alt, lens) {
   if (seed !== seedNow || lens) {
     const opts = lens === 'map' ? { look: 'map', grid: true, clouds: false } : lens === 'elev' ? { mode: 'elevation', grid: false, clouds: false } : { look: 'photo', grid: false, clouds: process.env.CLOUDS === '1' };
     await page.evaluate(([s, o]) => window.mundi.load('seed=' + s, o), [seed, opts]);
+    await page.evaluate(() => window.mundi.view.whenReady?.());
     await page.evaluate(() => { window.mundi.capture(true); window.mundi.freeze(10); });
     seedNow = seed;
   }

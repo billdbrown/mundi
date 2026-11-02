@@ -54,6 +54,16 @@ const TILT = 23.4;
 /** Options that change the meshes, so need a trip to the worker; the rest only toggle visibility. */
 export const REBUILD_KEYS: (keyof ViewOptions)[] = ['mode', 'style', 'blend', 'relief'];
 
+/** Resolves once every program is compiled (KHR_parallel_shader_compile's completion status). */
+function programsReady(progs: { isReady(): boolean }[], r: THREE.WebGLRenderer): Promise<void> {
+  return new Promise((res) => {
+    // (A program deleted meanwhile, its material gone, never reports ready: skip it.)
+    const live = () => progs.filter((p) => (r.info.programs as unknown[] | null)?.includes(p) ?? true);
+    const check = () => (live().every((p) => p.isReady()) ? res() : setTimeout(check, 50));
+    check();
+  });
+}
+
 export class PlanetView {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -112,13 +122,34 @@ export class PlanetView {
   /** Centuries: the history being shown, its drawing, and whether borders are on. */
   private history: History | null = null;
   private civ!: CivLayer;
-  private prewarmed = false;
   /**
-   * Shaders first needed near the ground (the ground patch, trees, the low sky) compile in the
-   * background once the first world is up, rather than stalling the first descent for seconds.
-   * Compiled against the target they'll draw into (the photo look renders off-screen first).
+   * Shader gate. The full shaders (terrain, water, clouds, atmosphere, shadows, ground patch,
+   * trees, and the flat map's variants) take tens of seconds to compile, and compiled on first
+   * use they froze the whole page: at load, on the first descent, on the first switch to the map.
+   * Now they compile in the background (compileAsync, KHR_parallel_shader_compile), each against
+   * the target it draws into, while a cheap stand-in (the same terrain and sea, simply lit)
+   * draws; the full view takes over once they're ready. The map's variants follow; a switch to
+   * the map before they're ready waits for them. Programs are cached by their source, so later
+   * worlds pass the gate at once.
    */
-  private prewarm() {
+  private gateReady = false;
+  private terrainMats = new Map<boolean, THREE.Material>();
+  /** The low-altitude shaders (ground patch, terrain shadows) are ready too. */
+  private lowReady = false;
+  private gateRun = 0;
+  private mapReady = false;
+  private mapGate: Promise<unknown> | null = null;
+  private pendingMap = false;
+  private standIn = new THREE.Scene();
+  private standInGroup = new THREE.Group();
+  private standInSun = new THREE.DirectionalLight(0xfff0d8, 2.4);
+  private standInMats = [
+    new THREE.MeshLambertMaterial({ vertexColors: true }),
+    new THREE.MeshLambertMaterial({ color: 0x0f3556 }),
+  ];
+  private startGate() {
+    const run = ++this.gateRun;
+    this.gateReady = false;
     const r = this.renderer, prev = r.getRenderTarget();
     const tree = new THREE.InstancedMesh(treeGeometry(0), treeMaterial, 1);
     tree.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(3), 3);
@@ -126,9 +157,114 @@ export class PlanetView {
     this.planet.add(tree);
     const target = this.opts.look === 'photo' && this.composer ? this.composer.readBuffer : null;
     r.setRenderTarget(target);
-    const jobs = [r.compileAsync(this.scene, this.camera), this.dunePatch.prewarm(r, this.camera, this.scene, target), this.terrainShadow.prewarm(r)];
+    if (this.mapMode) this.updateMapCam();
+    // In stages, so the view from orbit comes first: the scene (without the ground patch, needed
+    // only low down) and the atmosphere; then the patch and the shadows; then the map's variants.
+    this.lowReady = false;
+    this.planet.remove(this.dunePatch.mesh);
+    const sceneProgs = this.programsOf(r.compile(this.scene, this.mapMode ? this.mapCam : this.camera));
+    const atmoJob = this.atmo.prewarm(r);
+    this.planet.add(this.dunePatch.mesh);
     r.setRenderTarget(prev);
-    Promise.all(jobs).catch(() => {}).finally(() => { this.planet.remove(tree); tree.dispose(); });
+    // Everything already compiled (a later world: programs are cached by their source): open at
+    // once, with no stand-in frame.
+    if (this.atmo.warmed && sceneProgs.every((p) => p.isReady())) this.gateReady = true;
+    Promise.all([programsReady(sceneProgs, r), atmoJob]).catch(() => {}).finally(() => {
+      this.planet.remove(tree); tree.dispose();
+      if (run !== this.gateRun) return;
+      this.gateReady = true;
+      if (this.pendingMap) this.mapGate ??= this.compileMap();   // asked for already: first
+      const p0 = r.getRenderTarget();
+      r.setRenderTarget(target);
+      const low = [this.dunePatch.prewarm(r, this.camera, this.scene, target), this.terrainShadow.prewarm(r)];
+      r.setRenderTarget(p0);
+      Promise.all(low).catch(() => {}).finally(() => {
+        if (run !== this.gateRun) return;
+        this.lowReady = true;
+        this.mapGate ??= this.compileMap();
+      });
+    });
+  }
+  /** A small notice while a switch to the map waits for its shaders. */
+  private notice: HTMLElement | null = null;
+  private mapNotice(on: boolean) {
+    if (on && !this.notice) {
+      const n = document.createElement('div');
+      n.className = 'ui';   // hidden in screenshots (body.capture .ui)
+      n.textContent = 'Preparing the map…';
+      n.style.cssText = 'position:fixed;left:50%;top:84px;transform:translateX(-50%);padding:6px 12px;border-radius:10px;background:rgba(10,14,22,.8);color:#dfe6ef;font:13px system-ui;pointer-events:none;z-index:50';
+      document.body.appendChild(n);
+      this.notice = n;
+    } else if (!on && this.notice) {
+      this.notice.remove();
+      this.notice = null;
+    }
+  }
+  /** The shader programs a compile() created or reused, to wait on. */
+  private programsOf(mats: Set<THREE.Material>): { isReady(): boolean }[] {
+    const out: { isReady(): boolean }[] = [];
+    for (const m of mats) {
+      const p = (this.renderer.properties.get(m) as { currentProgram?: { isReady(): boolean } }).currentProgram;
+      if (p) out.push(p);
+    }
+    return out;
+  }
+  /** The flat map's shader variants (MERCATOR), in the background. */
+  private async compileMap(): Promise<void> {
+    // (Started on the map, the gate compiled its variants already.)
+    if (this.mapMode) { this.mapReady = true; return; }
+    const r = this.renderer, progs: { isReady(): boolean }[] = [];
+    const objs: THREE.Object3D[] = [];
+    this.planet.traverse((o) => { if ((o as THREE.Mesh).material) objs.push(o); });
+    // One object per task: setting up all the map programs in one call blocked the page for
+    // 0.5-2 s. Each object's materials get the map define just for their own compile().
+    for (const o of objs) {
+      if (this.mapMode) break;
+      const prev = r.getRenderTarget();
+      r.setRenderTarget(this.opts.look === 'photo' && this.composer ? this.composer.readBuffer : null);
+      this.updateMapCam();
+      const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[];
+      const mats = Array.isArray(m) ? m : [m];
+      const had = mats.map((x) => 'MERCATOR' in ((x as THREE.ShaderMaterial).defines ??= {}));
+      for (const x of mats) { (x as THREE.ShaderMaterial).defines!.MERCATOR = ''; x.needsUpdate = true; }
+      // compile(), then wait on the map programs themselves: compileAsync watches the materials,
+      // which go straight back to their globe programs (ready), so it reports ready too soon.
+      progs.push(...this.programsOf(r.compile(o, this.mapCam, this.scene)));
+      mats.forEach((x, i) => { if (!had[i]) delete (x as THREE.ShaderMaterial).defines!.MERCATOR; x.needsUpdate = true; });
+      r.setRenderTarget(prev);
+      await new Promise((res) => setTimeout(res, 0));
+    }
+    await programsReady(progs, r);
+    this.mapReady = true;
+    if (this.pendingMap) { this.pendingMap = false; this.setMap(true); }
+  }
+  /** Resolves once the full view draws, low-altitude shaders included (and the map's, if a switch to it is waiting). */
+  whenReady(): Promise<void> {
+    return new Promise((res) => {
+      const check = () => (this.gateReady && this.lowReady && !this.pendingMap ? res() : setTimeout(check, 50));
+      check();
+    });
+  }
+  /** While the gate is shut: the terrain and sea from the same geometry, simply lit. */
+  private renderStandIn(cam: THREE.Camera) {
+    const g = this.standInGroup;
+    if (g.children.length === 0) {
+      this.standIn.background = this.scene.background;
+      this.standIn.add(new THREE.AmbientLight(0xc8d8f0, 0.8), this.standInSun, g);
+      g.matrixAutoUpdate = false;
+    }
+    const want = [this.terrain, this.water];
+    want.forEach((src, i) => {
+      let m = g.children[i] as THREE.Mesh | undefined;
+      if (!m) { m = new THREE.Mesh(undefined, this.standInMats[i]); g.add(m); }
+      m.visible = !!src;
+      if (src) m.geometry = src.geometry;
+    });
+    this.planet.updateMatrixWorld();
+    g.matrix.copy(this.planet.matrixWorld);
+    this.standInSun.position.copy(this.sunDir).multiplyScalar(5);
+    this.renderer.setRenderTarget(null);
+    this.renderer.render(this.standIn, cam);
   }
   /** Fine ground under the middle of the view, where dunes stand up as shapes (dunepatch.ts). */
   private dunePatch!: DunePatch;
@@ -436,6 +572,10 @@ export class PlanetView {
 
   /** Switch between the globe and the flat map. The map opens centred on what the globe showed. */
   setMap(on: boolean) {
+    // The map's shaders not compiled yet: switch once they are (see the gate).
+    if (on && !this.mapReady) { this.pendingMap = true; this.mapNotice(true); if (this.gateReady) this.mapGate ??= this.compileMap(); return; }
+    if (!on) this.pendingMap = false;
+    this.mapNotice(false);
     if (on === this.mapMode) return;
     this.mapMode = on;
     if (on) {
@@ -717,11 +857,11 @@ export class PlanetView {
       this.virtualPos.copy(this.camera.position);
       this.applyTilt(d);
       // The patch centres on the point in the middle of the view: the untilted camera's nadir.
-      this.dunePatch.update(this.renderer, this.virtualPos, d, this.opts.mode === 'biome' && this.opts.style === 'smooth', this.frozen === null);
+      if (this.gateReady) this.dunePatch.update(this.renderer, this.virtualPos, d, this.opts.mode === 'biome' && this.opts.style === 'smooth', this.frozen === null);
     }
 
     this.sun.getWorldPosition(this.sunDir).normalize();
-    this.terrainShadow.update(this.renderer, this.virtualPos, this.mapMode ? 99 : this.virtualPos.length(), this.sunDir, !this.mapMode);
+    if (this.lowReady) this.terrainShadow.update(this.renderer, this.virtualPos, this.mapMode ? 99 : this.virtualPos.length(), this.sunDir, !this.mapMode);
     this.sunU.uSunDir.value.copy(this.sunDir);
     this.waterMat.uniforms.uTime.value += dt;
     this.waterMat.uniforms.uSunDir.value.copy(this.sunDir);
@@ -760,13 +900,14 @@ export class PlanetView {
     if (this.streams) this.streams.visible = this.opts.rivers && this.opts.mode === 'biome' && this.streamMat.uniforms.uVis.value > 0.002;
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
 
-    this.flora.update(this.camera.position, this.opts.trees && this.opts.mode === 'biome' && !this.mapMode, this.frozen !== null);
+    this.flora.update(this.camera.position, this.gateReady && this.opts.trees && this.opts.mode === 'biome' && !this.mapMode, this.frozen !== null);
     const civOn = this.cloudU.uYear.value >= 0;
     this.civ.group.visible = civOn;
     if (civOn) this.civ.setVisibility(this.mapMode ? 2 : d, this.civBorders);
+    const cam = this.mapMode ? this.mapCam : this.camera;
+    if (!this.gateReady) { this.renderStandIn(cam); return; }
     // Sky, haze and reddened sunlight (atmosphere.ts); not on the flat map.
     this.atmo.update(this.renderer, this.camera, this.sunDir, !this.mapMode);
-    const cam = this.mapMode ? this.mapCam : this.camera;
     if (this.opts.look === 'photo') {
       this.applyVisibility();
       this.renderPass.camera = cam;
@@ -781,7 +922,8 @@ export class PlanetView {
       if (!o) continue;
       this.planet.remove(o);
       o.geometry.dispose();
-      if (o.material !== this.waterMat && o.material !== this.riverMat && o.material !== this.streamMat) (o.material as THREE.Material).dispose();
+      const keep = [this.waterMat, this.riverMat, this.streamMat, ...this.terrainMats.values()] as THREE.Material[];
+      if (!keep.includes(o.material as THREE.Material)) (o.material as THREE.Material).dispose();
     }
     for (const f of this.forest) { this.planet.remove(f); f.dispose(); }
     this.terrain = this.water = this.gridLines = this.rivers = this.streams = undefined;
@@ -800,12 +942,16 @@ export class PlanetView {
     const s = surfaceQueries(data, g);
     this.surface = s;
 
-    this.terrain = new THREE.Mesh(toGeometry(data.terrain), makeTerrainMaterial(this.cloudU, !!data.terrain.climate));
+    // One terrain material per kind, reused from world to world: disposing it let three.js delete
+    // its program, and the next world recompiled the terrain shader from scratch (tens of seconds).
+    const climate = !!data.terrain.climate;
+    let tmat = this.terrainMats.get(climate);
+    if (!tmat) { tmat = makeTerrainMaterial(this.cloudU, climate); this.terrainMats.set(climate, tmat); }
+    this.terrain = new THREE.Mesh(toGeometry(data.terrain), tmat);
     this.faceCell = data.faces;
     this.planet.add(this.terrain);
     this.dunePatch.setTerrain(data.style === 'smooth' ? this.terrain : null);
     this.terrainShadow.setTerrain(this.terrain);
-    if (!this.prewarmed && data.style === 'smooth') { this.prewarmed = true; setTimeout(() => this.prewarm(), 0); }
 
     if (data.water) {
       this.water = new THREE.Mesh(toGeometry(data.water), this.waterMat);
@@ -863,6 +1009,7 @@ export class PlanetView {
     if (this.mapMode) setMercator(this.planet, true);
     this.applyVisibility();
     this.highlight(-1);
+    this.startGate();
   }
 
   /**
