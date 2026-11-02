@@ -3,6 +3,7 @@ import { makeRng } from './rng.ts';
 import { makeSimplex, fbm } from './noise.ts';
 import { B, landBiome } from './biomes.ts';
 import { refineBiomes } from './ecology.ts';
+import { buildDeltas } from './deltas.ts';
 import { erodeLand, EROSION_DEFAULTS } from './erode.ts';
 
 export interface WorldParams {
@@ -25,10 +26,12 @@ export interface WorldParams {
   erosion: number;
   /** Finer biomes (ecology.ts): 1 on, 0 the broad climate biomes only. */
   ecology: number;
+  /** River deltas (deltas.ts): 1 on. */
+  deltas: number;
 }
 
 export const DEFAULT_PARAMS: WorldParams = {
-  seed: 1, detail: 60, ocean: 0.68, plates: 12, continents: 3, roughness: 0.45, heat: 0, wetness: 0, rivers: 1, erosion: 1, ecology: 0,
+  seed: 1, detail: 60, ocean: 0.68, plates: 12, continents: 3, roughness: 0.45, heat: 0, wetness: 0, rivers: 1, erosion: 1, ecology: 0, deltas: 0,
 };
 
 export const WATER_LAND = 0, WATER_OCEAN = 1, WATER_LAKE = 2;
@@ -486,6 +489,7 @@ export function generateWorld(params: WorldParams, stage?: (step: GenStep) => vo
   }
 
   if (params.ecology > 0.5) refineBiomes({ grid, elevation: elev, temperature, moisture, water, river, biome, seed: params.seed });
+  if (params.deltas > 0.5) buildDeltas({ grid, elevation: elev, surface, temperature, moisture, water, biome, downstream, flow, river, riverThreshold: threshold });
 
   return { params, grid, elevation: elev, surface, plate, temperature, moisture, water, biome, downstream, flow, river, riverThreshold: threshold };
 }

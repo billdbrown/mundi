@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { baseOf } from './ecology.ts';
+import { isDelta } from './deltas.ts';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -1231,6 +1232,9 @@ export class PlanetView {
         if (this.probe && o.f <= 0.95) {
           const g0 = this.probe.heightAt(d[0], d[1], d[2], h);
           if (g0 < SEA + 0.0001) { h = SEA + 0.00005; o.f = 0; } else h = g0 + 0.0002;
+        } else if (this.probe && this.probe.heightAt(d[0], d[1], d[2], h) < SEA + 0.0001) {
+          // Ground at or under the sea (a delta's edge, an estuary): the sea is the water there.
+          h = SEA + 0.00005; o.f = 0;
         } else if (this.probe && o.h >= SEA && o.f > 0.5) {
           const hw = o.w;
           const g0 = this.probe.heightAt(d[0], d[1], d[2], h);
@@ -1343,6 +1347,23 @@ export class PlanetView {
       }
       cells.reverse();                       // source first, mouth (or junction) last
       drawPath(cells, junction);
+    }
+
+    // Deltas (deltas.ts): besides the main channel, a distributary from the middle of each delta
+    // cell to each of its other shores, narrower, splitting the fan.
+    for (let x = 0; x < N; x++) {
+      if (!isDelta(w.water, w.elevation, x)) continue;
+      const wid = widthOf(w.flow[x]) * 0.45, dep = depthOf(w.flow[x]) * 0.6, ctr = center(x);
+      g.neighbors[x].forEach((n, j) => {
+        if (w.water[n] !== WATER_OCEAN || n === w.downstream[x]) return;
+        const e = edgePoint(x, j);
+        const outP = unit(e[0] + (e[0] - ctr[0]) * 0.25, e[1] + (e[1] - ctr[1]) * 0.25, e[2] + (e[2] - ctr[2]) * 0.25);
+        emit([
+          { p: ctr, h: s.centerH(x), w: wid, d: dep, river: true, cell: x },
+          { p: e, h: s.edgeH(x, j)[0], w: wid, d: dep, river: true, cell: -1, f: 0.9 },
+          { p: outP, h: SEA - LIFT + 0.0002, w: wid, d: MOUTH_DEPTH, river: true, cell: -1, f: 0 },
+        ]);
+      });
     }
 
     const mesh = (b: Buf) => {
