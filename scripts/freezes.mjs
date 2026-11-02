@@ -49,6 +49,8 @@ await report('first descent', t0);
 
 // The Map layer (button): the map look on the globe, a rebuild with other shaders.
 if (process.env.LAYER !== '0') {
+  // LAYER_WAIT: seconds to look around first (background compiles get that long).
+  await page.waitForTimeout(1000 * Number(process.env.LAYER_WAIT ?? 0));
   await reset(); t0 = Date.now();
   await page.evaluate(() => document.querySelector('#lenses [data-lens=map]').click());
   await page.waitForFunction(() => window.mundi.view.gateReady, null, { timeout: 240000, polling: 200 }); await page.waitForTimeout(3000);

@@ -182,6 +182,8 @@ export class PlanetView {
         if (run !== this.gateRun) return;
         this.lowReady = true;
         this.mapGate ??= this.compileMap();
+        // Then the other look's shaders (photo or map), so the first switch of layer is quick.
+        this.mapGate.then(() => this.compileOtherLook(run));
       });
     });
   }
@@ -273,6 +275,52 @@ export class PlanetView {
     this.mapReady = true;
     if (this.pendingMap) { this.pendingMap = false; this.setMap(true); }
   }
+  /**
+   * The other look's shaders, in the background, one object per task: Earth draws into the photo
+   * buffer and the map looks to the screen, and three.js builds every shader again for each, so
+   * the first switch of layer waited ~45 s behind the stand-in. (A change of look keeps the
+   * meshes and materials: only the target differs.) Grid lines and site markers count as shown,
+   * and each object is compiled on the globe and on the flat map.
+   */
+  private async compileOtherLook(run: number) {
+    this.otherLookReady = false;
+    const photo = this.opts.look === 'photo';
+    if (!this.terrain || (!photo && !this.composer)) return;
+    const r = this.renderer, other = !photo;          // photo now: compile the map look's, and back
+    const target = other && this.composer ? this.composer.readBuffer : null;
+    const objs: THREE.Object3D[] = [];
+    // The whole scene (stars, clouds and sky too), less the ground patch (globe only, low down).
+    this.scene.traverse((o) => { if ((o as THREE.Mesh).material && o !== this.dunePatch.mesh && o !== this.dunePatch.heightMesh) objs.push(o); });
+    const progs: { isReady(): boolean }[] = [];
+    // The globe's first (the usual switch), then the flat map's.
+    for (const merc of [false, true]) {
+      for (const o of objs) {
+        if (run !== this.gateRun) return;
+        const mesh = o as THREE.Mesh, own = mesh.material, vis = o.visible;
+        if (o === this.gridLines || o === this.siteMarks || o === this.terrain || o === this.water) o.visible = true;
+        const m = mesh.material as THREE.Material | THREE.Material[];
+        const mats = Array.isArray(m) ? m : [m];
+        const had = mats.map((x) => 'MERCATOR' in ((x as THREE.ShaderMaterial).defines ??= {}));
+        if (merc) for (const x of mats) { (x as THREE.ShaderMaterial).defines!.MERCATOR = ''; x.needsUpdate = true; }
+        const prev = r.getRenderTarget();
+        r.setRenderTarget(target);
+        if (merc) this.updateMapCam();
+        try {
+          if (o.visible) progs.push(...this.programsOf(r.compile(o, merc ? this.mapCam : this.camera, this.scene)));
+        } finally {
+          r.setRenderTarget(prev);
+          if (merc) mats.forEach((x, i) => { if (!had[i]) delete (x as THREE.ShaderMaterial).defines!.MERCATOR; x.needsUpdate = true; });
+          mesh.material = own;
+          o.visible = vis;
+        }
+        await new Promise((res) => setTimeout(res, 0));
+      }
+    }
+    await programsReady(progs, r);
+    if (run === this.gateRun) this.otherLookReady = true;
+  }
+  /** The other look's shaders are compiled (compileOtherLook): for tests. */
+  otherLookReady = false;
   /** Resolves once the full view draws, low-altitude shaders included (and the map's, if a switch to it is waiting). */
   whenReady(): Promise<void> {
     return new Promise((res) => {
