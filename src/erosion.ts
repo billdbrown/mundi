@@ -131,4 +131,14 @@ export const EROSION_GLSL = /* glsl */`
     Ero e = erosionSplit(p, up, macro, foot, 0.0);
     return vec4(e.h, e.shade);
   }
+  /** Slope variance (per axis) of the octaves too fine to draw at footprint foot (trial L). */
+  float eroLostVar(float foot) {
+    float v = 0.0, lambda = ERO_L0, amp = 1.0;
+    for (int i = 0; i < ERO_OCT; i++) {
+      float s = amp * ERO_STEEP * 0.25;   // rms of dprof is about a quarter
+      v += s * s * (1.0 - aaFade(lambda, foot));
+      amp *= ERO_GAIN; lambda *= 0.5;
+    }
+    return v;
+  }
 `;
