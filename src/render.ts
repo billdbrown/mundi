@@ -112,26 +112,6 @@ export class PlanetView {
   /** Centuries: the history being shown, its drawing, and whether borders are on. */
   private history: History | null = null;
   private civ!: CivLayer;
-  /**
-   * TEMPORARY A/B: a button switching the analytical erosion (terrainshadow.ts) on and off, to
-   * check whether it is what makes mid-zoom valleys jump. Remove once decided.
-   */
-  private eroSwitch() {
-    const b = document.createElement('button');
-    b.className = 'ui';
-    b.style.cssText = 'position:fixed;left:50%;bottom:64px;transform:translateX(-50%);padding:6px 14px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:rgba(10,14,22,.8);color:#dfe6ef;font:13px system-ui;cursor:pointer;z-index:50';
-    let on = new URLSearchParams(location.search).get('valleys') !== 'off';
-    const show = () => {
-      b.textContent = `Carved valleys: ${on ? 'ON' : 'OFF'} (click to switch)`;
-      this.terrainShadow.setErosion(on);
-      const q = new URLSearchParams(location.search);
-      q.set('valleys', on ? 'on' : 'off');
-      history.replaceState(null, '', '?' + q.toString() + location.hash);
-    };
-    b.addEventListener('click', () => { on = !on; show(); });
-    document.body.appendChild(b);
-    show();
-  }
   private prewarmed = false;
   /**
    * Shaders first needed near the ground (the ground patch, trees, the low sky) compile in the
@@ -235,7 +215,6 @@ export class PlanetView {
     this.stars = makeStars();
     this.scene.add(this.stars);
     this.scene.add(this.atmo.sky);
-    this.eroSwitch();
     this.graticule = makeGraticule();
     this.planet.add(this.graticule);
     this.civ = new CivLayer(this.cloudU.uYear);

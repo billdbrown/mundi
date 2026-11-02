@@ -265,7 +265,7 @@ export class TerrainShadow {
   private eroTex: THREE.DataTexture | null = null;
   private eroFadeStart = 0;
   private needCast = false;
-  /** TEMPORARY A/B: analytical erosion on or off (render.ts eroSwitch). */
+  /** Analytical erosion on or off. */
   setErosion(on: boolean) {
     this.eroEnabled = on;
     if (!on) { this.u.uEroOn.value = 0; this.eroFadeStart = 0; this.eroId++; this.eroBusy = false; this.eroKey = this.pendingKey = ''; }
