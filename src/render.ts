@@ -880,7 +880,11 @@ export class PlanetView {
     const spacing = Math.sqrt((4 * Math.PI) / N);
     const meander = makeSimplex(w.params.seed * 5 + 13);
     const mf = 1.1 / spacing;
-    const widthOf = (f: number) => spacing * Math.min(0.15, 0.022 + 0.028 * Math.log2(1 + f / T));
+    // Hydraulic geometry (Leopold & Maddock 1953): along a river system, width grows as discharge
+    // to the 0.5 and depth as discharge to the 0.4. Flow is discharge here, in units of the
+    // river threshold T. (Was a guessed log curve: big rivers came out too narrow beside small.)
+    const widthOf = (f: number) => spacing * Math.min(0.17, Math.max(0.012, 0.036 * Math.pow(Math.max(f, 1e-3) / T, 0.5)));
+    const depthOf = (f: number) => RIVER_DEPTH * Math.min(2.2, Math.max(0.45, Math.pow(Math.max(f, 1e-3) / T, 0.4)));
     const STREAM = 0.35 * T;
     const LIFT = 0.0012, RIVER_DEPTH = 0.0045, MOUTH_DEPTH = 0.0016;
     const flows = (c: number) => w.water[c] === WATER_LAND && w.temperature[c] > 0.12 && w.flow[c] >= STREAM;
@@ -1041,33 +1045,33 @@ export class PlanetView {
       const cps: CP[] = [];
       const lakeIn = g.neighbors[first].findIndex((u) => w.downstream[u] === first && w.water[u] === WATER_LAKE);
       if (lakeIn >= 0) {
-        cps.push({ p: edgePoint(first, lakeIn), h: s.edgeH(first, lakeIn)[0], w: widthOf(w.flow[first]), d: RIVER_DEPTH, river: !!w.river[first], cell: first });
+        cps.push({ p: edgePoint(first, lakeIn), h: s.edgeH(first, lakeIn)[0], w: widthOf(w.flow[first]), d: depthOf(w.flow[first]), river: !!w.river[first], cell: first });
       } else {
-        cps.push({ p: center(first), h: s.centerH(first), w: widthOf(w.flow[first]) * 0.35, d: RIVER_DEPTH, river: !!w.river[first], cell: first });
+        cps.push({ p: center(first), h: s.centerH(first), w: widthOf(w.flow[first]) * 0.35, d: depthOf(w.flow[first]) * 0.6, river: !!w.river[first], cell: first });
       }
       for (let i = 0; i < cells.length; i++) {
         const c = cells[i], next = i + 1 < cells.length ? cells[i + 1] : down;
         const j = g.neighbors[c].indexOf(next);
         if (j < 0) return;
         const [h0, h1] = s.edgeH(c, j);
-        const wid = widthOf(w.flow[c]), river = !!w.river[c], e = edgePoint(c, j);
+        const wid = widthOf(w.flow[c]), dep = depthOf(w.flow[c]), river = !!w.river[c], e = edgePoint(c, j);
         if (i + 1 < cells.length) {
-          cps.push({ p: e, h: h0, w: wid, d: RIVER_DEPTH, river, cell: next });
-          if (h1 < h0 - 1e-5) cps.push({ p: e, h: h1, w: wid, d: RIVER_DEPTH, river, cell: next }); // terrace waterfall
+          cps.push({ p: e, h: h0, w: wid, d: dep, river, cell: next });
+          if (h1 < h0 - 1e-5) cps.push({ p: e, h: h1, w: wid, d: dep, river, cell: next }); // terrace waterfall
         } else if (w.water[next] !== WATER_LAND) {
           // Mouth: a short way past the shore, widening a little and fading out, so the river
           // dissolves into the water instead of ending in a painted-on block.
           const sea = w.water[next] === WATER_OCEAN;
           const ctr = center(c);
           const outP = unit(e[0] + (e[0] - ctr[0]) * 0.25, e[1] + (e[1] - ctr[1]) * 0.25, e[2] + (e[2] - ctr[2]) * 0.25);
-          cps.push({ p: e, h: h0, w: wid * 1.1, d: RIVER_DEPTH * 0.8, river, cell: -1, f: 0.9 });
-          cps.push({ p: outP, h: sea ? SEA - LIFT + 0.0002 : h0, w: wid * 1.4, d: sea ? MOUTH_DEPTH : RIVER_DEPTH, river, cell: -1, f: 0 });
+          cps.push({ p: e, h: h0, w: wid * 1.1, d: dep * 0.8, river, cell: -1, f: 0.9 });
+          cps.push({ p: outP, h: sea ? SEA - LIFT + 0.0002 : h0, w: wid * 1.4, d: sea ? MOUTH_DEPTH : dep, river, cell: -1, f: 0 });
         } else if (junction >= 0) {
-          cps.push({ p: e, h: h0, w: wid, d: RIVER_DEPTH, river, cell: junction });
+          cps.push({ p: e, h: h0, w: wid, d: dep, river, cell: junction });
           const join = nearest(junction, e) ?? { p: center(junction), h: s.centerH(junction) };
-          cps.push({ p: join.p, h: join.h, w: wid, d: RIVER_DEPTH, river, cell: -1 });
+          cps.push({ p: join.p, h: join.h, w: wid, d: dep, river, cell: -1 });
         } else {
-          cps.push({ p: e, h: h0, w: wid * 0.5, d: RIVER_DEPTH, river, cell: -1 }); // runs into frozen ground
+          cps.push({ p: e, h: h0, w: wid * 0.5, d: dep, river, cell: -1 }); // runs into frozen ground
         }
       }
       emit(cps);
