@@ -6,6 +6,7 @@ import { MERC_GLSL, MERC_DISCARD, mercVertex, patchShaderChunks } from './mercat
 import { GROVE_GLSL } from './groves.ts';
 import { EROSION_GLSL } from './erosion.ts';
 import { SHADOW_GLSL, shadowLights, shadowUniforms } from './terrainshadow.ts';
+import { AERIAL_FULL_GLSL, atmoUniforms, applyAerial } from './atmosphere.ts';
 import { DUNES_GLSL, PATCH_GLSL, LIFT_GLSL, patchUniforms, makeDuneUniforms, type DuneUniforms, type PatchUniforms } from './dunes.ts';
 
 patchShaderChunks();
@@ -782,6 +783,8 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
     // Shadows cast by the terrain dim the sun's direct light (terrainshadow.ts).
     sh.fragmentShader = shadowLights(sh.fragmentShader, 'vCloudP');
   };
+  // The atmosphere (atmosphere.ts): haze over distance, sunlight reddened at low sun.
+  applyAerial(mat, true);
   return mat;
 }
 
@@ -843,6 +846,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
       ...cloud,
       ...(fade ? patchUniforms : {}),
       ...shadowUniforms,
+      ...atmoUniforms,
       ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
       uTime: { value: 0 },
       uSunDir: { value: new THREE.Vector3(0, 0, 1) },
@@ -899,6 +903,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
       #endif
       ${CLOUD_GLSL}
       ${SHADOW_GLSL}
+      ${AERIAL_FULL_GLSL}
       ${NOISE_GLSL}
       // Three octaves of drifting noise; each drifts its own way so the surface never repeats.
       float waves(vec3 p, float t) {
@@ -967,6 +972,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
           spec *= 0.12;   // rivers: sparkle on a thin channel reads as whitewater
         #endif
         float shade = cloudShade(vWorld);
+        vec3 sunTint = atmoSunTint(vWorld);
         // Mountains' shadows fall on the water too (terrainshadow.ts).
         shade *= mix(0.45, 1.0, terrainShadow(vWorld));
         // Night: the sea goes nearly black with a faint moonlit blue, and surf, glint and sky
@@ -979,7 +985,7 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
           float day = smoothstep(-0.12, 0.22, dot(Ng, uSunDir));
         #endif
         vec3 night = vec3(0.012, 0.022, 0.04) + col * 0.05;
-        col = mix(night, col * diff * shade + vec3(spec) * shade, day);
+        col = mix(night, (col * diff * shade + vec3(spec) * shade) * sunTint, day);
 
         // Foam: a steady line at the shore, plus swells rolling in toward it.
         // Depth is interpolated linearly across big triangles, so shore lines come out straight;
@@ -1055,6 +1061,9 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         gl_FragColor = vec4(col, max(a, foam * 0.9));
         #ifdef USE_FADE
           gl_FragColor.a *= vFade * uVis;
+        #endif
+        #ifndef MERCATOR
+          gl_FragColor.rgb = aerialApply(gl_FragColor.rgb, (viewMatrix * vec4(vWorld - cameraPosition, 0.0)).xyz);
         #endif
         #include <fog_fragment>
         #include <tonemapping_fragment>

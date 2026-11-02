@@ -17,6 +17,7 @@ import type { CloudPixels } from './clouds.ts';
 import { groveFreq } from './groves.ts';
 import { DunePatch } from './dunepatch.ts';
 import { TerrainShadow } from './terrainshadow.ts';
+import { Atmosphere, applyAerial } from './atmosphere.ts';
 import { CivLayer } from './civview.ts';
 import { Weather } from './weather.ts';
 import { GroundProbe } from './ground.ts';
@@ -100,6 +101,14 @@ export class PlanetView {
   private renderPass: RenderPass;
   private atmosphere: THREE.Object3D;
   private stars: THREE.Points;
+  /** Physically based sky and air (atmosphere.ts). */
+  private atmo = new Atmosphere();
+  /**
+   * TEMPORARY, for choosing by comparison: the new atmosphere or the old (A key, ?atmo=), and
+   * whether the clouds take the new atmosphere's light (C key, ?cloudlight=). Remove once chosen.
+   */
+  private atmoNew = true;
+  private cloudAtmo = { value: 1 };
   /** Low-altitude sky, aerial haze, and how far the camera has pitched up toward the horizon. */
   private sky: THREE.Mesh;
   private haze = new THREE.FogExp2(0x8fa8c8, 0);
@@ -113,6 +122,30 @@ export class PlanetView {
   /** Centuries: the history being shown, its drawing, and whether borders are on. */
   private history: History | null = null;
   private civ!: CivLayer;
+  private atmoSwitch() {
+    const label = document.createElement('div');
+    label.className = 'ui';   // hidden in screenshots (body.capture .ui)
+    label.style.cssText = 'position:fixed;left:50%;bottom:64px;transform:translateX(-50%);padding:4px 10px;border-radius:8px;background:rgba(10,14,22,.75);color:#dfe6ef;font:12px system-ui;pointer-events:none;z-index:50';
+    document.body.appendChild(label);
+    const show = () => {
+      label.textContent = `Atmosphere: ${this.atmoNew ? 'NEW' : 'old'} (A) · Clouds: ${this.cloudAtmo.value ? 'new light' : 'as before'} (C)`;
+      const q = new URLSearchParams(location.search);
+      q.set('atmo', this.atmoNew ? 'new' : 'old');
+      q.set('cloudlight', this.cloudAtmo.value ? 'new' : 'old');
+      history.replaceState(null, '', '?' + q.toString() + location.hash);
+    };
+    const q = new URLSearchParams(location.search);
+    this.atmoNew = q.get('atmo') !== 'old';
+    this.cloudAtmo.value = q.get('cloudlight') === 'old' ? 0 : 1;
+    show();
+    window.addEventListener('keydown', (e) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === 'a' || e.key === 'A') this.atmoNew = !this.atmoNew;
+      else if (e.key === 'c' || e.key === 'C') this.cloudAtmo.value = 1 - this.cloudAtmo.value;
+      else return;
+      show();
+    });
+  }
   private prewarmed = false;
   /**
    * Shaders first needed near the ground (the ground patch, trees, the low sky) compile in the
@@ -206,7 +239,9 @@ export class PlanetView {
     this.hover.visible = false;
     this.planet.add(this.hover);
     this.planet.add(this.clouds);
+    for (const m of this.clouds.children as THREE.Mesh[]) applyAerial(m.material as THREE.Material, true, this.cloudAtmo);
     applyCloudShadow(treeMaterial, this.cloudU, this.sunU, this.flora.fade);
+    applyAerial(treeMaterial, true);
     // Plants at 1/6 their first size: in proportion with the hills and dunes (chosen by comparison).
     this.flora.setScale(1 / 6);
 
@@ -216,6 +251,8 @@ export class PlanetView {
     this.scene.add(this.atmosphere, this.stars);
     this.sky = makeSky(this.sunU);
     this.scene.add(this.sky);
+    this.scene.add(this.atmo.sky);
+    this.atmoSwitch();
     this.scene.fog = this.haze;
     this.graticule = makeGraticule();
     this.planet.add(this.graticule);
@@ -779,6 +816,17 @@ export class PlanetView {
     const civOn = this.cloudU.uYear.value >= 0;
     this.civ.group.visible = civOn;
     if (civOn) this.civ.setVisibility(this.mapMode ? 2 : d, this.civBorders);
+    // The new atmosphere replaces the old sky dome, limb shells and haze.
+    const atmoOn = this.atmoNew && !this.mapMode;
+    this.atmo.update(this.renderer, this.camera, this.sunDir, atmoOn);
+    if (atmoOn) {
+      this.sky.visible = false;
+      this.atmosphere.visible = false;
+      this.haze.density = 0;
+    }
+    const sm = this.stars.material as THREE.PointsMaterial;
+    // Under the new sky, stars draw before it (as opaque, without depth) so it can dim them.
+    if (sm.transparent === atmoOn) { sm.transparent = !atmoOn; sm.depthWrite = false; sm.needsUpdate = true; }
     const cam = this.mapMode ? this.mapCam : this.camera;
     if (this.opts.look === 'photo') {
       this.applyVisibility();
