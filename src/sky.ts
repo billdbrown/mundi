@@ -376,6 +376,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         float eroH = 0.0, eroK = 0.0;
         vec3 eroGrad = vec3(0.0);
         float poolK = 0.0;   // standing water in marshes: shiny (roughness, below)
+        float streamK = 0.0; // streams from the drainage map: shiny too
         if (uErosion > 0.0 && eroHA > 0.0001 && camDist < 0.22 && iceK < 0.99) {
           #if defined(DUNE_PATCH)
             vec3 wN = normalize(vTerrN);
@@ -631,6 +632,39 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           float vfloor = smoothstep(0.0002, 0.0018, carveS.x) * smoothstep(5.0, 9.0, carveS.y) * carveW;
           diffuseColor.rgb *= mix(vec3(1.0), mix(vec3(0.88, 0.93, 0.84), vec3(0.7, 0.82, 0.6), dryC), vfloor * 0.6);
         }
+        // Streams: wherever enough land drains through a point (the analytical erosion's
+        // drainage area), a stream runs, so the network branches as the land does, lies in the
+        // carved valleys and joins the drawn rivers. Wet and dark in wet country, pale dry beds
+        // (wadis) in deserts. Only where the drainage map is fine enough to draw a thin line; the
+        // lookup wanders a little so channels meander rather than follow the grid.
+        streamK = 0.0;
+        if (carveS.z > 0.0) {
+          float et = uEroR * 2.0 / 512.0;
+          float vis = (1.0 - smoothstep(0.0004, 0.0012, et)) * carveS.z * (1.0 - iceK);
+          if (vis > 0.01) {
+            vec3 wob = et * 0.6 * vec3(snoise(vCloudP / (et * 3.0)), snoise(vCloudP / (et * 3.0) + 5.0), snoise(vCloudP / (et * 3.0) + 9.0));
+            // The channel's centre line: drainage peaks across a channel (the cells beside it drain
+            // little), so take how far it stands above its neighbours either side, in both grid
+            // directions. Thresholding the area alone smeared each channel over two or three
+            // texels: bands kilometres wide.
+            vec3 sp = vCloudP + wob;
+            vec3 su = normalize(sp);
+            vec3 sx = normalize(cross(su, abs(su.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0))) * et * 0.7, sy = cross(su, sx);
+            float la = groundCarve(sp).y;
+            float rx = la - 0.5 * (groundCarve(sp + sx).y + groundCarve(sp - sx).y);
+            float ry = la - 0.5 * (groundCarve(sp + sy).y + groundCarve(sp - sy).y);
+            float ridgeS = smoothstep(0.25, 0.9, max(rx, ry));
+            streamK = smoothstep(6.0, 7.0, la) * ridgeS * vis * aaFade(et * 2.0, foot);
+            #ifdef USE_CLIMATE
+              float wetS = smoothstep(0.15, 0.35, vClim.x);
+            #else
+              float wetS = 1.0;
+            #endif
+            vec3 water = vec3(0.06, 0.13, 0.16), bed = diffuseColor.rgb * vec3(1.25, 1.18, 1.05) + vec3(0.03);
+            diffuseColor.rgb = mix(diffuseColor.rgb, mix(bed, water, wetS), min(1.0, streamK * 1.2));
+            streamK *= wetS;   // wet streams shine (roughness, below)
+          }
+        }
         // Centuries: farmland (a patchwork of fields with hedges) and towns (blocks and streets),
         // each from the year the history says it reached this spot.
         float civTown = 0.0;
@@ -709,7 +743,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         #endif
         diffuseColor.rgb *= cloudShade(vCloudP);`)
       .replace('#include <roughnessmap_fragment>', /* glsl */`#include <roughnessmap_fragment>
-        roughnessFactor = mix(roughnessFactor, 0.12, poolK);`)
+        roughnessFactor = mix(roughnessFactor, 0.12, max(poolK, streamK));`)
       .replace('#include <emissivemap_fragment>', /* glsl */`#include <emissivemap_fragment>
         // Town lights on the night side.
         #if defined(USE_CIV) && !defined(MERCATOR)
