@@ -86,7 +86,7 @@ for (const spec of specs) {
     continue;
   }
   await aim(seed, target, Number(alt), lens);
-  if (process.env.TOPDOWN) await page.evaluate(() => { const v = window.mundi.view; v.tilt = 0; v.applyTilt = () => {}; v.haze.density = 0; v.sky.visible = false; v.sun.position.set(-2, 1.5, 2.6); });
+  if (process.env.TOPDOWN) await page.evaluate(() => { const v = window.mundi.view; v.tilt = 0; v.applyTilt = () => {}; v.sun.position.set(-2, 1.5, 2.6); });
   if (process.env.ERO) await page.evaluate((e) => { window.mundi.view.cloudU.uErosion.value = Number(e); }, process.env.ERO);
   if (process.env.HOUR) await page.evaluate((h) => { const v = window.mundi.view; v.setOptions({ light: 'cycle' }); v.setLocalHour(Number(h)); }, process.env.HOUR);
   if (process.env.NOSHADOW) await page.evaluate(() => { window.mundi.view.terrainShadow.update = () => { window.mundi.view.terrainShadow.u.uShOn.value = 0; }; });

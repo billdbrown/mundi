@@ -12,7 +12,7 @@ import { makeSimplex } from './noise.ts';
 import { SEA, RELIEF, surfaceQueries, type MeshData, type SurfaceData, type SurfaceQueries } from './surface.ts';
 import { buildForest, treeMaterial, treeGeometry } from './flora.ts';
 import { LodFlora } from './lodflora.ts';
-import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeAtmosphere, makeStars, makeSky, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
+import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeStars, makeCloudUniforms, applyCloudShadow, makeTerrainMaterial } from './sky.ts';
 import type { CloudPixels } from './clouds.ts';
 import { groveFreq } from './groves.ts';
 import { DunePatch } from './dunepatch.ts';
@@ -99,19 +99,9 @@ export class PlanetView {
   private sunDir = new THREE.Vector3();
   private composer?: EffectComposer;
   private renderPass: RenderPass;
-  private atmosphere: THREE.Object3D;
   private stars: THREE.Points;
   /** Physically based sky and air (atmosphere.ts). */
   private atmo = new Atmosphere();
-  /**
-   * TEMPORARY, for choosing by comparison: the new atmosphere or the old (A key, ?atmo=), and
-   * whether the clouds take the new atmosphere's light (C key, ?cloudlight=). Remove once chosen.
-   */
-  private atmoNew = true;
-  private cloudAtmo = { value: 1 };
-  /** Low-altitude sky, aerial haze, and how far the camera has pitched up toward the horizon. */
-  private sky: THREE.Mesh;
-  private haze = new THREE.FogExp2(0x8fa8c8, 0);
   private tilt = 0;
   /** Flat map: an orthographic camera over Mercator space (see mercator.ts). */
   private mapMode = false;
@@ -122,30 +112,6 @@ export class PlanetView {
   /** Centuries: the history being shown, its drawing, and whether borders are on. */
   private history: History | null = null;
   private civ!: CivLayer;
-  private atmoSwitch() {
-    const label = document.createElement('div');
-    label.className = 'ui';   // hidden in screenshots (body.capture .ui)
-    label.style.cssText = 'position:fixed;left:50%;bottom:64px;transform:translateX(-50%);padding:4px 10px;border-radius:8px;background:rgba(10,14,22,.75);color:#dfe6ef;font:12px system-ui;pointer-events:none;z-index:50';
-    document.body.appendChild(label);
-    const show = () => {
-      label.textContent = `Atmosphere: ${this.atmoNew ? 'NEW' : 'old'} (A) · Clouds: ${this.cloudAtmo.value ? 'new light' : 'as before'} (C)`;
-      const q = new URLSearchParams(location.search);
-      q.set('atmo', this.atmoNew ? 'new' : 'old');
-      q.set('cloudlight', this.cloudAtmo.value ? 'new' : 'old');
-      history.replaceState(null, '', '?' + q.toString() + location.hash);
-    };
-    const q = new URLSearchParams(location.search);
-    this.atmoNew = q.get('atmo') !== 'old';
-    this.cloudAtmo.value = q.get('cloudlight') === 'old' ? 0 : 1;
-    show();
-    window.addEventListener('keydown', (e) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === 'a' || e.key === 'A') this.atmoNew = !this.atmoNew;
-      else if (e.key === 'c' || e.key === 'C') this.cloudAtmo.value = 1 - this.cloudAtmo.value;
-      else return;
-      show();
-    });
-  }
   private prewarmed = false;
   /**
    * Shaders first needed near the ground (the ground patch, trees, the low sky) compile in the
@@ -239,21 +205,16 @@ export class PlanetView {
     this.hover.visible = false;
     this.planet.add(this.hover);
     this.planet.add(this.clouds);
-    for (const m of this.clouds.children as THREE.Mesh[]) applyAerial(m.material as THREE.Material, true, this.cloudAtmo);
+    for (const m of this.clouds.children as THREE.Mesh[]) applyAerial(m.material as THREE.Material, true);
     applyCloudShadow(treeMaterial, this.cloudU, this.sunU, this.flora.fade);
     applyAerial(treeMaterial, true);
     // Plants at 1/6 their first size: in proportion with the hills and dunes (chosen by comparison).
     this.flora.setScale(1 / 6);
 
     this.scene.add(this.planet);
-    this.atmosphere = makeAtmosphere(this.sunU);
     this.stars = makeStars();
-    this.scene.add(this.atmosphere, this.stars);
-    this.sky = makeSky(this.sunU);
-    this.scene.add(this.sky);
+    this.scene.add(this.stars);
     this.scene.add(this.atmo.sky);
-    this.atmoSwitch();
-    this.scene.fog = this.haze;
     this.graticule = makeGraticule();
     this.planet.add(this.graticule);
     this.civ = new CivLayer(this.cloudU.uYear);
@@ -372,8 +333,6 @@ export class PlanetView {
     // flat and evenly lit, clouds hide the land (and Mercator swells the polar ones).
     this.clouds.visible = this.opts.clouds && real && !this.mapMode;
     this.stars.visible = !this.mapMode;
-    if (this.mapMode) this.atmosphere.visible = false;   // on the globe, applyTilt decides
-    if (this.mapMode) { this.sky.visible = false; this.haze.density = 0; }
     this.graticule.visible = this.mapMode;
     if (this.mapMode) for (const f of this.forest) f.visible = false;
   }
@@ -381,8 +340,7 @@ export class PlanetView {
   /**
    * Low over the ground, look toward the horizon instead of straight down: the camera pitches
    * up as it descends (OrbitControls re-aims it at the planet's centre every frame, so the
-   * pitch is reapplied each time), the sky fades in over black space, and distance fades into
-   * haze. From orbit none of this applies.
+   * pitch is reapplied each time). The sky and haze come from the atmosphere (atmosphere.ts).
    */
   private groundCell = 0;
   private virtualPos = new THREE.Vector3();
@@ -436,17 +394,6 @@ export class PlanetView {
       this.camera.lookAt(target);
       this.tiltedPos.copy(pos);
     }
-    const low = 1 - s(1.06, 1.26);
-    (this.sky.material as THREE.ShaderMaterial).uniforms.uLow.value = low;
-    this.sky.visible = low > 0.001;
-    this.sky.position.copy(this.camera.position);
-    // The space-view atmosphere shells would wrap the camera in white once it is inside them.
-    this.atmosphere.visible = low < 0.6 && !this.mapMode;
-    const day = THREE.MathUtils.smoothstep(this.camera.position.clone().normalize().dot(this.sunDir), -0.12, 0.25);
-    (this.stars.material as THREE.PointsMaterial).opacity = 0.7 * (1 - low * day);
-    // Haze colour follows the sky at the horizon (dark at night); density grows as you descend.
-    this.haze.color.setRGB(0.36, 0.48, 0.66).multiplyScalar(0.12 + 0.88 * day);
-    this.haze.density = low * low * 1.3;
     // Low down, the follow-light swings round to the side and drops, so it rakes across the
     // terrain and relief reads (from the camera's side, slopes shade almost evenly).
     if (this.opts.light === 'follow' && this.sun.parent === this.camera) {
@@ -816,17 +763,8 @@ export class PlanetView {
     const civOn = this.cloudU.uYear.value >= 0;
     this.civ.group.visible = civOn;
     if (civOn) this.civ.setVisibility(this.mapMode ? 2 : d, this.civBorders);
-    // The new atmosphere replaces the old sky dome, limb shells and haze.
-    const atmoOn = this.atmoNew && !this.mapMode;
-    this.atmo.update(this.renderer, this.camera, this.sunDir, atmoOn);
-    if (atmoOn) {
-      this.sky.visible = false;
-      this.atmosphere.visible = false;
-      this.haze.density = 0;
-    }
-    const sm = this.stars.material as THREE.PointsMaterial;
-    // Under the new sky, stars draw before it (as opaque, without depth) so it can dim them.
-    if (sm.transparent === atmoOn) { sm.transparent = !atmoOn; sm.depthWrite = false; sm.needsUpdate = true; }
+    // Sky, haze and reddened sunlight (atmosphere.ts); not on the flat map.
+    this.atmo.update(this.renderer, this.camera, this.sunDir, !this.mapMode);
     const cam = this.mapMode ? this.mapCam : this.camera;
     if (this.opts.look === 'photo') {
       this.applyVisibility();

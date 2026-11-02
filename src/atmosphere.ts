@@ -287,27 +287,25 @@ export const atmoUniforms: AtmoUniforms = {
 
 /**
  * Give a three.js built-in material (one with vViewPosition) the atmosphere: aerial perspective
- * after lighting, and, if tint, sunlight reddened by the air it crossed. on: an extra uniform
- * that switches both off for this material (the clouds' comparison toggle).
+ * after lighting, and, if tint, sunlight reddened by the air it crossed.
  */
-export function applyAerial(mat: THREE.Material, tint: boolean, on?: { value: number }) {
+export function applyAerial(mat: THREE.Material, tint: boolean) {
   const prev = mat.onBeforeCompile;
   const key = mat.customProgramCacheKey?.bind(mat);
   mat.onBeforeCompile = (sh, r) => {
     prev?.call(mat, sh, r);
-    Object.assign(sh.uniforms, atmoUniforms, on ? { uAtMine: on } : {});
-    const mine = on ? 'uAtMine' : '1.0';
+    Object.assign(sh.uniforms, atmoUniforms);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>\n${AERIAL_FULL_GLSL}\n${on ? 'uniform float uAtMine;' : ''}`)
+      .replace('#include <common>', `#include <common>\n${AERIAL_FULL_GLSL}`)
       .replace('#include <opaque_fragment>', `#include <opaque_fragment>
-        if (${mine} > 0.5) gl_FragColor.rgb = aerialApply(gl_FragColor.rgb, -vViewPosition);`);
+        gl_FragColor.rgb = aerialApply(gl_FragColor.rgb, -vViewPosition);`);
     if (tint) {
       sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_begin>', THREE.ShaderChunk.lights_fragment_begin);
       sh.fragmentShader = sh.fragmentShader.replace('getDirectionalLightInfo( directionalLight, directLight );',
-        `getDirectionalLightInfo( directionalLight, directLight );\n\t\tif (${mine} > 0.5) directLight.color *= atmoSunTint(cameraPosition + (vec4(-vViewPosition, 0.0) * viewMatrix).xyz);`);
+        `getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= atmoSunTint(cameraPosition + (vec4(-vViewPosition, 0.0) * viewMatrix).xyz);`);
     }
   };
-  mat.customProgramCacheKey = () => (key ? key() : '') + '|aerial' + (tint ? 't' : '') + (on ? 'o' : '');
+  mat.customProgramCacheKey = () => (key ? key() : '') + '|aerial' + (tint ? 't' : '');
   mat.needsUpdate = true;
 }
 

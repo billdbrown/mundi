@@ -1132,138 +1132,6 @@ export function makeClouds(u: CloudUniforms): THREE.Group {
   return g;
 }
 
-/** Shared by the atmosphere shells: the sun's direction in world space. */
-export interface SunUniforms { uSunDir: { value: THREE.Vector3 } }
-
-function fresnelShell(radius: number, side: THREE.Side, power: number, strength: number, color: number, sun: SunUniforms): THREE.Mesh {
-  const c = new THREE.Color(color);
-  const mat = new THREE.ShaderMaterial({
-    uniforms: {
-      ...sun, uColor: { value: c }, uPower: { value: power }, uStrength: { value: strength },
-      uBack: { value: side === THREE.BackSide ? 1 : 0 },
-    },
-    vertexShader: /* glsl */`
-      varying vec3 vN; varying vec3 vV; varying vec3 vWN;
-      void main() {
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        vN = normalize(normalMatrix * normal);
-        vWN = normalize(mat3(modelMatrix) * normal);
-        vV = normalize(-mv.xyz);
-        gl_Position = projectionMatrix * mv;
-      }`,
-    fragmentShader: /* glsl */`
-      uniform vec3 uColor, uSunDir; uniform float uPower, uStrength, uBack;
-      varying vec3 vN; varying vec3 vV; varying vec3 vWN;
-      void main() {
-        float d = dot(vN, vV);
-        float f = uBack > 0.5
-          // Far side of the shell: 0 at its silhouette, rising toward the planet's limb.
-          ? pow(smoothstep(0.0, 0.24, -d), uPower)
-          // Near side: a haze that thickens toward the planet's edge but fades out at the shell's.
-          : pow(1.0 - d, uPower) * smoothstep(0.0, 0.25, d);
-        // Lit by the sun: bright on the day side, faint at night, orange along the terminator.
-        float s = dot(normalize(vWN), uSunDir);
-        float day = 0.08 + 0.92 * smoothstep(-0.3, 0.35, s);
-        float dusk = 1.0 - smoothstep(0.0, 0.32, abs(s + 0.04));
-        vec3 col = mix(uColor, vec3(1.0, 0.5, 0.25), dusk * 0.75);
-        gl_FragColor = vec4(col * f * uStrength * day, 1.0);
-      }`,
-    side, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
-  });
-  return new THREE.Mesh(new THREE.SphereGeometry(radius, 96, 48), mat);
-}
-
-/**
- * Haze over the whole disc: the planet is always seen through air. Opacity grows with the
- * length of the line of sight through a thin shell (short straight down, long at the limb),
- * so the centre stays clear while the edge fades, loses colour and turns blue-white, as in
- * photographs. Normal blending, so it veils as well as brightens. Dark on the night side.
- */
-function hazeShell(radius: number, sun: SunUniforms): THREE.Mesh {
-  const mat = new THREE.ShaderMaterial({
-    uniforms: { ...sun, uColor: { value: new THREE.Color(0x9cc4f0) }, uDensity: { value: 0.055 } },
-    vertexShader: /* glsl */`
-      varying vec3 vN; varying vec3 vV; varying vec3 vWN;
-      void main() {
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        vN = normalize(normalMatrix * normal);
-        vWN = normalize(mat3(modelMatrix) * normal);
-        vV = normalize(-mv.xyz);
-        gl_Position = projectionMatrix * mv;
-      }`,
-    fragmentShader: /* glsl */`
-      uniform vec3 uColor, uSunDir; uniform float uDensity;
-      varying vec3 vN; varying vec3 vV; varying vec3 vWN;
-      void main() {
-        float mu = max(dot(vN, vV), 0.02);
-        float path = 1.0 / mu;                                // ~1 at the centre, large at the limb
-        float a = 1.0 - exp(-uDensity * max(0.0, path - 0.85));   // ~clear straight down
-        a *= smoothstep(0.0, 0.12, mu);                       // thin out at the shell's own edge
-        float s = dot(normalize(vWN), uSunDir);
-        float day = smoothstep(-0.25, 0.3, s);
-        float dusk = 1.0 - smoothstep(0.0, 0.3, abs(s + 0.03));
-        vec3 col = mix(uColor, vec3(1.0, 0.55, 0.3), dusk * 0.6);
-        gl_FragColor = vec4(col * (0.15 + 0.85 * day), clamp(a * (0.25 + 0.75 * day), 0.0, 0.85));
-      }`,
-    transparent: true, depthWrite: false,
-  });
-  return new THREE.Mesh(new THREE.SphereGeometry(radius, 128, 64), mat);
-}
-
-/** Outer glow at the limb plus haze over the planet. */
-export function makeAtmosphere(sun: SunUniforms): THREE.Group {
-  const g = new THREE.Group();
-  // Thin, as a real atmosphere is next to its planet.
-  g.add(fresnelShell(1.03, THREE.BackSide, 1.8, 0.75, 0x6aaeff, sun));
-  const haze = hazeShell(1.027, sun);
-  haze.renderOrder = 6;
-  g.add(haze);
-  return g;
-}
-
-/**
- * Sky seen from low altitude: blue overhead, pale at the horizon, a glow round the sun, dark at
- * night. Drawn first, behind everything, on a sphere that travels with the camera; uLow fades it
- * in from the black of space as you descend.
- */
-export function makeSky(sun: SunUniforms): THREE.Mesh {
-  const mat = new THREE.ShaderMaterial({
-    side: THREE.BackSide, depthTest: false, depthWrite: false,
-    uniforms: { ...sun, uLow: { value: 0 } },
-    vertexShader: /* glsl */`
-      varying vec3 vDir;
-      void main() {
-        vec4 w = modelMatrix * vec4(position, 1.0);
-        vDir = w.xyz - cameraPosition;
-        gl_Position = projectionMatrix * viewMatrix * w;
-      }`,
-    fragmentShader: /* glsl */`
-      uniform vec3 uSunDir; uniform float uLow;
-      varying vec3 vDir;
-      void main() {
-        vec3 v = normalize(vDir), up = normalize(cameraPosition);
-        float h = dot(v, up);
-        float day = smoothstep(-0.12, 0.25, dot(up, uSunDir));
-        // Linear colours, deep enough to survive the grade and tone mapping as blue.
-        vec3 zenith = vec3(0.035, 0.11, 0.38), horizon = vec3(0.36, 0.48, 0.66);
-        // Low views show only the first few degrees above the horizon, so most of the gradient lives there.
-        vec3 col = mix(horizon, zenith, smoothstep(-0.06, 0.14, h) * 0.75 + smoothstep(0.14, 0.6, h) * 0.25);
-        // Sunset warmth along the horizon when the sun is low.
-        float low = 1.0 - smoothstep(0.0, 0.35, abs(dot(up, uSunDir)));
-        col = mix(col, vec3(0.95, 0.55, 0.32), low * (1.0 - smoothstep(0.0, 0.25, h)) * 0.6 * day);
-        col += vec3(1.0, 0.9, 0.7) * pow(max(dot(v, uSunDir), 0.0), 60.0) * 0.6;
-        col *= day;
-        gl_FragColor = vec4(col * uLow, 1.0);
-        #include <tonemapping_fragment>
-        #include <colorspace_fragment>
-      }`,
-  });
-  const m = new THREE.Mesh(new THREE.SphereGeometry(40, 48, 24), mat);
-  m.renderOrder = -10;
-  m.frustumCulled = false;
-  return m;
-}
-
 export function makeStars(): THREE.Points {
   const n = 2500, pos = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
@@ -1272,5 +1140,8 @@ export function makeStars(): THREE.Points {
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  return new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 1.2, sizeAttenuation: false, transparent: true, opacity: 0.7 }));
+  // Drawn before the sky (opaque, no depth), which dims and hides them by day (atmosphere.ts).
+  const p = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xb3b3b3, size: 1.2, sizeAttenuation: false, depthWrite: false }));
+  p.renderOrder = -20;
+  return p;
 }
