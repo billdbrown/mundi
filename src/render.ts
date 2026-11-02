@@ -126,7 +126,7 @@ export class PlanetView {
     this.planet.add(tree);
     const target = this.opts.look === 'photo' && this.composer ? this.composer.readBuffer : null;
     r.setRenderTarget(target);
-    const jobs = [r.compileAsync(this.scene, this.camera), this.dunePatch.prewarm(r, this.camera, this.scene, target)];
+    const jobs = [r.compileAsync(this.scene, this.camera), this.dunePatch.prewarm(r, this.camera, this.scene, target), this.terrainShadow.prewarm(r)];
     r.setRenderTarget(prev);
     Promise.all(jobs).catch(() => {}).finally(() => { this.planet.remove(tree); tree.dispose(); });
   }

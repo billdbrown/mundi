@@ -14,6 +14,7 @@
  * recomputed when the sun moves.
  */
 import * as THREE from 'three';
+import type { EroRequest, EroResult } from './eroworker.ts';
 
 const SIZE = 1024;
 const STEPS = 64;
@@ -29,12 +30,23 @@ export interface ShadowUniforms {
   /** Water map: r near rivers (a few km), g the wider valley floor (tens of km), b the sea blurred a few km (0.5 at the shore), a the sea blurred ~40 km (delta scale). */
   uShRiv: { value: THREE.Texture | null };
   uShOn: { value: number };
+  /**
+   * Analytical erosion (analyticerosion.ts) of the height map, in its own frame (it arrives a
+   * moment after the capture it was worked from): r carving, g log2 drainage area.
+   */
+  uEroMap: { value: THREE.Texture | null };
+  uEroC: { value: THREE.Vector3 };
+  uEroE: { value: THREE.Vector3 };
+  uEroN: { value: THREE.Vector3 };
+  uEroR: { value: number };
+  uEroOn: { value: number };
 }
 
 /** One set, shared by everything that receives terrain shadows. */
 export const shadowUniforms: ShadowUniforms = {
   uShC: { value: new THREE.Vector3(0, 0, 1) }, uShE: { value: new THREE.Vector3(1, 0, 0) }, uShN: { value: new THREE.Vector3(0, 1, 0) },
   uShR: { value: 0.1 }, uShMap: { value: null }, uShH: { value: null }, uShRiv: { value: null }, uShOn: { value: 0 },
+  uEroMap: { value: null }, uEroC: { value: new THREE.Vector3(0, 0, 1) }, uEroE: { value: new THREE.Vector3(1, 0, 0) }, uEroN: { value: new THREE.Vector3(0, 1, 0) }, uEroR: { value: 0.1 }, uEroOn: { value: 0 },
 };
 
 /**
@@ -45,7 +57,17 @@ export const shadowUniforms: ShadowUniforms = {
 export const SHADOW_GLSL = /* glsl */`
   uniform vec3 uShC, uShE, uShN;
   uniform float uShR, uShOn;
-  uniform sampler2D uShMap, uShH, uShRiv;
+  uniform sampler2D uShMap, uShH, uShRiv, uEroMap;
+  uniform vec3 uEroC, uEroE, uEroN;
+  uniform float uEroR, uEroOn;
+  /** The analytical erosion at p: x carving (radians), y log2 drainage area; z its weight. */
+  vec3 groundCarve(vec3 p) {
+    if (uEroOn <= 0.0 || dot(p, uEroC) < 0.5) return vec3(0.0);
+    vec2 lat = vec2(dot(p, uEroE), dot(p, uEroN)) / uEroR;
+    float w = smoothstep(1.0, 0.8, max(abs(lat.x), abs(lat.y))) * uEroOn;
+    if (w <= 0.0) return vec3(0.0);
+    return vec3(texture(uEroMap, lat * 0.5 + 0.5).rg, w);
+  }
   vec2 groundUv(vec3 p, out float fade) {
     fade = 0.0;
     if (uShOn < 0.5 || dot(p, uShC) < 0.5) return vec2(0.5);
@@ -105,8 +127,20 @@ const heightFragment = /* glsl */`
   void main() { gl_FragColor = vec4(vH * 50.0, 0.0, 0.0, 1.0); }`;
 
 const shadowFragment = /* glsl */`
-  uniform sampler2D uHeight;
   uniform vec3 uSun, uC, uE, uN;
+  uniform sampler2D uHeight, uEroMap;
+  uniform vec3 uEroC, uEroE, uEroN;
+  uniform float uEroR, uEroOn;
+  // Height at shadow-map coordinate q (lat), less the analytical erosion's carving.
+  float landH(vec2 uv, vec2 q) {
+    float h = max(texture(uHeight, uv).r, 0.0) / 50.0;
+    if (uEroOn > 0.0) {
+      vec3 p = normalize(uC + uE * q.x + uN * q.y);
+      vec2 el = vec2(dot(p, uEroE), dot(p, uEroN)) / uEroR;
+      if (max(abs(el.x), abs(el.y)) < 1.0) h -= texture(uEroMap, el * 0.5 + 0.5).r * uEroOn;
+    }
+    return h;
+  }
   uniform float uR, uTexel;
   varying vec2 vUv;
   void main() {
@@ -121,7 +155,7 @@ const shadowFragment = /* glsl */`
     vec2 dir = vec2(dot(st, uE), dot(st, uN));
     dir /= max(length(dir), 1e-6);
     float tanE = cosZ / sl;                   // how fast a ray toward the sun rises
-    float h0 = max(texture(uHeight, vUv).r, 0.0) / 50.0;
+    float h0 = landH(vUv, lat);
     // Far enough that a ray climbing at the sun's angle clears the highest ground (~0.02).
     float L = clamp((0.02 - h0) / max(tanE, 0.03), 4.0 * uTexel * uR, 2.0 * uR);
     float lit = 1.0;
@@ -131,7 +165,7 @@ const shadowFragment = /* glsl */`
       vec2 q = lat + dir * t;
       vec2 uv = q / uR * 0.5 + 0.5;
       if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) break;
-      float ht = max(texture(uHeight, uv).r, 0.0) / 50.0;
+      float ht = landH(uv, q);
       // The ray's height above the sphere: rising at the sun's angle, and the sphere curving
       // away beneath it.
       float hr = h0 + 0.00004 + tanE * t + 0.5 * t * t;
@@ -188,6 +222,14 @@ export class TerrainShadow {
   private lastSun = new THREE.Vector3();
   private heightDirty = true;
   private u = shadowUniforms;
+  // Analytical erosion: one job at a time in a worker; the result fades in.
+  private eroWorker: Worker | null = null;
+  private eroBusy = false;
+  private eroWanted = false;
+  private eroId = 0;
+  private eroTex: THREE.DataTexture | null = null;
+  private eroFadeStart = 0;
+  private needCast = false;
   // Water map: rivers drawn from above, then blurred two ways (blurFragment).
   private riverRaw = new THREE.WebGLRenderTarget(512, 512, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
   private riverTmp = new THREE.WebGLRenderTarget(512, 512, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
@@ -220,6 +262,7 @@ export class TerrainShadow {
       uniforms: {
         uHeight: { value: this.height.texture }, uSun: { value: new THREE.Vector3() },
         uC: this.u.uShC, uE: this.u.uShE, uN: this.u.uShN, uR: { value: 0.1 }, uTexel: { value: 2 / SIZE },
+        uEroMap: this.u.uEroMap, uEroC: this.u.uEroC, uEroE: this.u.uEroE, uEroN: this.u.uEroN, uEroR: this.u.uEroR, uEroOn: this.u.uEroOn,
       },
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: shadowFragment,
@@ -234,7 +277,52 @@ export class TerrainShadow {
   setTerrain(terrain: THREE.Mesh | null) {
     this.source = terrain;
     this.heightDirty = true;
+    this.u.uEroOn.value = 0;
+    this.eroId++;                    // results for the old terrain are stale
     if (!terrain) this.u.uShOn.value = 0;
+  }
+
+  /** Read back the height map just captured and send it to the erosion worker. */
+  private startErosion(renderer: THREE.WebGLRenderer, c: THREE.Vector3, e: THREE.Vector3, n: THREE.Vector3, r: number) {
+    if (typeof Worker === 'undefined') return;
+    if (this.eroBusy) { this.eroWanted = true; return; }
+    this.eroBusy = true;
+    this.eroWanted = false;
+    this.eroWorker ??= this.makeWorker();
+    const id = ++this.eroId, half = new Uint16Array(SIZE * SIZE * 4);
+    const frame = { c: c.toArray(), e: e.toArray(), nn: n.toArray(), r };
+    renderer.readRenderTargetPixelsAsync(this.height, 0, 0, SIZE, SIZE, half).then(() => {
+      const req: EroRequest = { id, half, size: SIZE, ...frame };
+      this.eroWorker!.postMessage(req, [half.buffer]);
+    }).catch(() => { this.eroBusy = false; });
+    this.pendingFrame = frame;
+  }
+  private pendingFrame: { c: number[]; e: number[]; nn: number[]; r: number } | null = null;
+  private makeWorker(): Worker {
+    const w = new Worker(new URL('./eroworker.ts', import.meta.url), { type: 'module' });
+    w.onmessage = (ev: MessageEvent<EroResult>) => {
+      this.eroBusy = false;
+      const { id, n, packed } = ev.data;
+      if (id === this.eroId && this.pendingFrame) {
+        if (!this.eroTex || this.eroTex.image.width !== n) {
+          this.eroTex?.dispose();
+          this.eroTex = new THREE.DataTexture(packed, n, n, THREE.RGFormat, THREE.HalfFloatType);
+          this.eroTex.minFilter = this.eroTex.magFilter = THREE.LinearFilter;
+          this.u.uEroMap.value = this.eroTex;
+        } else {
+          (this.eroTex.image.data as Uint16Array).set(packed);
+        }
+        this.eroTex.needsUpdate = true;
+        const f = this.pendingFrame;
+        this.u.uEroC.value.fromArray(f.c); this.u.uEroE.value.fromArray(f.e); this.u.uEroN.value.fromArray(f.nn);
+        this.u.uEroR.value = f.r;
+        // Fade in the first; later ones (the region moved on a little) swap straight in.
+        if (this.u.uEroOn.value < 1) this.eroFadeStart = performance.now();
+        this.needCast = true;
+      }
+      if (this.eroWanted) this.heightDirty = true;   // the view moved on meanwhile: go again
+    };
+    return w;
   }
 
   /**
@@ -263,6 +351,23 @@ export class TerrainShadow {
     this.heightDirty = true;
   }
 
+  /** Compile the shadow passes' shaders in the background (they first run on the way down). */
+  prewarm(renderer: THREE.WebGLRenderer): Promise<unknown> {
+    const prev = renderer.getRenderTarget();
+    const jobs: Promise<unknown>[] = [];
+    if (this.source) { this.terrainCopy.geometry = this.source.geometry; this.terrainCopy.material = this.heightMat; }
+    renderer.setRenderTarget(this.height);
+    jobs.push(renderer.compileAsync(this.heightScene, this.cam));
+    renderer.setRenderTarget(this.riverRaw);
+    jobs.push(renderer.compileAsync(this.riverScene, this.cam));
+    renderer.setRenderTarget(this.riverTmp);
+    jobs.push(renderer.compileAsync(this.blurScene, this.quadCam));
+    renderer.setRenderTarget(this.shadow);
+    jobs.push(renderer.compileAsync(this.quadScene, this.quadCam));
+    renderer.setRenderTarget(prev);
+    return Promise.all(jobs);
+  }
+
   /** Something casting shadows changed shape (the patch recentred). */
   invalidate() { this.heightDirty = true; }
 
@@ -280,8 +385,16 @@ export class TerrainShadow {
     const r = 0.04 * Math.pow(1.25, Math.round(Math.log(want / 0.04) / Math.log(1.25)));
     const c = centre.clone().normalize();
     if (this.heightDirty || r !== this.radius || c.angleTo(this.centre) > r * 0.15) this.captureHeight(renderer, c, r);
-    if (this.heightDirty || sun.dot(this.lastSun) < Math.cos(0.0015)) this.castShadows(renderer, sun);
+    // A new erosion result fades in over half a second (the shadows follow it).
+    if (this.eroFadeStart > 0) {
+      const k = Math.min(1, (performance.now() - this.eroFadeStart) / 500);
+      this.u.uEroOn.value = k;
+      if (k >= 1) this.eroFadeStart = 0;
+      this.needCast = true;
+    }
+    if (this.heightDirty || this.needCast || sun.dot(this.lastSun) < Math.cos(0.0015)) this.castShadows(renderer, sun);
     this.heightDirty = false;
+    this.needCast = false;
   }
 
   private captureHeight(renderer: THREE.WebGLRenderer, c: THREE.Vector3, r: number) {
@@ -313,6 +426,7 @@ export class TerrainShadow {
     renderer.setRenderTarget(this.height);
     renderer.clear();
     renderer.render(this.heightScene, cam);
+    this.startErosion(renderer, c, e, n, r);
     // The water map: rivers from above, blurred across then down. Widths in radians: ~5 km for
     // the strip along the water, ~25 km for the valley floor (on an Earth-sized world).
     renderer.setRenderTarget(this.riverRaw);

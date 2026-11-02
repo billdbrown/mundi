@@ -328,6 +328,9 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         diffuseColor.rgb *= mix(1.0, 0.82 + 0.36 * rn, (0.35 + 0.65 * highland) * detailFade * (1.0 - 0.8 * iceK));
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.95, 0.98, 1.03), iceK);
         float farFade = smoothstep(0.12, 0.8, camDist) * step(0.0005, hAbove);
+        // Analytical erosion, where it covers (weight z), from mid zoom out.
+        vec3 carveS = hAbove > 0.0003 ? groundCarve(vCloudP) : vec3(0.0);
+        float carveW = carveS.z * smoothstep(0.05, 0.16, camDist) * (1.0 - iceK);
         float ln = landNoise(vCloudP);
         diffuseColor.rgb *= mix(1.0, 0.74 + 0.52 * ln, (0.45 + 0.55 * highland) * farFade * (1.0 - 0.75 * iceK));
         float foot = length(fwidth(vCloudP));
@@ -591,6 +594,16 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           diffuseColor.rgb *= mix(vec3(1.0), mix(vec3(0.78, 0.86, 0.74), vec3(0.5, 0.7, 0.42), dryE), floorK);
           diffuseColor.rgb *= mix(vec3(1.0), vec3(1.16, 1.07, 0.9), spurK * (0.3 + 0.7 * dryE));
         }
+        // Carved valleys: water gathers on their floors, greener and darker; bare, paler spurs.
+        if (carveW > 0.0) {
+          #ifdef USE_CLIMATE
+            float dryC = 1.0 - smoothstep(0.4, 0.75, vClim.x);
+          #else
+            float dryC = 0.5;
+          #endif
+          float vfloor = smoothstep(0.0002, 0.0018, carveS.x) * smoothstep(5.0, 9.0, carveS.y) * carveW;
+          diffuseColor.rgb *= mix(vec3(1.0), mix(vec3(0.88, 0.93, 0.84), vec3(0.7, 0.82, 0.6), dryC), vfloor * 0.6);
+        }
         // Centuries: farmland (a patchwork of fields with hedges) and towns (blocks and streets),
         // each from the year the history says it reached this spot.
         float civTown = 0.0;
@@ -670,6 +683,18 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           normal = normalize(normal - TOVIEW(grad * amp));
         }
         if (uErosion > 0.0) normal = normalize(normal - TOVIEW(eroGrad));
+        // Analytical erosion (analyticerosion.ts, via terrainshadow.ts): river valleys and ridges
+        // carved into the land around the view, at the scale the mesh is too coarse for and the
+        // close-up gullies too fine. Mostly a mid-zoom effect: up close the gullies take over.
+        if (carveW > 0.0) {
+          vec3 up = normalize(vCloudP);
+          vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
+          vec3 t2 = cross(up, t1);
+          float e = uEroR * 2.0 / 512.0;
+          float c1 = groundCarve(vCloudP + t1 * e).x, c2 = groundCarve(vCloudP + t2 * e).x;
+          vec3 cg = (t1 * (c1 - carveS.x) + t2 * (c2 - carveS.x)) / e;
+          normal = normalize(normal + TOVIEW(cg * carveW));
+        }
         // Dunes catch the light on their windward slopes and shade their lee faces.
         // (On the dune patch the nearer dunes are real geometry, already in the normal.)
         #ifdef DUNE_PATCH
@@ -700,7 +725,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           vec3 t2 = cross(up, t1);
           float e = 0.002;
           vec3 grad = t1 * (landNoise(vCloudP + t1 * e) - ln) + t2 * (landNoise(vCloudP + t2 * e) - ln);
-          float amp = (1.0 + 3.0 * highland) * farFade * (1.0 - 0.6 * iceK);
+          float amp = (1.0 + 3.0 * highland) * farFade * (1.0 - 0.6 * iceK) * (1.0 - 0.7 * carveW);
           normal = normalize(normal - TOVIEW(grad * amp));
         }
         // Bare rock, per pixel, where the detailed surface (normal included) is steep on high
