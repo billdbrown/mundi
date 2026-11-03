@@ -43,6 +43,11 @@ self.onmessage = (ev: MessageEvent<ValleyRequest>) => {
   // form under them. A cell on a river drops by BURN times its weight, its neighbours by half.
   // (The rivers come from the coarse cell graph, and the valleys alone ran beside them.)
   const BURN = 0.004, burn = new Float32Array(N);
+  // And a trough along every river, wherever it runs, plains too (where valleys are otherwise
+  // off): deepest under the river, easing out over a few cells each side, so the river lies set
+  // into the land with banks either side instead of on flat ground (Bill, 2026-11-03: "the river
+  // sits on top of the terrain, not set into it").
+  const TROUGH = 0.0012, trough = new Float32Array(N);
   const cellOf = (x: number, y: number, z: number) => {
     const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
     let u: number, v: number, f: number;
@@ -58,11 +63,13 @@ self.onmessage = (ev: MessageEvent<ValleyRequest>) => {
     const len = Math.hypot(bx - ax, by - ay, bz - az), steps = Math.max(1, Math.ceil(len / (s * 0.4)));
     for (let k = 0; k <= steps; k++) {
       const t = k / steps, [f, px, py] = cellOf(ax + (bx - ax) * t, ay + (by - ay) * t, az + (bz - az) * t);
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
         const xx = px + dx, yy = py + dy;
         if (xx < 0 || yy < 0 || xx >= n || yy >= n) continue;
-        const c = f * F + yy * n + xx, w = (dx === 0 && dy === 0 ? 1 : 0.5) * wt;
-        if (w > burn[c]) burn[c] = w;
+        const c = f * F + yy * n + xx, d = Math.hypot(dx, dy);
+        if (d <= 1.5) { const w = (d === 0 ? 1 : 0.5) * wt; if (w > burn[c]) burn[c] = w; }
+        const tw = wt * Math.exp(-(d / 1.6) * (d / 1.6));
+        if (tw > trough[c]) trough[c] = tw;
       }
     }
   }
@@ -77,7 +84,7 @@ self.onmessage = (ev: MessageEvent<ValleyRequest>) => {
     // Depth eased toward 0.003 (about a third of a high range's height): the biggest rivers'
     // valleys came out deep and only a texel or two wide, black trenches in shadow.
     const C = 0.003, raw = Math.min(carve[i], 0.5 * Math.max(0, height[i]));
-    const cv = C * Math.tanh(raw / C) * t * t * (3 - 2 * t);
+    const cv = Math.max(C * Math.tanh(raw / C) * t * t * (3 - 2 * t), Math.min(TROUGH * trough[i], 0.5 * Math.max(0, height[i])));
     packed[i * 2] = DataUtils.toHalfFloat(cv);
     packed[i * 2 + 1] = DataUtils.toHalfFloat(Math.log2(Math.max(1, area[i])));
   }

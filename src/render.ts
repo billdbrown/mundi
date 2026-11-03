@@ -1384,7 +1384,8 @@ export class PlanetView {
       for (let i = 0; i < cells.length; i++) {
         const c = cells[i], next = i + 1 < cells.length ? cells[i + 1] : down;
         const j = g.neighbors[c].indexOf(next);
-        if (j < 0) return;
+        // Nowhere to go (shouldn't happen): end the river here rather than lose all of it.
+        if (j < 0) { cps.push({ p: center(c), h: s.centerH(c), w: widthOf(w.flow[c]) * 0.5, d: depthOf(w.flow[c]), river: !!w.river[c], cell: -1 }); break; }
         const [h0, h1] = s.edgeH(c, j);
         const wid = widthOf(w.flow[c]), dep = depthOf(w.flow[c]), river = !!w.river[c], e = edgePoint(c, j);
         if (i + 1 < cells.length) {

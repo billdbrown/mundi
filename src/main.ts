@@ -377,45 +377,5 @@ window.addEventListener('hashchange', () => {
   request();
 });
 
-// TEMPORARY (2026-11-02): trial switches for world-changing features, judged by eye. D: river
-// deltas (deltas.ts). The key regenerates the world; the state rides in the link (&deltas=1).
-// (B, the finer biomes, was locked in on 2026-11-02: on by default, &ecology=0 turns it off.)
-// Remove once decided.
-{
-  const label = document.createElement('div');
-  label.className = 'ui';   // hidden in screenshots (body.capture .ui)
-  label.style.cssText = 'position:fixed;right:16px;top:84px;padding:6px 10px;border-radius:8px;background:rgba(10,14,22,.78);color:#dfe6ef;font:12px/1.5 system-ui;pointer-events:none;z-index:50;white-space:pre';
-  document.body.appendChild(label);
-  const keys = { d: ['deltas', 'River deltas'] } as const;
-  const show = () => {
-    label.textContent = ['Trials (press the key):', ...Object.entries(keys).map(([k, [p, name]]) => `${k.toUpperCase()}  ${name}: ${params[p] > 0.5 ? 'ON' : 'off'}`)].join(String.fromCharCode(10));
-  };
-  show();
-  window.addEventListener('keydown', (e) => {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.ctrlKey || e.metaKey || e.altKey) return;
-    const k = keys[e.key.toLowerCase() as keyof typeof keys];
-    if (!k) return;
-    params = { ...params, [k[0]]: params[k[0]] > 0.5 ? 0 : 1 };
-    writeHash(); show(); request();
-  });
-  // View trials (no regeneration), kept in the link (&name=1).
-  // (S, peak snow, and V, the whole planet's valleys, were locked in on 2026-11-02.)
-  const VIEW_TRIALS: [string, string, string, (on: boolean) => void][] = [];
-  const isOn = (p: string) => new RegExp(`(^|[#&])${p}=1(&|$)`).test(location.hash);
-  const showAll = () => {
-    show();
-    for (const [k, p, name, apply] of VIEW_TRIALS) { label.textContent += String.fromCharCode(10) + `${k.toUpperCase()}  ${name}: ${isOn(p) ? 'ON' : 'off'}`; apply(isOn(p)); }
-  };
-  showAll();
-  window.addEventListener('hashchange', showAll);
-  window.addEventListener('keydown', (e) => {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.ctrlKey || e.metaKey || e.altKey) return;
-    const t = VIEW_TRIALS.find(([k]) => k === e.key.toLowerCase());
-    if (!t) return;
-    const h = location.hash.replace(/^#/, '').split('&').filter((x) => x && !x.startsWith(t[1] + '='));
-    if (!isOn(t[1])) h.push(t[1] + '=1');
-    history.replaceState(null, '', '#' + h.join('&'));
-    showAll();
-  });
-  window.addEventListener('hashchange', show);
-}
+// (Trial switches, 2026-11-02: B finer biomes, D river deltas, S peak snow and V whole-planet
+// valleys were all locked in; the keys and their label are gone. &ecology=0 / &deltas=0 still work.)

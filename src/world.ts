@@ -31,7 +31,7 @@ export interface WorldParams {
 }
 
 export const DEFAULT_PARAMS: WorldParams = {
-  seed: 1, detail: 60, ocean: 0.68, plates: 20, continents: 4, roughness: 0.45, heat: 0, wetness: 0, rivers: 1, erosion: 1, ecology: 1, deltas: 0,
+  seed: 1, detail: 60, ocean: 0.68, plates: 20, continents: 4, roughness: 0.45, heat: 0, wetness: 0, rivers: 1, erosion: 1, ecology: 1, deltas: 1,
 };
 
 export const WATER_LAND = 0, WATER_OCEAN = 1, WATER_LAKE = 2;

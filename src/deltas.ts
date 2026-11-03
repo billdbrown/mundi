@@ -79,9 +79,12 @@ export function buildDeltas(w: DeltaInput): number[] {
       .sort((a, b) => E[b] - E[a]).slice(0, lobes);
     for (const s of side) makeLand(s, f * 0.3, 1);
     // Channels: each delta cell drains to its deepest sea neighbour.
-    for (const x of [o, ...side]) {
+    // (Side lobes first: a main lobe they have closed off from the sea drains through one of them.
+    // Left with nowhere to drain it ended the river's path, and the whole river went undrawn.)
+    for (const x of [...side, o]) {
       let d = seaward(x);
       if (d < 0) d = nb[x].find((n) => water[n] === OCEAN) ?? -1;
+      if (d < 0 && x === o) d = side.find((s) => nb[o].includes(s) && downstream[s] >= 0) ?? -1;
       downstream[x] = d;
       biome[x] = coverOf(x);
     }
