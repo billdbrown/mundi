@@ -116,9 +116,13 @@ export function refineBiomes(w: EcoInput) {
     // Dry country.
     if (b === B.DESERT || b === B.STEPPE) {
       if (lakeN > 0 && m < 0.3) { out[c] = B.SALT_FLAT; continue; }
-      if ((river[c] || riverN > 0) && e > 0.15 && e < 0.6 && m < 0.35) { out[c] = B.CANYONS; continue; }
-      // (Rare: 0.7% of land. Bill, 2026-11-02: "look cool but should be rarer" at 2%.)
-      if (e > 0.25 && r > 0.13 && region(c, 9) > 0.68) { out[c] = B.BADLANDS; continue; }
+      // Canyons share the badlands' banded red rock (surface.ts ECO), so together they read as one
+      // look: kept to raised ground a river runs through or along (any dry cell beside a river
+      // made 1.7% of land canyons, and Bill saw "badlands" everywhere, 2026-11-02).
+      if ((river[c] || riverN > 1) && e > 0.2 && e < 0.6 && m < 0.35) { out[c] = B.CANYONS; continue; }
+      // (Rare: 0.4% of land, canyons 0.7%. Bill, 2026-11-02: "look cool but should be rarer" at 2%,
+      // then "still way too common" at 0.7% plus 1.7% of canyons that look the same.)
+      if (e > 0.25 && r > 0.13 && region(c, 9) > 0.75) { out[c] = B.BADLANDS; continue; }
       if (b === B.DESERT && t < 0.55) { out[c] = B.COLD_DESERT; continue; }
       if (b === B.DESERT && m > 0.15) { out[c] = B.DESERT_SCRUB; continue; }
     }

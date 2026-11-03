@@ -98,6 +98,13 @@ export class Valleys {
     u.uEroR.value = 512 / n;
   }
 
+  /**
+   * The rivers' drawn centrelines (render.ts buildRivers): segments a (3), b (3), weight. The
+   * valleys are cut along them (valleyworker.ts), so the rivers run in their valleys.
+   */
+  private rivers: Float32Array = new Float32Array(0);
+  setRivers(lines: Float32Array) { this.rivers = new Float32Array(lines); }
+
   /** A new world: forget the old valleys. */
   reset() {
     // A job for the old world still running: stop it rather than wait ~6 s behind it.
@@ -143,7 +150,7 @@ export class Valleys {
     void Promise.all(reads).then(() => {
       this.timings.capture = performance.now() - this.t0;
       if (this.keepHeights) this.heights = half.slice();
-      this.post({ half, n, gen, unit: this.unit });
+      this.post({ half, n, gen, unit: this.unit, rivers: this.rivers.slice() });
     });
   }
 

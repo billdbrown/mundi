@@ -9,7 +9,7 @@ import { cubeErosion, cubeFace } from './analyticerosion.ts';
 import { makeSimplex } from './noise.ts';
 import { DataUtils } from 'three';
 
-export interface ValleyRequest { half: Uint16Array; n: number; gen: number; unit: number }
+export interface ValleyRequest { half: Uint16Array; n: number; gen: number; unit: number; rivers: Float32Array }
 export interface ValleyResult { packed: Uint16Array; n: number; gen: number; ms: number }
 
 const noise = makeSimplex(4242);
@@ -21,7 +21,7 @@ for (let i = 0; i < 65536; i++) {
 
 self.onmessage = (ev: MessageEvent<ValleyRequest>) => {
   const t0 = performance.now();
-  const { half, n, gen, unit } = ev.data;
+  const { half, n, gen, unit, rivers } = ev.data;
   const F = n * n, N = 6 * F;
   const height = new Float32Array(N), jitter = new Float32Array(N);
   // Grid spacing at a face's centre (radians); toward the edges it is up to ~2x finer.
@@ -38,11 +38,42 @@ self.onmessage = (ev: MessageEvent<ValleyRequest>) => {
       jitter[c] = s * (0.25 * noise(p[0] * f1, p[1] * f1, p[2] * f1) + 0.37 * noise(p[0] * f2 + 7, p[1] * f2, p[2] * f2));
     }
   }
+  // Stream burning: the rivers' drawn paths cut into the heights the water is routed over (not
+  // the heights it carves), so the planet's drainage gathers into the rivers and their valleys
+  // form under them. A cell on a river drops by BURN times its weight, its neighbours by half.
+  // (The rivers come from the coarse cell graph, and the valleys alone ran beside them.)
+  const BURN = 0.004, burn = new Float32Array(N);
+  const cellOf = (x: number, y: number, z: number) => {
+    const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
+    let u: number, v: number, f: number;
+    if (ax >= ay && ax >= az) { u = y / ax; v = z / ax; f = x < 0 ? 1 : 0; }
+    else if (ay >= az) { u = z / ay; v = x / ay; f = y < 0 ? 3 : 2; }
+    else { u = x / az; v = y / az; f = z < 0 ? 5 : 4; }
+    const px = Math.min(n - 1, Math.max(0, Math.floor((u * 0.5 + 0.5) * n)));
+    const py = Math.min(n - 1, Math.max(0, Math.floor((v * 0.5 + 0.5) * n)));
+    return [f, px, py];
+  };
+  for (let i = 0; i + 6 < rivers.length; i += 7) {
+    const ax = rivers[i], ay = rivers[i + 1], az = rivers[i + 2], bx = rivers[i + 3], by = rivers[i + 4], bz = rivers[i + 5], wt = rivers[i + 6];
+    const len = Math.hypot(bx - ax, by - ay, bz - az), steps = Math.max(1, Math.ceil(len / (s * 0.4)));
+    for (let k = 0; k <= steps; k++) {
+      const t = k / steps, [f, px, py] = cellOf(ax + (bx - ax) * t, ay + (by - ay) * t, az + (bz - az) * t);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = px + dx, yy = py + dy;
+        if (xx < 0 || yy < 0 || xx >= n || yy >= n) continue;
+        const c = f * F + yy * n + xx, w = (dx === 0 && dy === 0 ? 1 : 0.5) * wt;
+        if (w > burn[c]) burn[c] = w;
+      }
+    }
+  }
+  for (let i = 0; i < N; i++) jitter[i] -= BURN * burn[i];
   const { carve, area } = cubeErosion({ height, n, jitter, k: 1.4, m: 0.45, unit });
   // As the tiles had it: plains don't get canyons, and no cut deeper than half the land's height.
   const packed = new Uint16Array(N * 2);
   for (let i = 0; i < N; i++) {
-    const t = Math.max(0, Math.min(1, (height[i] - 0.0025) / 0.004));
+    // (Along rivers carving starts lower, so a river through a dry plateau cuts its valley.)
+    const lo = 0.0025 - 0.0017 * burn[i];
+    const t = Math.max(0, Math.min(1, (height[i] - lo) / 0.004));
     // Depth eased toward 0.003 (about a third of a high range's height): the biggest rivers'
     // valleys came out deep and only a texel or two wide, black trenches in shadow.
     const C = 0.003, raw = Math.min(carve[i], 0.5 * Math.max(0, height[i]));

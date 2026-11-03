@@ -203,7 +203,10 @@ const ECO: Partial<Record<number, [number, number, [number, number, number, numb
   [B.ALPINE_MEADOW]: [0x6f8a44, 0.4], [B.MONTANE_FOREST]: [0x2e4630, 0.35],
   [B.LARCH]: [0x6e6c34, 0.4], [B.CLOUD_FOREST]: [0x24502e, 0.4], [B.MIXED_FOREST]: [0x3e5a30, 0.25],
   [B.HEATH]: [0x6c5a50, 0.45], [B.PRAIRIE]: [0x8a9248, 0.35], [B.MONSOON]: [0x4a6a2c, 0.3],
-  [B.PALM_SAVANNA]: [0x7e8a48, 0.3], [B.KARST]: [0x46703a, 0.3], [B.CANYONS]: [0xa0603e, 0.55, [0, 0, 1, 0]],
+  // (Canyons: a light warm tint, no banded rock. They line rivers through dry uplands, where the
+  // eye goes, and painted whole cells in the badlands' stripes; the carved valleys (valleys.ts)
+  // follow those rivers and give them their shape.)
+  [B.PALM_SAVANNA]: [0x7e8a48, 0.3], [B.KARST]: [0x46703a, 0.3], [B.CANYONS]: [0xa0603e, 0.25],
   [B.REEF]: [0x9adbd0, 0.7, [0, 0, 0, 1]], [B.KELP]: [0x1e3a30, 0.5], [B.LAGOON]: [0xcfe0c8, 0.6],
 };
 /** Reefs and lagoons lie in shallow water, where the bed shows (the finer biomes). */

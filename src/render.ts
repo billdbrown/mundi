@@ -1233,8 +1233,15 @@ export class PlanetView {
     const DRY = new Set<number>([B.DESERT, B.SAVANNA, B.STEPPE, B.BEACH, B.TUNDRA]);
 
 
+    // The drawn centrelines (a, b, weight: 1 river, 0.5 stream), for the valleys to follow.
+    const lines: number[] = [];
     const strip = (buf: Buf, pts: Sample[]) => {
       if (pts.length < 2) return;
+      const wt = buf === riverBuf ? 1 : 0.5;
+      for (let i = 0; i < pts.length - 1; i++) {
+        if (pts[i].f < 0.5) continue;   // (past the shore)
+        lines.push(pts[i].x, pts[i].y, pts[i].z, pts[i + 1].x, pts[i + 1].y, pts[i + 1].z, wt);
+      }
       const base = buf.pos.length / 3;
       let sx = 1, sy = 0, sz = 0;
       for (let i = 0; i < pts.length; i++) {
@@ -1454,6 +1461,7 @@ export class PlanetView {
     };
     this.rivers = mesh(riverBuf);
     this.streams = mesh(streamBuf);
+    this.terrainShadow.valleys.setRivers(new Float32Array(lines));
     this.dunePatch.setRivers([this.rivers, this.streams]);
     this.terrainShadow.setRivers(this.rivers, this.streams);
     this.paintCorridors(w, corr);

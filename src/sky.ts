@@ -45,7 +45,7 @@ export interface CloudUniforms extends DuneUniforms {
   uYear: { value: number };
   /** Weather time in days, and the active storms (weather.ts). */
   uWeather: { value: number };
-  /** Trial S (2026-11-02): snow on mid-latitude peaks, 1 on. */
+  /** Snow on mid-latitude peaks, 1 on (was trial S; on for everyone since 2026-11-02). */
   uPeakSnow: { value: number };
   uStorms: { value: THREE.Vector4[] };
 }
@@ -53,7 +53,7 @@ export interface CloudUniforms extends DuneUniforms {
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
     uSeason: { value: 0 }, uSeasonCos: { value: 1 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uErosion: { value: 1 }, uVolc: { value: Array.from({ length: 24 }, () => new THREE.Vector4()) }, uYear: { value: -1 },
-    uWeather: { value: 0 }, uPeakSnow: { value: 0 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, ...makeDuneUniforms() };
+    uWeather: { value: 0 }, uPeakSnow: { value: 1 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, ...makeDuneUniforms() };
 }
 
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
