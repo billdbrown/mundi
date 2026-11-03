@@ -4,6 +4,7 @@ import { makeSimplex, fbm } from './noise.ts';
 import { B, landBiome } from './biomes.ts';
 import { refineBiomes } from './ecology.ts';
 import { buildDeltas } from './deltas.ts';
+import { addHotspots, type HotspotResult } from './hotspots.ts';
 import { erodeLand, EROSION_DEFAULTS } from './erode.ts';
 
 export interface WorldParams {
@@ -54,6 +55,8 @@ export interface World {
   river: Uint8Array;
   /** Flow above which a cell carries a river. */
   riverThreshold: number;
+  /** Hotspot island chains (hotspots.ts): active volcanoes, atolls, every volcano placed. */
+  hotspots: HotspotResult;
 }
 
 const gridCache = new Map<number, Grid>();
@@ -306,6 +309,10 @@ export function generateWorld(params: WorldParams, stage?: (step: GenStep) => vo
     }
   }
 
+  // --- Hotspot island chains in the open ocean (hotspots.ts). After the clean-up above, which
+  // would sink their small islands as specks.
+  const hotspots = addHotspots({ grid, elevation: elev, water, plate, omega, seed });
+
   stage?.('erosion');
   // --- River erosion: valleys and spurs carved into the land (erode.ts). Coasts stay put. ---
   if (params.erosion > 0) {
@@ -523,8 +530,10 @@ export function generateWorld(params: WorldParams, stage?: (step: GenStep) => vo
 
   if (params.ecology > 0.5) refineBiomes({ grid, elevation: elev, temperature, moisture, water, river, biome, seed: params.seed });
   if (params.deltas > 0.5) buildDeltas({ grid, elevation: elev, surface, temperature, moisture, water, biome, downstream, flow, river, riverThreshold: threshold });
+  // Hotspot chains' drowned volcanoes in warm seas are atolls: coral grew as they sank.
+  if (params.ecology > 0.5) for (const c of hotspots.atolls) if (water[c] === WATER_OCEAN && biome[c] !== B.SEA_ICE) biome[c] = B.REEF;
 
-  return { params, grid, elevation: elev, surface, plate, temperature, moisture, water, biome, downstream, flow, river, riverThreshold: threshold };
+  return { params, grid, elevation: elev, surface, plate, temperature, moisture, water, biome, downstream, flow, river, riverThreshold: threshold, hotspots };
 }
 
 class MinHeap {

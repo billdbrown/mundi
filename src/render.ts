@@ -214,7 +214,8 @@ export class PlanetView {
       else if (seaN >= 4 && w.elevation[c] > 0.05 && h > 0.6) cand.push([c, 0.3 * h]);                     // island
     }
     cand.sort((a, b) => b[1] - a[1]);
-    const chosen: number[] = [], minCos = Math.cos(spacing * 7);
+    // The hotspots' active volcanoes first (hotspots.ts): the youngest island of each chain.
+    const chosen: number[] = [...(w.hotspots?.active ?? [])].filter((c) => w.water[c] === WATER_LAND), minCos = Math.cos(spacing * 7);
     for (const [c] of cand) {
       if (chosen.length >= 24) break;
       if (chosen.some((k) => P[k * 3] * P[c * 3] + P[k * 3 + 1] * P[c * 3 + 1] + P[k * 3 + 2] * P[c * 3 + 2] > minCos)) continue;
