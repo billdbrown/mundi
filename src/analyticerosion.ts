@@ -172,3 +172,132 @@ class Heap {
     return top;
   }
 }
+
+/**
+ * The same erosion over the whole planet: a cube-sphere grid, six faces of n x n cells, face f's
+ * cell (x, y) at gnomonic coordinates u, v in -1..1 (point = normalize(axis_k * sign + u axis_i +
+ * v axis_j), k = f >> 1, sign by f & 1, i = k + 1, j = k + 2). Water flows across face edges like
+ * anywhere else (each face eroded alone, with its edge as an outlet, gave neighbouring faces
+ * different valleys where they met). Distances are real ones on the sphere. Only the sea is an
+ * outlet. Lean on memory: about 36 bytes a cell.
+ */
+export interface CubeErosionInput {
+  /** Heights above sea level (<= 0 is sea), face-major, n x n per face. */
+  height: Float32Array;
+  n: number;
+  /** A small roughness per cell, added before routing. */
+  jitter?: Float32Array;
+  k?: number;
+  m?: number;
+  /**
+   * The cell size (radians) k and m were tuned at. Drainage area is counted in cells of that
+   * size, whatever this grid's: k * A^-m in cells made a coarser grid carve far less (its cells
+   * hold more area each, so the same valley had a smaller count and a steeper slope).
+   */
+  unit?: number;
+}
+
+/** Face f's axes: major k with sign, grid axes i, j. */
+export function cubeFace(f: number) {
+  const k = f >> 1;
+  return { k, sign: f & 1 ? -1 : 1, i: (k + 1) % 3, j: (k + 2) % 3 };
+}
+
+export function cubeErosion(o: CubeErosionInput): ErosionOutput {
+  const { height: h0, n } = o, k = o.k ?? 1.4, m = o.m ?? 0.45;
+  const F = n * n, N = 6 * F;
+  const faces = [0, 1, 2, 3, 4, 5].map(cubeFace);
+  // Cell centres, computed on demand.
+  const pos = (f: number, u: number, v: number, out: Float32Array) => {
+    const a = faces[f], l = 1 / Math.sqrt(1 + u * u + v * v);
+    out[a.k] = a.sign * l; out[a.i] = u * l; out[a.j] = v * l;
+  };
+  const toCell = (p: Float32Array): number => {
+    const ax = Math.abs(p[0]), ay = Math.abs(p[1]), az = Math.abs(p[2]);
+    const kk = ax >= ay && ax >= az ? 0 : ay >= az ? 1 : 2;
+    const f = kk * 2 + (p[kk] < 0 ? 1 : 0), a = faces[f], M = a.sign * p[kk];
+    const x = Math.min(n - 1, Math.max(0, Math.floor((p[a.i] / M * 0.5 + 0.5) * n)));
+    const y = Math.min(n - 1, Math.max(0, Math.floor((p[a.j] / M * 0.5 + 0.5) * n)));
+    return f * F + y * n + x;
+  };
+  const DX = [1, -1, 0, 0, 1, 1, -1, -1], DY = [0, 0, 1, -1, 1, -1, 1, -1];
+  const Q = new Float32Array(3), R = new Float32Array(3);
+  /** Neighbour d of cell c (-1 if it folds back onto c), and the distance to it in dist[0]. */
+  const dist = new Float32Array(1);
+  const nb = (c: number, d: number): number => {
+    const f = (c / F) | 0, r = c - f * F, x = r % n, y = (r / n) | 0;
+    const nx = x + DX[d], ny = y + DY[d];
+    pos(f, ((x + 0.5) / n) * 2 - 1, ((y + 0.5) / n) * 2 - 1, Q);
+    pos(f, ((nx + 0.5) / n) * 2 - 1, ((ny + 0.5) / n) * 2 - 1, R);
+    // Off the face: the grid carried on past its edge lands in the next face's cell.
+    const j = nx >= 0 && ny >= 0 && nx < n && ny < n ? f * F + ny * n + nx : toCell(R);
+    if (j === c) return -1;
+    dist[0] = Math.hypot(Q[0] - R[0], Q[1] - R[1], Q[2] - R[2]);
+    return j;
+  };
+
+  const h = new Float32Array(N);
+  for (let i = 0; i < N; i++) h[i] = h0[i] + (o.jitter ? o.jitter[i] : 0);
+  // Priority-flood from the sea. rcv: -2 not reached yet, -1 outlet, else the cell drained to.
+  const rcv = new Int32Array(N).fill(-2), order = new Int32Array(N);
+  const fill = new Float32Array(N), rdist = new Float32Array(N);
+  const heap = new Heap(N);
+  for (let i = 0; i < N; i++) if (h0[i] <= 0) { rcv[i] = -1; fill[i] = h[i]; heap.push(i, h[i]); }
+  let count = 0;
+  while (heap.size) {
+    const c = heap.pop();
+    order[count++] = c;
+    for (let d = 0; d < 8; d++) {
+      const j = nb(c, d);
+      if (j < 0 || rcv[j] !== -2) continue;
+      fill[j] = Math.max(h[j], fill[c] + 1e-9);
+      rcv[j] = c;
+      rdist[j] = dist[0];
+      heap.push(j, fill[j]);
+    }
+  }
+  // (A world with no sea: nothing reached. Leave it uncarved.)
+  if (count < N) for (let i = 0; i < N; i++) if (rcv[i] === -2) { rcv[i] = -1; order[count++] = i; fill[i] = h[i]; }
+  // Stochastic steepest descent on the filled surface (see analyticErosion).
+  for (let c = 0; c < N; c++) {
+    if (rcv[c] < 0) continue;
+    let best = rcv[c], bs = -1, bd = rdist[c];
+    for (let d = 0; d < 8; d++) {
+      const j = nb(c, d);
+      if (j < 0 || fill[j] >= fill[c]) continue;
+      const s = (fill[c] - fill[j]) / dist[0] * (0.4 + 1.2 * hash(c * 8 + d));
+      if (s > bs) { bs = s; best = j; bd = dist[0]; }
+    }
+    rcv[c] = best; rdist[c] = bd;
+  }
+  // Drainage area, in cells of size unit (each cell's own area on the sphere: gnomonic cells
+  // shrink toward a face's edges).
+  const area = new Float32Array(N), unit = o.unit ?? 2 / n, cell = (2 / n) * (2 / n) / (unit * unit);
+  for (let f = 0; f < 6; f++) for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const u = ((x + 0.5) / n) * 2 - 1, v = ((y + 0.5) / n) * 2 - 1;
+    area[f * F + y * n + x] = cell / Math.pow(1 + u * u + v * v, 1.5);
+  }
+  for (let i = count - 1; i >= 0; i--) { const c = order[i], r = rcv[c]; if (r >= 0) area[r] += area[c]; }
+  // Equilibrium heights up from the outlets (into fill, no longer needed), carving into rdist
+  // (each cell's own distance is used before it is overwritten).
+  const eq = fill, carve = rdist;
+  for (let i = 0; i < count; i++) {
+    const c = order[i], r = rcv[c];
+    if (r < 0) { eq[c] = h0[c]; carve[c] = 0; continue; }
+    eq[c] = Math.min(eq[r] + k * Math.pow(area[c], -m) * rdist[c], Math.max(h0[c], eq[r]));
+    carve[c] = Math.max(0, h0[c] - eq[c]);
+  }
+  // Light blur over the same neighbours, across face edges too (into h, no longer needed).
+  const out = h;
+  for (let c = 0; c < N; c++) {
+    let s = 4 * carve[c], w = 4;
+    for (let d = 0; d < 8; d++) {
+      const j = nb(c, d);
+      if (j < 0) continue;
+      const ww = d < 4 ? 2 : 1;
+      s += carve[j] * ww; w += ww;
+    }
+    out[c] = Math.min(s / w, Math.max(0, h0[c]));
+  }
+  return { carve: out, area };
+}

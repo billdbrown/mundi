@@ -15,6 +15,7 @@
  */
 import * as THREE from 'three';
 import type { EroRequest, EroResult } from './eroworker.ts';
+import { Valleys, VALLEY_GLSL } from './valleys.ts';
 
 const SIZE = 1024;
 /** Water map resolution. */
@@ -45,6 +46,8 @@ export interface ShadowUniforms {
   uTileW: { value: number[] };
   uEroR: { value: number };
   uEroOn: { value: number };
+  /** The whole planet's valleys (valleys.ts, trial V): six cube faces, r carving, g log2 area. */
+  uValleys: { value: THREE.Texture | null };
   /** The water map's texel size (radians), so detail it can't resolve fades out. */
   uShTexel: { value: number };
 }
@@ -61,10 +64,7 @@ const LAYERS = 16;
  * Turn this on with setErosion(true) to bring the valleys back.
  */
 const ERO_TILES = false;
-const ERO_GLSL = !ERO_TILES ? /* glsl */`
-  uniform float uEroR, uEroOn;
-  vec3 groundCarve(vec3 p) { return vec3(0.0); }
-` : /* glsl */`
+const ERO_GLSL = !ERO_TILES ? VALLEY_GLSL : /* glsl */`
   uniform highp sampler2DArray uEroTiles;
   uniform vec3 uTileC[${LAYERS}], uTileE[${LAYERS}], uTileN[${LAYERS}];
   uniform float uTileW[${LAYERS}];
@@ -88,7 +88,7 @@ const ERO_GLSL = !ERO_TILES ? /* glsl */`
 export const shadowUniforms: ShadowUniforms = {
   uShC: { value: new THREE.Vector3(0, 0, 1) }, uShE: { value: new THREE.Vector3(1, 0, 0) }, uShN: { value: new THREE.Vector3(0, 1, 0) },
   uShR: { value: 0.1 }, uShMap: { value: null }, uShH: { value: null }, uShRiv: { value: null }, uShOn: { value: 0 },
-  uEroTiles: { value: null }, uEroR: { value: 0.1 }, uEroOn: { value: 0 },
+  uEroTiles: { value: null }, uEroR: { value: 0.1 }, uEroOn: { value: 0 }, uValleys: { value: null },
   uTileC: { value: Array.from({ length: LAYERS }, () => new THREE.Vector3(0, 0, 1)) },
   uTileE: { value: Array.from({ length: LAYERS }, () => new THREE.Vector3(1, 0, 0)) },
   uTileN: { value: Array.from({ length: LAYERS }, () => new THREE.Vector3(0, 1, 0)) },
@@ -319,6 +319,10 @@ export class TerrainShadow {
    * fade). setErosion(true) brings them back. Nothing runs while off.
    */
   private eroEnabled = false;
+  /** The whole planet's valleys (valleys.ts), trial V. */
+  readonly valleys: Valleys;
+  private valleysOn = false;
+  setValleys(on: boolean) { this.valleysOn = on; }
   // Water map: rivers drawn from above, then blurred two ways (blurFragment).
   private riverRaw = new THREE.WebGLRenderTarget(RIV, RIV, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
   private riverTmp = new THREE.WebGLRenderTarget(RIV, RIV, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
@@ -344,6 +348,7 @@ export class TerrainShadow {
     this.tileTex.needsUpdate = true;
     this.u.uEroTiles.value = this.tileTex;
     this.u.uEroR.value = TILE_T;
+    this.valleys = new Valleys(this.u);
     this.u.uShRiv.value = this.riverMap.texture;
     this.blurMat = new THREE.ShaderMaterial({
       uniforms: { uSrc: { value: null }, uHeight: { value: this.height.texture }, uDir: { value: new THREE.Vector2() }, uNear: { value: 1 }, uWide: { value: 4 }, uCoast: { value: 1 }, uSeaWide: { value: 6 }, uFirst: { value: 1 } },
@@ -361,7 +366,7 @@ export class TerrainShadow {
       uniforms: {
         uHeight: { value: this.height.texture }, uSun: { value: new THREE.Vector3() },
         uC: this.u.uShC, uE: this.u.uShE, uN: this.u.uShN, uR: { value: 0.1 }, uTexel: { value: 2 / SIZE },
-        uEroTiles: this.u.uEroTiles, uTileC: this.u.uTileC, uTileE: this.u.uTileE, uTileN: this.u.uTileN, uTileW: this.u.uTileW, uEroR: this.u.uEroR, uEroOn: this.u.uEroOn,
+        uValleys: this.u.uValleys, uEroTiles: this.u.uEroTiles, uTileC: this.u.uTileC, uTileE: this.u.uTileE, uTileN: this.u.uTileN, uTileW: this.u.uTileW, uEroR: this.u.uEroR, uEroOn: this.u.uEroOn,
       },
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: shadowFragment,
@@ -381,6 +386,7 @@ export class TerrainShadow {
     this.pendingKey = '';
     this.eroBusy = false;
     this.layerKey.fill(''); this.layerFade.fill(0); this.u.uTileW.value.fill(0);
+    this.valleys.reset();
     if (!terrain) this.u.uShOn.value = 0;
   }
 
@@ -507,6 +513,11 @@ export class TerrainShadow {
    * planet's centre; sun: direction to the sun (world).
    */
   update(renderer: THREE.WebGLRenderer, centre: THREE.Vector3, dist: number, sun: THREE.Vector3, active: boolean) {
+    // The whole planet's valleys (trial V): worked out once per world, then faded in.
+    if (this.valleysOn && this.source) this.valleys.build(renderer, this.source);
+    const was = this.u.uEroOn.value;
+    this.valleys.tick(this.valleysOn);
+    if (this.u.uEroOn.value !== was) this.needCast = true;   // the shadows see the carving too
     const on = active && !!this.source && dist < 2.4;
     this.u.uShOn.value = on ? 1 : 0;
     if (!on) return;

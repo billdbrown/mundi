@@ -31,7 +31,7 @@ export interface WorldParams {
 }
 
 export const DEFAULT_PARAMS: WorldParams = {
-  seed: 1, detail: 60, ocean: 0.68, plates: 12, continents: 3, roughness: 0.45, heat: 0, wetness: 0, rivers: 1, erosion: 1, ecology: 0, deltas: 0,
+  seed: 1, detail: 60, ocean: 0.68, plates: 20, continents: 4, roughness: 0.45, heat: 0, wetness: 0, rivers: 1, erosion: 1, ecology: 1, deltas: 0,
 };
 
 export const WATER_LAND = 0, WATER_OCEAN = 1, WATER_LAKE = 2;
@@ -107,20 +107,53 @@ export function generateWorld(params: WorldParams, stage?: (step: GenStep) => vo
   const target = (1 - params.ocean) * N * 1.05;
   let covered = 0;
   const clusters = Math.max(1, Math.min(Math.round(params.continents), plateCount));
+  // Each cluster starts on a plate far from the others (picked at random among the farthest few),
+  // grows the smallest first, and avoids plates touching another cluster: picked at random and
+  // grown anywhere, clusters started side by side and merged, and the biggest grew most, so half
+  // of all worlds were one supercontinent with a hemisphere of empty ocean (2026-11-02,
+  // scripts/continents.ts: one landmass in 55% of worlds, the biggest 89% of the land).
+  const centre: number[][] = Array.from({ length: plateCount }, () => [0, 0, 0]);
+  for (let c = 0; c < N; c++) { const m = centre[plate[c]]; m[0] += P[c * 3]; m[1] += P[c * 3 + 1]; m[2] += P[c * 3 + 2]; }
+  for (const m of centre) { const l = Math.hypot(m[0], m[1], m[2]) || 1; m[0] /= l; m[1] /= l; m[2] /= l; }
+  const cluster = new Int16Array(plateCount).fill(-1);
+  const clusterSize: number[] = [];
   for (let k = 0; k < clusters && covered < target; k++) {
     let p: number;
-    do p = Math.floor(rng() * plateCount); while (continental[p]);
-    continental[p] = 1; covered += plateSize[p];
+    if (k === 0) p = Math.floor(rng() * plateCount);
+    else {
+      // Distance (as 1 - cos) to the nearest seed so far; choose among the three farthest.
+      const far: [number, number][] = [];
+      for (let q = 0; q < plateCount; q++) {
+        if (continental[q]) continue;
+        let near = Infinity;
+        for (let j = 0; j < plateCount; j++) if (cluster[j] >= 0) near = Math.min(near, 1 - (centre[q][0] * centre[j][0] + centre[q][1] * centre[j][1] + centre[q][2] * centre[j][2]));
+        far.push([near, q]);
+      }
+      if (!far.length) break;
+      far.sort((x, y) => y[0] - x[0]);
+      p = far[Math.floor(rng() * Math.min(3, far.length))][1];
+    }
+    continental[p] = 1; cluster[p] = k; covered += plateSize[p];
+    clusterSize.push(plateSize[p]);
   }
   while (covered < target) {
-    const candidates: number[] = [];
-    for (let p = 0; p < plateCount; p++) {
-      if (continental[p]) continue;
-      for (const q of plateAdj[p]) if (continental[q]) { candidates.push(p); break; }
+    // The smallest cluster that can still grow takes the next plate.
+    const order = clusterSize.map((n, k) => [n, k]).sort((x, y) => x[0] - y[0]).map((x) => x[1]);
+    let pick = -1, into = -1;
+    for (const k of order) {
+      const own: number[] = [], shared: number[] = [];
+      for (let p = 0; p < plateCount; p++) {
+        if (continental[p]) continue;
+        let mine = false, other = false;
+        for (const q of plateAdj[p]) { if (cluster[q] === k) mine = true; else if (cluster[q] >= 0) other = true; }
+        if (mine) (other ? shared : own).push(p);
+      }
+      const from = own.length ? own : shared;
+      if (from.length) { pick = from[Math.floor(rng() * from.length)]; into = k; break; }
     }
-    if (!candidates.length) break;
-    const p = candidates[Math.floor(rng() * candidates.length)];
-    continental[p] = 1; covered += plateSize[p];
+    if (pick < 0) break;
+    continental[pick] = 1; cluster[pick] = into; covered += plateSize[pick];
+    clusterSize[into] += plateSize[pick];
   }
   const baseHeight = new Float32Array(plateCount);
   for (let p = 0; p < plateCount; p++) {

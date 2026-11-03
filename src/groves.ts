@@ -2,25 +2,20 @@
  * Groves and clearings: one pattern shared by the tree placer (JavaScript) and the ground
  * shader (GLSL), so canopy texture and trees agree on where the forest is.
  *
- * It is twelve sine waves in scattered directions, domain-warped by three more. Hashed
- * noise would not do: float32 on the GPU and float64 here would disagree about the hashes.
- * Sines of moderate arguments come out the same on both sides to well within what shows.
+ * Three octaves of simplex noise, domain-warped by three more (snoise.ts has it on both sides,
+ * agreeing to about 0.0005). Until 2026-11-02 it was twelve sine waves, chosen because hashed
+ * noise was thought to come out differently on the GPU; but at mid zoom the waves lined up into
+ * a printed-looking pattern of parallel streaks (Bill's screenshot over dry forest). The noise
+ * was tuned to the waves' statistics: the same spread, grove size (zero crossings per radian)
+ * and shares of forest and open ground under forestMask and openMask.
  *
  * The frequency is tied to the cell size: groves a few to ten kilometres across, several to a
  * cell.
  */
+import { snoise3 } from './snoise.ts';
 
-/**
- * Direction (x, y, z), frequency multiple, phase, amplitude. Twelve waves in directions spread
- * by the golden angle, at frequencies with no simple ratios: few waves of similar size beat
- * into a visible diamond lattice; many scattered ones read as irregular.
- */
-const WAVES: [number, number, number, number, number, number][] = Array.from({ length: 12 }, (_, i) => {
-  const y = 1 - (2 * (i + 0.5)) / 12, r = Math.sqrt(1 - y * y), a = i * 2.39996323;
-  const k = 0.55 * Math.pow(1.23, i) * (1 + 0.137 * Math.sin(i * 7.1));
-  return [r * Math.cos(a), y, r * Math.sin(a), k, (i * 1.618034) % 6.2832, 1 / Math.sqrt(k)];
-});
-const NORM = WAVES.reduce((s, w) => s + w[5], 0);
+/** Base frequency (times the grove frequency), and the field's scale: see above. */
+const G_FREQ = 0.165, G_WARP_FREQ = G_FREQ * 0.5, G_WARP = 0.9 / (G_FREQ * 2.5), G_SCALE = 2.33;
 
 /**
  * Ground distances that should not change with the cell count (tree size and density, grove
@@ -34,25 +29,26 @@ export const groveFreq = (_N?: number) => 7 / REF_SPACING;
 
 /** About −1..1; high in groves, low in clearings. p is a point near the unit sphere. */
 export function groveField(x: number, y: number, z: number, f: number): number {
-  const wx = x + (1.4 / f) * Math.sin((y * 1.9 + z * 0.7) * f * 0.37 + 1.3);
-  const wy = y + (1.4 / f) * Math.sin((z * 1.3 - x * 0.8) * f * 0.41 + 2.9);
-  const wz = z + (1.4 / f) * Math.sin((x * 1.1 + y * 0.6) * f * 0.33 + 0.4);
-  let s = 0;
-  for (const [a, b, c, k, ph, amp] of WAVES) s += Math.sin((a * wx + b * wy + c * wz) * f * k + ph) * amp;
-  return s / NORM * 2.6;
+  const a = f * G_WARP_FREQ, A = G_WARP / f;
+  const wx = x + A * snoise3(x * a, y * a, z * a);
+  const wy = y + A * snoise3(x * a + 31.4, y * a, z * a);
+  const wz = z + A * snoise3(x * a, y * a + 47.2, z * a);
+  const q = f * G_FREQ;
+  return G_SCALE * (0.6 * snoise3(wx * q, wy * q, wz * q)
+    + 0.28 * snoise3(wx * q * 2.1 + 5.2, wy * q * 2.1, wz * q * 2.1)
+    + 0.12 * snoise3(wx * q * 4.3, wy * q * 4.3 + 9.1, wz * q * 4.3));
 }
 
+const glf = (v: number) => v.toFixed(6);
 export const GROVE_GLSL = /* glsl */`
   uniform float uGrove;
+  // (Needs snoise: NOISE_GLSL first.)
   float groveField(vec3 p) {
-    float f = uGrove;
-    vec3 w = p + (1.4 / f) * vec3(
-      sin((p.y * 1.9 + p.z * 0.7) * f * 0.37 + 1.3),
-      sin((p.z * 1.3 - p.x * 0.8) * f * 0.41 + 2.9),
-      sin((p.x * 1.1 + p.y * 0.6) * f * 0.33 + 0.4));
-    float s = 0.0;
-    ${WAVES.map(([a, b, c, k, ph, amp]) => `s += sin(dot(w, vec3(${a.toFixed(3)}, ${b.toFixed(3)}, ${c.toFixed(3)})) * f * ${k.toFixed(3)} + ${ph.toFixed(3)}) * ${amp.toFixed(3)};`).join('\n    ')}
-    return s / ${NORM.toFixed(4)} * 2.6;
+    float f = uGrove, a = f * ${glf(G_WARP_FREQ)}, A = ${glf(G_WARP)} / f;
+    vec3 pa = p * a;
+    vec3 w = p + A * vec3(snoise(pa), snoise(pa + vec3(31.4, 0.0, 0.0)), snoise(pa + vec3(0.0, 47.2, 0.0)));
+    vec3 q = w * (f * ${glf(G_FREQ)});
+    return ${glf(G_SCALE)} * (0.6 * snoise(q) + 0.28 * snoise(q * 2.1 + vec3(5.2, 0.0, 0.0)) + 0.12 * snoise(q * 4.3 + vec3(0.0, 9.1, 0.0)));
   }
 `;
 
