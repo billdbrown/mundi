@@ -23,9 +23,9 @@ tag = "v1"
 new_sqlite_classes = ["Registry"]
 
 [vars]
-# Turnstile site key (public). Cloudflare's always-pass test key until the real widget exists;
+# Turnstile site key (public), widget "mundi claims" for mundi.bill.computer;
 # the matching TURNSTILE_SECRET is a secret (wrangler secret put), never in this file.
-TURNSTILE_SITEKEY = "1x00000000000000000000AA"
+TURNSTILE_SITEKEY = "0x4AAAAAAFxdg3U7EW-teqd4"
 
 # custom_domain provisions the DNS record and TLS cert on deploy.
 [[routes]]
