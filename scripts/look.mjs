@@ -5,7 +5,7 @@
  *   node scripts/look.mjs <outdir> <tag> [shot...]
  *
  * A shot is name=seed:target:alt[:lens] (lens: map, elev) (seed may carry more hash, e.g. 77&detail=40), where target is a biome list (b12, b8+9) or a debug
- * spot (desert, river, coast...), bigriver, bigmouth, or @lon,lat. `zoom=seed:target` shoots a descent at several heights.
+ * spot (desert, river, coast...), bigriver, bigmouth, delta, or @lon,lat. `zoom=seed:target` shoots a descent at several heights.
  * URL from LOOK_URL (default http://localhost:5291/). TOPDOWN=1 looks straight down (no tilt);
  * ERO=0 turns the erosion filter off. HOUR=17 lights by the sun at that local hour;
  * NOSHADOW=1 turns terrain shadows off.
@@ -37,6 +37,14 @@ async function aim(seed, target, alt, lens) {
       // The biggest river where it meets the sea.
       let best = -1;
       for (let c = 0; c < w.grid.count; c++) if (w.river[c] && w.water[c] === 0 && w.grid.neighbors[c].some((n) => w.water[n] === 1) && (best < 0 || w.flow[c] > w.flow[best])) best = c;
+      m.orbit(Math.atan2(P[best * 3], P[best * 3 + 2]) * 57.2958, Math.asin(P[best * 3 + 1]) * 57.2958, a);
+      return best;
+    }
+    if (t === 'delta') {
+      // The biggest delta (deltas.ts: land at exactly DELTA_E).
+      let best = -1;
+      for (let c = 0; c < w.grid.count; c++) if (w.water[c] === 0 && Math.abs(w.elevation[c] - 0.012) < 1e-6 && (best < 0 || w.flow[c] > w.flow[best])) best = c;
+      if (best < 0) return -1;
       m.orbit(Math.atan2(P[best * 3], P[best * 3 + 2]) * 57.2958, Math.asin(P[best * 3 + 1]) * 57.2958, a);
       return best;
     }

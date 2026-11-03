@@ -615,7 +615,8 @@ function buildSmooth(inp: SurfaceInput): Surface {
         sea = Math.max(sea, ((dx - cx) * ax + (dy - cy) * ay + (dz - cz) * az) / (al * al * 0.5));
       }
       const wob = tint(dx * lf * 1.7 + 2.1, dy * lf * 1.7, dz * lf * 1.7) * 0.45 + tint(dx * lf * 4.3, dy * lf * 4.3 + 5.5, dz * lf * 4.3) * 0.2;
-      const k = Math.min(1, Math.max(0, (sea + wob - 0.25) / 0.6));
+      // (Shore at ~0.75 of the way to the sea edge, was ~0.5: room for the channel fan, render.ts.)
+      const k = Math.min(1, Math.max(0, (sea + wob - 0.05) / 0.75));
       return SEA + 0.0005 - 0.0011 * k * k * (3 - 2 * k) + 0.00006 * n;
     }
     if (h <= SEA + 0.0005) return h + 0.0003 * n;
