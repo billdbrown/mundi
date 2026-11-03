@@ -226,6 +226,35 @@ export function treeGeometry(kind: number): THREE.BufferGeometry {
 }
 export const treeMaterial = new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.9 });
 
+/**
+ * A plant's stand-in for the distance (the Fast quality, lodflora.ts): its bounding shape in a
+ * couple of dozen corners, against a few hundred for the full model. Tall, narrow plants (spruce,
+ * cypress, poplar) a five-sided spire; everything else an eight-faced crown over the lower part
+ * of the trunk's height. At a few pixels tall the two can't be told apart.
+ */
+const lite = new Map<number, THREE.BufferGeometry>();
+export function liteGeometry(kind: number): THREE.BufferGeometry {
+  const hit = lite.get(kind);
+  if (hit) return hit;
+  const full = treeGeometry(kind);
+  full.computeBoundingBox();
+  const b = full.boundingBox!, w = Math.max(b.max.x - b.min.x, 1e-3), d = Math.max(b.max.z - b.min.z, 1e-3), h = Math.max(b.max.y - b.min.y, 1e-3);
+  const cx = (b.max.x + b.min.x) / 2, cz = (b.max.z + b.min.z) / 2;
+  let g: THREE.BufferGeometry;
+  if (h > 2.2 * Math.max(w, d)) {
+    g = new THREE.ConeGeometry(Math.max(w, d) / 2, h * 0.92, 5, 1).translate(cx, b.min.y + h * 0.08 + h * 0.46, cz);
+  } else {
+    // The crown: the upper part for anything with a trunk under it, the whole of low things.
+    const tall = h > 0.7 * Math.max(w, d), y0 = tall ? b.min.y + h * 0.3 : b.min.y, ch = b.max.y - y0;
+    g = new THREE.OctahedronGeometry(0.5, 0).scale(w, ch, d).translate(cx, y0 + ch / 2, cz);
+  }
+  g = g.toNonIndexed();
+  for (const n of Object.keys(g.attributes)) if (n !== 'position') g.deleteAttribute(n);
+  g.computeVertexNormals();
+  lite.set(kind, g);
+  return g;
+}
+
 export function buildForest(t: TreeData): THREE.InstancedMesh[] {
   shared ??= treeGeometries();
   const byKind: number[][] = Array.from({ length: KINDS }, () => []);

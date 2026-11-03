@@ -972,6 +972,9 @@ export class PlanetView {
   quality: Quality = 'auto';
   setQuality(q: Quality) {
     this.quality = q;
+    // Fast also draws distant plants as stand-ins (lodflora.ts): low down, the plants' corners,
+    // not pixels, were what slowed a laptop.
+    this.flora.setLite(q === 'fast');
     const r = this.res, dpr = Math.min(devicePixelRatio, 2);
     r.max = q === 'fast' ? Math.min(dpr, 0.75) : dpr;
     r.min = q === 'sharp' ? dpr : q === 'fast' ? 0.5 : Math.min(dpr, 0.6);

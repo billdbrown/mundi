@@ -16,7 +16,7 @@ import { baseOf } from './ecology.ts';
 import { B, landBiome } from './biomes.ts';
 import { WATER_LAND, WATER_OCEAN, type World } from './world.ts';
 import type { SurfaceData } from './surface.ts';
-import { FLORA, FLORA_RICH, KINDS, ICEBERG, CACTUS, ROCK, PALM, BROADLEAF, SCRUB, ACACIA, BIRCH, TUFT, treeGeometry, treeMaterial } from './flora.ts';
+import { FLORA, FLORA_RICH, KINDS, ICEBERG, CACTUS, ROCK, PALM, BROADLEAF, SCRUB, ACACIA, BIRCH, TUFT, treeGeometry, liteGeometry, treeMaterial } from './flora.ts';
 import { FAMILIES, FIRST, VARIANTS, LEAFY_FAMILIES, sp } from './species.ts';
 import { groveField, groveFreq, forestMask, openMask, REF_SPACING } from './groves.ts';
 import { makeRng } from './rng.ts';
@@ -38,6 +38,9 @@ const DENSITY = 36;
 /** Floats per plant: x, y, z, size, spin, shade, kind, colour, cut year (0 = never). */
 const STRIDE = 9;
 const MAX_INSTANCES = 320000;
+/** Fast quality: plants nearer than this to the camera (at the plant scale 1/6) keep full models.
+ *  A tree there is ~20 px tall or more; past it, a few pixels. */
+const LITE_NEAR = 0.012;
 /** Main-thread time per frame for generating plants, ms. */
 const BUDGET_MS = 5;
 
@@ -47,6 +50,16 @@ interface Baked { n: Int32Array; mat: Float32Array[]; col: Float32Array[]; cut: 
 export class LodFlora {
   private group = new THREE.Group();
   private meshes: (THREE.InstancedMesh | null)[] = new Array(KINDS).fill(null);
+  /**
+   * Fast quality (setLite): past LITE_NEAR from the camera plants are drawn as stand-ins
+   * (flora.ts liteGeometry), in their own meshes. Low over a forest ~220,000 plants are drawn,
+   * ~150 million corners a frame at full detail: a fast graphics card shrugs, a laptop's
+   * built-in one managed a few frames a second (2026-11-03).
+   */
+  private liteMeshes: (THREE.InstancedMesh | null)[] = new Array(KINDS).fill(null);
+  private lite = false;
+  private cam = new THREE.Vector3();
+  private liteCell = -1;
   private world?: World;
   private pos?: Float32Array;
   private index?: Uint32Array;
@@ -101,6 +114,12 @@ export class LodFlora {
     this.forget();
   }
   getScale() { return this.scale; }
+  /** Fast quality: stand-ins in the distance (see liteMeshes). */
+  setLite(on: boolean) {
+    if (on === this.lite) return;
+    this.lite = on;
+    this.dirty = true;
+  }
 
   private forget() {
     this.baked.clear();
@@ -157,6 +176,9 @@ export class LodFlora {
       cur = best;
     }
     this.lastCenter = cur;
+    this.cam.copy(camera);
+    // Fast quality: which plants are near moves with the camera, so re-sort when it moves on.
+    if (this.lite && cur !== this.liteCell) { this.liteCell = cur; this.dirty = true; }
     // Cover every triangle that could hold a visible plant, plus a margin, so they join while
     // their plants are still at zero size.
     const alt = Math.max(0, d - 1);
@@ -255,16 +277,30 @@ export class LodFlora {
   }
 
   private rebuild() {
-    const parts: Baked[] = [];
-    for (const t of this.wanted) { const b = this.baked.get(t); if (b) parts.push(b); }
+    // Fast quality: triangles nearer than LITE_NEAR to the camera get full models, the rest
+    // stand-ins. (wanted is nearest first; triangles are small beside the distance.)
+    const near: Baked[] = [], far: Baked[] = [], C = this.centroid, cam = this.cam;
+    const nearSq = (LITE_NEAR * this.scale * 6) ** 2;
+    for (const t of this.wanted) {
+      const b = this.baked.get(t);
+      if (!b) continue;
+      const dx = C[t * 3] - cam.x, dy = C[t * 3 + 1] - cam.y, dz = C[t * 3 + 2] - cam.z;
+      (this.lite && dx * dx + dy * dy + dz * dz > nearSq ? far : near).push(b);
+    }
+    let total = 0;
+    for (const b of [...near, ...far]) for (let k = 0; k < KINDS; k++) total += b.n[k];
+    const keep = total > MAX_INSTANCES ? MAX_INSTANCES / total : 1;
+    this.fillMeshes(this.meshes, near, keep, treeGeometry);
+    this.fillMeshes(this.liteMeshes, far, keep, liteGeometry);
+  }
+
+  /** Copy the triangles' plants into one set of meshes (one per kind), made with geoOf. */
+  private fillMeshes(meshes: (THREE.InstancedMesh | null)[], parts: Baked[], keep: number, geoOf: (k: number) => THREE.BufferGeometry) {
     const counts = new Array(KINDS).fill(0);
     for (const b of parts) for (let k = 0; k < KINDS; k++) counts[k] += b.n[k];
-    const total = counts.reduce((s, n) => s + n, 0);
-    const keep = total > MAX_INSTANCES ? MAX_INSTANCES / total : 1;
-
     for (let k = 0; k < KINDS; k++) {
       const need = Math.ceil(counts[k] * keep);
-      let mesh = this.meshes[k];
+      let mesh = meshes[k];
       // (Kinds with nothing near get no mesh: with ~60 kinds most are absent from any one view.)
       if (need === 0) { if (mesh) mesh.visible = false; continue; }
       if (mesh) mesh.visible = true;
@@ -272,7 +308,7 @@ export class LodFlora {
         if (mesh) { this.group.remove(mesh); mesh.dispose(); }
         const cap = Math.max(16, Math.ceil(need * 1.3));
         // Own geometry per mesh, for the per-instance 'cut' attribute.
-        const geo = treeGeometry(k).clone();
+        const geo = geoOf(k).clone();
         geo.setAttribute('cut', new THREE.InstancedBufferAttribute(new Float32Array(cap), 1));
         // Broadleaf trees and scrub change with the seasons (sky.ts TREE_SEASON); conifers don't.
         const leafy = k === BROADLEAF || k === SCRUB || k === ACACIA || k === BIRCH || k === TUFT
@@ -281,7 +317,7 @@ export class LodFlora {
         mesh = new THREE.InstancedMesh(geo, treeMaterial, cap);
         mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
         mesh.frustumCulled = false;
-        this.meshes[k] = mesh;
+        meshes[k] = mesh;
         this.group.add(mesh);
       }
     }
@@ -291,7 +327,7 @@ export class LodFlora {
     for (const b of parts) {
       for (let k = 0; k < KINDS; k++) {
         if (!counts[k]) continue;   // (no mesh for kinds with none near)
-        const mesh = this.meshes[k]!, cap = mesh.instanceMatrix.count;
+        const mesh = meshes[k]!, cap = mesh.instanceMatrix.count;
         const take = Math.min(keep < 1 ? Math.round(b.n[k] * keep) : b.n[k], cap - fill[k]);
         if (take <= 0) continue;
         const j = fill[k];
@@ -302,7 +338,7 @@ export class LodFlora {
       }
     }
     // Upload only the part in use.
-    this.meshes.forEach((mesh, k) => {
+    meshes.forEach((mesh, k) => {
       if (!mesh || !mesh.visible) return;
       mesh.count = Math.min(fill[k], mesh.instanceMatrix.count);
       const attrs: [THREE.BufferAttribute, number][] = [[mesh.instanceMatrix, 16], [mesh.instanceColor!, 3], [mesh.geometry.getAttribute('cut') as THREE.BufferAttribute, 1]];
