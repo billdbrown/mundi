@@ -479,9 +479,6 @@ export class PlanetView {
     this.planet.add(this.clouds);
     this.planet.add(this.precip.group);
     this.planet.add(this.fauna.group);
-    // Animals' size over their proportion with the trees (fauna.ts): ?fauna=N to compare.
-    const fs = Number(new URLSearchParams(location.search).get('fauna'));
-    if (fs > 0) this.fauna.setSize(fs);
     for (const m of this.clouds.children as THREE.Mesh[]) applyAerial(m.material as THREE.Material, true);
     applyCloudShadow(treeMaterial, this.cloudU, this.sunU, this.flora.fade);
     applyAerial(treeMaterial, true);
@@ -627,10 +624,10 @@ export class PlanetView {
    * pitch is reapplied each time). The sky and haze come from the atmosphere (atmosphere.ts).
    */
   /**
-   * The lowest the camera comes over the ground (radii). Trial 2026-11-03 for animals: ?floor=N
-   * in the address (default 0.007).
+   * The lowest the camera comes over the ground (radii). Trial 2026-11-03 for animals: the G key
+   * (main.ts), kept in the link as &floor= (default 0.007).
    */
-  private floor = Number(new URLSearchParams(location.search).get('floor')) || 0.007;
+  private floor = 0.007;
   private groundCell = 0;
   private virtualPos = new THREE.Vector3();
   private tiltedPos = new THREE.Vector3();
@@ -688,7 +685,10 @@ export class PlanetView {
       this.camera.up.copy(up);
       this.camera.lookAt(target);
       this.tiltedPos.copy(pos);
-    }
+      // Near the ground the near plane comes in with the camera, or the ground in front is cut
+      // away (it was 0.0015, about the lowest trial floor's height).
+      this.setNear(THREE.MathUtils.clamp((pos.length() - under) * 0.5, 0.0001, 0.0015));
+    } else this.setNear(0.0015);
     // Low down, the follow-light swings round to the side and drops, so it rakes across the
     // terrain and relief reads (from the camera's side, slopes shade almost evenly).
     if (this.opts.light === 'follow' && this.sun.parent === this.camera) {
@@ -728,6 +728,15 @@ export class PlanetView {
   // --- Flat map -------------------------------------------------------------------------------
 
   isMap() { return this.mapMode; }
+
+  private setNear(n: number) {
+    if (Math.abs(this.camera.near - n) < n * 0.05) return;
+    this.camera.near = n;
+    this.camera.updateProjectionMatrix();
+  }
+  /** The camera floor over the ground (radii; trial, see floor). */
+  setFloor(f: number) { this.floor = f; }
+  getFloor() { return this.floor; }
 
   /** Switch between the globe and the flat map. The map opens centred on what the globe showed. */
   setMap(on: boolean) {

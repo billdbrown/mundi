@@ -10,7 +10,7 @@ const page = await (await browser.newContext({ viewport: { width: 900, height: 6
 const errors = [];
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text().slice(0, 400)); });
 page.on('pageerror', (e) => errors.push(String(e).slice(0, 400)));
-await page.goto(`http://localhost:5291/${process.env.QS ?? ""}#seed=${seed}`, { timeout: 240000 });
+await page.goto(`http://localhost:5291/${process.env.QS ?? ""}#seed=${seed}${process.env.HX ?? ""}`, { timeout: 240000 });
 await page.waitForFunction(() => window.mundi?.world, null, { timeout: 240000 });
 await page.evaluate(async () => { const m = window.mundi; m.capture(true); await m.view.whenReady(); });
 // A group of each kind asked for, in clear weather where possible.

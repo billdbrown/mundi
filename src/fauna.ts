@@ -5,7 +5,7 @@
  * Scale. Plants are already drawn far larger than life (a tree is ~1/40,000 of the radius, ~1 km
  * on an Earth-sized world), and from the lowest camera a deer in true proportion to them would
  * be a pixel or two. So animals carry their own size
- * multiplier on top (setSize; `?fauna=N` in the address): how much bigger than in proportion
+ * multiplier on top (setSize; the A key, `&fauna=N` in the link): how much bigger than in proportion
  * with the trees. Chosen by comparison, like the plants' 1/6. Between kinds, sizes are drawn
  * closer together than life (square root), so a rabbit shows beside a bison.
  *
@@ -176,7 +176,7 @@ export class Fauna {
   }
 
   /** How much bigger than in proportion with the trees (see the top). */
-  setSize(s: number) { this.size = s; this.cells.clear(); this.nearKey = -1; }
+  setSize(s: number) { this.size = s; this.cells.clear(); this.nearKey = -1; }   // (0: none)
   getSize() { return this.size; }
 
   /** The groups living in cell c, made once from the cell's seed. */
@@ -240,7 +240,7 @@ export class Fauna {
    * t: seconds; visible: animals wanted at all.
    */
   update(ground: THREE.Vector3, cell: number, t: number, visible: boolean) {
-    this.group.visible = visible && !!this.world && !!this.heightAt;
+    this.group.visible = visible && this.size > 0 && !!this.world && !!this.heightAt;
     if (!this.group.visible) return;
     if (cell !== this.nearKey) {
       this.nearKey = cell;

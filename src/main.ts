@@ -27,6 +27,8 @@ let world: World;
 let timings = { gen: 0, mesh: 0, clouds: 0 };
 /** Display only: what the planet's radius means in km, for the scale bar and readouts. */
 let radiusKm = 6371;
+/** The link as opened, before the world's own settings rewrite it (the animal trials read it). */
+const openedHash = new URLSearchParams(location.hash.slice(1));
 let game: GameData | null = null;
 /** Site name per cell, for the hover readout. */
 let siteAt = new Map<number, string>();
@@ -379,3 +381,37 @@ window.addEventListener('hashchange', () => {
 
 // (Trial switches, 2026-11-02: B finer biomes, D river deltas, S peak snow and V whole-planet
 // valleys were all locked in; the keys and their label are gone. &ecology=0 / &deltas=0 still work.)
+
+// TEMPORARY (2026-11-03): animal trials, judged by eye. A: animal size, times their proportion
+// with the trees (fauna.ts; 0 hides them). G: how low the camera comes. Kept in the link
+// (&fauna=, &floor=). Remove once decided.
+{
+  const SIZES = [4, 6, 8, 12, 16, 0];
+  const FLOORS: [number, string][] = [[0.007, 'high (as now)'], [0.0025, 'low'], [0.0008, 'ground']];
+  const label = document.createElement('div');
+  label.className = 'ui';   // hidden in screenshots (body.capture .ui)
+  label.style.cssText = 'position:fixed;right:16px;top:84px;padding:6px 10px;border-radius:8px;background:rgba(10,14,22,.78);color:#dfe6ef;font:12px/1.5 system-ui;pointer-events:none;z-index:50;white-space:pre';
+  document.body.appendChild(label);
+  const state = { fauna: openedHash.has('fauna') ? Number(openedHash.get('fauna')) : 8, floor: Number(openedHash.get('floor')) || 0.007 };
+  const apply = () => {
+    const { fauna: size, floor } = state;
+    view.fauna.setSize(size);
+    view.setFloor(floor);
+    const fl = FLOORS.find(([f]) => f === floor)?.[1] ?? String(floor);
+    label.textContent = ['Trials (press the key):', `A  Animal size: ${size ? size + 'x' : 'off'}`, `G  Camera floor: ${fl}`].join(String.fromCharCode(10));
+  };
+  const set = (k: 'fauna' | 'floor', v: number) => {
+    state[k] = v;
+    const h = new URLSearchParams(location.hash.slice(1));
+    h.set(k, String(v));
+    history.replaceState(null, '', '#' + h.toString());
+    apply();
+  };
+  apply();
+  window.addEventListener('keydown', (e) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === 'a') set('fauna', SIZES[(SIZES.indexOf(view.fauna.getSize()) + 1) % SIZES.length]);
+    else if (k === 'g') set('floor', FLOORS[(FLOORS.findIndex(([f]) => f === view.getFloor()) + 1) % FLOORS.length][0]);
+  });
+}
