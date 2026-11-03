@@ -8,7 +8,7 @@ import { SNOISE_GLSL } from './snoise.ts';
 import { EROSION_GLSL } from './erosion.ts';
 import { SHADOW_GLSL, shadowLights, shadowUniforms } from './terrainshadow.ts';
 import { AERIAL_FULL_GLSL, atmoUniforms, applyAerial } from './atmosphere.ts';
-import { DUNES_GLSL, PATCH_GLSL, LIFT_GLSL, PATCH_R, RIVER_SINK, patchUniforms, makeDuneUniforms, type DuneUniforms, type PatchUniforms } from './dunes.ts';
+import { DUNES_GLSL, PATCH_GLSL, LIFT_GLSL, PATCH_R, RIVER_SINK, MTN_CARVE, patchUniforms, makeDuneUniforms, type DuneUniforms, type PatchUniforms } from './dunes.ts';
 
 patchShaderChunks();
 
@@ -874,7 +874,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           vec3 t2 = cross(up, t1);
           float e = 0.0003;
           vec3 grad = t1 * (rockNoise(vCloudP + t1 * e) - rn) + t2 * (rockNoise(vCloudP + t2 * e) - rn);
-          float amp = (0.15 + 0.6 * highland) * detailFade * (1.0 - 0.7 * iceK) * (1.0 - 0.75 * eroK);
+          float amp = (0.15 + 0.6 * highland) * detailFade * (1.0 - 0.7 * iceK) * (1.0 - 0.75 * eroK * (1.0 - 0.6 * highland));
           normal = normalize(normal - TOVIEW(grad * amp));
         }
         if (uErosion > 0.0) normal = normalize(normal - TOVIEW(eroGrad));
@@ -957,9 +957,13 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           // On the patch the ground is carved by the whole planet's valleys (valleys.ts); judged by
           // that height, a snowy range lost nearly all its snow (the coarse map lowers summits a
           // little too). Most of it back: valley floors hold a little less, peaks keep theirs.
-          float hSn = hAbove;
+          // Off the patch the drawn ground is not carved, so the valleys are taken off here: they
+          // cut dark lines through a snowy range, as from the air, where it was one white sheet.
+          // (2026-11-03; both ways the valleys count VALLEY_SNOW of their depth.)
+          #define VALLEY_SNOW 0.45
+          float hSn = hAbove - VALLEY_SNOW * carveS.x * carveS.z;
           #ifdef DUNE_PATCH
-            hSn += 0.75 * carveS.x * carveS.z;
+            hSn += carveS.x * carveS.z * (1.0 + ${MTN_CARVE} * highland);
           #endif
           float st = seasonalTemp(sn, 1.0 - 1.1 * pow(lat, 1.25) - 0.5 * hSn / uRelief + uHeat);
           // Lying snow at an equinox: polar margins and high ground. (0.27 put snow over all the

@@ -164,6 +164,8 @@ export const PATCH_A = 0.15;         // grid spacing at the centre, relative to 
  * it never hides there; on the patch the banks are cut to just above it, and it sat ~0.0002 above
  * the ground on both sides: a sheet laid on the land rather than water in a channel (2026-11-03).
  */
+/** Valleys cut this much deeper again on the highest ground of the close-up patch (PATCH_BAKE_GLSL). */
+export const MTN_CARVE = 0.8;
 export const RIVER_SINK = 0.0004;
 export const PATCH_R = 0.05;         // half-width, radians (~320 km on an Earth-sized world)
 export const CAPTURE_SIZE = 512;     // texels along a side of the patch's captures
@@ -198,6 +200,7 @@ const PATCH_BASE_GLSL = /* glsl */`
 export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
   uniform sampler2D uCapR;
   uniform float uRelief;
+  const float MTN_CARVE = ${MTN_CARVE};
   const float CHANNEL = 0.0003;   // river bed below the water (radians; exaggerated, like all relief)
   const float RIVER_SINK = ${RIVER_SINK};   // the water as the patch draws it, below the mask's height
   /** How far the ground at uv (height h above the sea) drops for a river channel (0 or less). */
@@ -254,7 +257,9 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
     if (uEroOn >= 0.999 && hAbove > 0.0) {
       float e = uEroR * 2.0 / 512.0;
       float c0 = groundCarve(base).x, c1 = groundCarve(base + east * e).x, c2 = groundCarve(base + north * e).x;
-      liftC = -c0 * edge;
+      // Deeper in the mountains (x MTN_CARVE at the top): the ridges between the valleys come out
+      // sharp, where at plain depth ranges were rounded domes close up (2026-11-03).
+      liftC = -c0 * edge * (1.0 + MTN_CARVE * highland);
       gC = -(east * (c1 - c0) + north * (c2 - c0)) / e;
       gC *= min(1.0, 0.35 / max(length(gC), 1e-6)) * edge;   // walls no steeper than ~20 deg, as in sky.ts
     }
