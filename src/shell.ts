@@ -13,7 +13,8 @@ import { DEFAULT_PARAMS, WATER_LAKE, WATER_OCEAN } from './world.ts';
 import type { GameData } from './gamedata.ts';
 import { nameMaker } from './gamedata.ts';
 import { B, BIOMES } from './biomes.ts';
-import { HISTORY_YEARS, popAt, realmAt, type History } from './civ.ts';
+import { mountClaims } from './claims.ts';
+import { HISTORY_YEARS,popAt, realmAt, type History } from './civ.ts';
 
 export type Lens = 'earth' | 'map' | 'heat' | 'rain' | 'plates';
 
@@ -191,10 +192,6 @@ export function mountShell(app: App) {
 
   // --- Actions ---
   $('new-world').onclick = () => app.newWorld();
-  $('share').onclick = async () => {
-    try { await navigator.clipboard.writeText(location.href); toast('Link copied: anyone with it sees this planet'); }
-    catch { toast('Copy the address bar to share this planet'); }
-  };
   let toastTimer = 0;
   const toast = (msg: string) => {
     const t = $('toast');
@@ -202,6 +199,8 @@ export function mountShell(app: App) {
     clearTimeout(toastTimer);
     toastTimer = window.setTimeout(() => { t.hidden = true; }, 2400);
   };
+  // Share: copy the link, claim this world, or browse claimed ones (claims.ts).
+  mountClaims(app, $('share'), toast);
 
   // --- Lenses ---
   // The clouds button is a standing preference: lenses that show clouds respect it.

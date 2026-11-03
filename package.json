@@ -5,13 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && tsc -p worker && vite build",
     "preview": "vite preview",
     "test": "node --test \"test/**/*.test.ts\"",
     "visual": "node scripts/visual.mjs",
     "visual:update": "node scripts/visual.mjs --update"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261102.1",
     "@types/node": "^24.19.2",
     "@types/three": "^0.186.0",
     "pixelmatch": "^7.2.0",

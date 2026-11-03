@@ -1,13 +1,31 @@
-# mundi.bill.computer: the built app, served as static files. No server: generation, meshing
-# and clouds all run in the browser (a Web Worker).
+# mundi.bill.computer: the built app as static files, plus one small Worker for claims (worker/).
+# Generation, meshing and clouds all run in the browser (a Web Worker); the server only stores
+# who claimed which world.
 name = "mundi"
+main = "worker/index.ts"
 compatibility_date = "2026-10-31"
 # Pinned because the API token has no account-level enumerate. Not a credential.
 account_id = "af045bb950d46af2b6aee70965d97f0a"
 
-# Assets-only Worker: Cloudflare serves dist/ directly.
+# Cloudflare serves dist/ directly; only /api/* runs the Worker.
 [assets]
 directory = "./dist"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+# Claims, their log, thumbnails and rate-limit hits: one SQLite Durable Object.
+[[durable_objects.bindings]]
+name = "REGISTRY"
+class_name = "Registry"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Registry"]
+
+[vars]
+# Turnstile site key (public). Cloudflare's always-pass test key until the real widget exists;
+# the matching TURNSTILE_SECRET is a secret (wrangler secret put), never in this file.
+TURNSTILE_SITEKEY = "1x00000000000000000000AA"
 
 # custom_domain provisions the DNS record and TLS cert on deploy.
 [[routes]]

@@ -37,5 +37,10 @@ running dev server (`SPOT=coast|river|mountain`, `ALT=`, `ZOOM=`).
 - Generator changes must stay deterministic for a given seed (a test checks this).
 - Remotes: `origin` is the NAS (`git@git.lan:mundi.git`), `github` is public. Push both.
 - Live at **https://mundi.bill.computer** (public). Deploy by hand: `./deploy.sh` builds and runs
-  `wrangler deploy` (assets-only Worker, token from `~/.config/cloudflare/api-token`). Run the
-  visual check before deploying.
+  `wrangler deploy` (static assets plus the claims Worker in `worker/`, token from
+  `~/.config/cloudflare/api-token`). Run the visual check before deploying.
+- **Claims** are the only server code: `worker/index.ts` (one SQLite Durable Object) and
+  `src/claims.ts` (the Share panel). `TURNSTILE_SECRET` and `ADMIN_KEY` are Worker secrets
+  (`wrangler secret put`); locally they come from `.dev.vars` (gitignored). To try claims
+  locally: `npm run build && npx wrangler@4 dev` (port 8787; `npm run dev` proxies `/api` to it).
+  Remove a claim: `curl -X DELETE https://mundi.bill.computer/api/claims/<seed> -H "x-mundi-key: <ADMIN_KEY>"`.
