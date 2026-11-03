@@ -42,5 +42,5 @@ running dev server (`SPOT=coast|river|mountain`, `ALT=`, `ZOOM=`).
 - **Claims** are the only server code: `worker/index.ts` (one SQLite Durable Object) and
   `src/claims.ts` (the Share panel). `TURNSTILE_SECRET` and `ADMIN_KEY` are Worker secrets
   (`wrangler secret put`); locally they come from `.dev.vars` (gitignored). To try claims
-  locally: `npm run build && npx wrangler@4 dev` (port 8787; `npm run dev` proxies `/api` to it).
+  locally: `npm run build && npx wrangler@4 dev` (serves dist/ and the Worker; `npm run dev` has no claims).
   Remove a claim: `curl -X DELETE https://mundi.bill.computer/api/claims/<seed> -H "x-mundi-key: <ADMIN_KEY>"`.
