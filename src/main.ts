@@ -179,7 +179,7 @@ function writeHash() {
   if (!same(viewOpts.relief, DEFAULT_VIEW.relief)) h.set('relief', String(viewOpts.relief));
   if (radiusKm !== DEFAULT_RADIUS) h.set('radius', String(radiusKm));
   if (lens !== DEFAULT_LENS) h.set('lens', lens);
-  if (/(^|[#&])snow=1(&|$)/.test(location.hash)) h.set('snow', '1');   // trial S (below)
+  for (const p of ['snow', 'valleys']) if (new RegExp(`(^|[#&])${p}=1(&|$)`).test(location.hash)) h.set(p, '1');   // view trials (below)
   history.replaceState(null, '', location.search + '#' + h.toString());
 }
 
@@ -399,15 +399,24 @@ window.addEventListener('hashchange', () => {
     params = { ...params, [k[0]]: params[k[0]] > 0.5 ? 0 : 1 };
     writeHash(); show(); request();
   });
-  // S: peak snow, a view setting (no regeneration), kept in the link as &snow=1.
-  const snowOn = () => /(^|[#&])snow=1(&|$)/.test(location.hash);
-  const showAll = () => { show(); label.textContent += String.fromCharCode(10) + `S  Peak snow: ${snowOn() ? 'ON' : 'off'}`; view.setPeakSnow(snowOn()); };
+  // View trials (no regeneration), kept in the link as &snow=1, &valleys=1.
+  const VIEW_TRIALS: [string, string, string, (on: boolean) => void][] = [
+    ['s', 'snow', 'Peak snow', (on) => view.setPeakSnow(on)],
+    ['v', 'valleys', 'Valleys (whole planet)', (on) => view.setValleys(on)],
+  ];
+  const isOn = (p: string) => new RegExp(`(^|[#&])${p}=1(&|$)`).test(location.hash);
+  const showAll = () => {
+    show();
+    for (const [k, p, name, apply] of VIEW_TRIALS) { label.textContent += String.fromCharCode(10) + `${k.toUpperCase()}  ${name}: ${isOn(p) ? 'ON' : 'off'}`; apply(isOn(p)); }
+  };
   showAll();
   window.addEventListener('hashchange', showAll);
   window.addEventListener('keydown', (e) => {
-    if (e.key.toLowerCase() !== 's' || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.ctrlKey || e.metaKey || e.altKey) return;
-    const h = location.hash.replace(/^#/, '').split('&').filter((x) => x && !x.startsWith('snow='));
-    if (!snowOn()) h.push('snow=1');
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = VIEW_TRIALS.find(([k]) => k === e.key.toLowerCase());
+    if (!t) return;
+    const h = location.hash.replace(/^#/, '').split('&').filter((x) => x && !x.startsWith(t[1] + '='));
+    if (!isOn(t[1])) h.push(t[1] + '=1');
     history.replaceState(null, '', '#' + h.join('&'));
     showAll();
   });

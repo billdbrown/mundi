@@ -818,6 +818,10 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           float e = uEroR * 2.0 / 512.0;
           float c1 = groundCarve(vCloudP + t1 * e).x, c2 = groundCarve(vCloudP + t2 * e).x;
           vec3 cg = (t1 * (c1 - carveS.x) + t2 * (c2 - carveS.x)) / e;
+          // Valley walls no steeper than ~20°: the whole planet's valleys (valleys.ts) cut the
+          // biggest rivers' valleys deep and a texel or two wide, and their walls read as cliffs
+          // (pale rock and black shadow, like a road through the hills).
+          cg *= min(1.0, 0.35 / max(length(cg), 1e-6));
           normal = normalize(normal + TOVIEW(cg * carveW));
         }
         // Dunes catch the light on their windward slopes and shade their lee faces.
