@@ -56,7 +56,7 @@ const LEGENDS: Partial<Record<Lens, [string, string, string]>> = {
 interface Preset { id: string; label: string; blurb: string; p: Partial<WorldParams> }
 /** Kinds of world. Earthlike is the defaults; the others also name themselves in the URL (kind=…). */
 export const PRESETS: Preset[] = [
-  { id: 'earthlike', label: 'Earthlike', blurb: 'A few continents, two-thirds sea', p: { ocean: 0.68, continents: 3, plates: 12, roughness: 0.45, heat: 0, wetness: 0 } },
+  { id: 'earthlike', label: 'Earthlike', blurb: 'A few continents, two-thirds sea', p: { ocean: 0.68, continents: 4, plates: 20, roughness: 0.45, heat: 0, wetness: 0 } },
   { id: 'pangaea', label: 'Pangaea', blurb: 'One supercontinent', p: { ocean: 0.6, continents: 1, plates: 10, roughness: 0.35, heat: 0.05, wetness: -0.05 } },
   { id: 'archipelago', label: 'Archipelago', blurb: 'Scattered islands', p: { ocean: 0.8, continents: 8, plates: 30, roughness: 0.85, heat: 0.05, wetness: 0.1 } },
   { id: 'iceage', label: 'Ice age', blurb: 'Cold, with great ice caps', p: { ocean: 0.64, continents: 3, plates: 12, roughness: 0.45, heat: -0.3, wetness: -0.1 } },

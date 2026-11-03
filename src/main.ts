@@ -179,6 +179,7 @@ function writeHash() {
   if (!same(viewOpts.relief, DEFAULT_VIEW.relief)) h.set('relief', String(viewOpts.relief));
   if (radiusKm !== DEFAULT_RADIUS) h.set('radius', String(radiusKm));
   if (lens !== DEFAULT_LENS) h.set('lens', lens);
+  if (/(^|[#&])snow=1(&|$)/.test(location.hash)) h.set('snow', '1');   // trial S (below)
   history.replaceState(null, '', location.search + '#' + h.toString());
 }
 
@@ -397,6 +398,18 @@ window.addEventListener('hashchange', () => {
     if (!k) return;
     params = { ...params, [k[0]]: params[k[0]] > 0.5 ? 0 : 1 };
     writeHash(); show(); request();
+  });
+  // S: peak snow, a view setting (no regeneration), kept in the link as &snow=1.
+  const snowOn = () => /(^|[#&])snow=1(&|$)/.test(location.hash);
+  const showAll = () => { show(); label.textContent += String.fromCharCode(10) + `S  Peak snow: ${snowOn() ? 'ON' : 'off'}`; view.setPeakSnow(snowOn()); };
+  showAll();
+  window.addEventListener('hashchange', showAll);
+  window.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 's' || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.ctrlKey || e.metaKey || e.altKey) return;
+    const h = location.hash.replace(/^#/, '').split('&').filter((x) => x && !x.startsWith('snow='));
+    if (!snowOn()) h.push('snow=1');
+    history.replaceState(null, '', '#' + h.join('&'));
+    showAll();
   });
   window.addEventListener('hashchange', show);
 }

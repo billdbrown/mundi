@@ -45,13 +45,15 @@ export interface CloudUniforms extends DuneUniforms {
   uYear: { value: number };
   /** Weather time in days, and the active storms (weather.ts). */
   uWeather: { value: number };
+  /** Trial S (2026-11-02): snow on mid-latitude peaks, 1 on. */
+  uPeakSnow: { value: number };
   uStorms: { value: THREE.Vector4[] };
 }
 
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
     uSeason: { value: 0 }, uSeasonCos: { value: 1 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uErosion: { value: 1 }, uVolc: { value: Array.from({ length: 24 }, () => new THREE.Vector4()) }, uYear: { value: -1 },
-    uWeather: { value: 0 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, ...makeDuneUniforms() };
+    uWeather: { value: 0 }, uPeakSnow: { value: 0 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, ...makeDuneUniforms() };
 }
 
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
@@ -85,7 +87,7 @@ export const NOISE_GLSL = /* glsl */`
  */
 const CLOUD_GLSL = /* glsl */`
   uniform sampler2D uCloudMap;
-  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uSeasonCos, uHeat, uRelief, uSnow, uMapDist, uWeather;
+  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uSeasonCos, uHeat, uRelief, uSnow, uMapDist, uWeather, uPeakSnow;
   uniform vec3 uCloudSun;
   uniform vec4 uStorms[8];
   /**
@@ -896,6 +898,17 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           float line = 0.15;
           float edge = snoise(vCloudP * 25.0) * 0.06 + snoise(vCloudP * 110.0 + 3.0) * 0.03 + snoise(vCloudP * 420.0 + 5.0) * 0.015;
           float snow = smoothstep(line + 0.04, line - 0.06, st + edge);
+          // Peaks: on true mountain heights the air cools faster with height, so the crests of
+          // mid-latitude ranges go white (Bill, 2026-11-02: before, only ranges past ~40° had
+          // snow). Tuned so snow starts about h = 1.0 x relief at 25° and 0.8 at 35°, and
+          // equatorial ranges stay bare. The half rate above stays for everything lower, so
+          // plateaus don't turn white. (0.85, the generator's rate and then some, whitened
+          // whole ranges, even on the equator.)
+          float hr = hAbove / uRelief;
+          // A slow ramp, so it builds from the crests (and streaks, via lie) to full cover only on
+          // the highest ground, rather than one white sheet.
+          float stPeak = seasonalTemp(sn, 1.0 - 1.1 * pow(lat, 1.25) - 0.62 * hr + uHeat);
+          snow = max(snow, uPeakSnow * smoothstep(0.6, 0.75, hr) * smoothstep(line + 0.06, line - 0.2, stPeak + edge));
           #ifdef MERCATOR
             float slope = 1.0 - normalize(mix(geoN, normal, detailFade)).z;
           #else

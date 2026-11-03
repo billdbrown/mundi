@@ -354,6 +354,8 @@ export class PlanetView {
       check();
     });
   }
+  /** Trial S: snow on mid-latitude peaks (sky.ts). */
+  setPeakSnow(on: boolean) { this.cloudU.uPeakSnow.value = on ? 1 : 0; }
   /** Resolves once the view draws for real (not the stand-in): the gate's first stage. */
   whenGateReady(): Promise<void> {
     return new Promise((res) => { const check = () => (this.gateReady ? res() : setTimeout(check, 50)); check(); });
