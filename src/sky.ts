@@ -4,6 +4,7 @@ import type { CloudPixels } from './clouds.ts';
 import { hash01 } from './rng.ts';
 import { MERC_GLSL, MERC_DISCARD, mercVertex, patchShaderChunks } from './mercator.ts';
 import { GROVE_GLSL } from './groves.ts';
+import { SNOISE_GLSL } from './snoise.ts';
 import { EROSION_GLSL } from './erosion.ts';
 import { SHADOW_GLSL, shadowLights, shadowUniforms } from './terrainshadow.ts';
 import { AERIAL_FULL_GLSL, atmoUniforms, applyAerial } from './atmosphere.ts';
@@ -53,30 +54,6 @@ export function makeCloudUniforms(): CloudUniforms {
     uWeather: { value: 0 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, ...makeDuneUniforms() };
 }
 
-/**
- * Simplex noise's 49 corner gradients, as Ashima's snoise works them out from its hash (the
- * hash mod 49 picks one), already normalised as it normalises them. The terrain shader inlines
- * snoise over a hundred times, and that working was a large share of its compile time (tens of
- * seconds on Windows); a table gives the same numbers.
- */
-const SN_GRAD = (() => {
-  const f = Math.fround, out: string[] = [];
-  for (let j = 0; j < 49; j++) {
-    const xi = Math.floor(j / 7), yi = j - 7 * xi;
-    // In 32-bit floats step by step, dividing as the GPU does (times 1/7): four gradients have h
-    // within a rounding of 0, and which side of it they fall picks the gradient. (Read back from
-    // the GPU under Windows/D3D11: 3 and 21 land above, 34 and 46 below. Other GPUs may differ,
-    // as they always did with the original working.)
-    const r7 = f(1 / 7);
-    const x = f(f(f(xi * 2 + 0.5) * r7) - 1), y = f(f(f(yi * 2 + 0.5) * r7) - 1), h = f(f(1 - Math.abs(x)) - Math.abs(y));
-    const sh = h <= 0 ? -1 : 0;
-    const g = [x + (Math.floor(x) * 2 + 1) * sh, y + (Math.floor(y) * 2 + 1) * sh, h];
-    const n = 1.79284291400159 - 0.85373472095314 * (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
-    out.push(`vec3(${g.map((v) => (v * n).toFixed(9)).join(', ')})`);
-  }
-  return out.join(', ');
-})();
-
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
 export const NOISE_GLSL = /* glsl */`
   float hash(vec3 p) {
@@ -93,26 +70,9 @@ export const NOISE_GLSL = /* glsl */`
       f.z);
   }
 
-  // 3D simplex noise (Ashima Arts / Stefan Gustavson, MIT), about −1..1. Unlike the value noise
-  // above it has no grid to show once thresholded, so the ground patterns use it.
-  vec4 snPermute(vec4 x) { return mod(((x * 34.0) + 10.0) * x, 289.0); }
-  const vec3 SN_GRAD[49] = vec3[](${SN_GRAD});
-  float snoise(vec3 v) {
-    const vec2 C = vec2(1.0 / 6.0, 1.0 / 3.0);
-    vec3 i = floor(v + dot(v, C.yyy));
-    vec3 x0 = v - i + dot(i, C.xxx);
-    vec3 g = step(x0.yzx, x0.xyz), l = 1.0 - g;
-    vec3 i1 = min(g.xyz, l.zxy), i2 = max(g.xyz, l.zxy);
-    vec3 x1 = x0 - i1 + C.xxx, x2 = x0 - i2 + C.yyy, x3 = x0 - 0.5;
-    i = mod(i, 289.0);
-    vec4 p = snPermute(snPermute(snPermute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0));
-    // The corner gradients: 49 possible, from a table (SN_GRAD) instead of worked out here.
-    ivec4 j = ivec4(p - 49.0 * floor(p / 49.0) + 0.5);
-    vec3 g0 = SN_GRAD[j.x], g1 = SN_GRAD[j.y], g2 = SN_GRAD[j.z], g3 = SN_GRAD[j.w];
-    vec4 m = max(0.5 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
-    m = m * m;
-    return 105.0 * dot(m * m, vec4(dot(g0, x0), dot(g1, x1), dot(g2, x2), dot(g3, x3)));
-  }
+  // 3D simplex noise, about −1..1 (snoise.ts). Unlike the value noise above it has no grid to
+  // show once thresholded, so the ground patterns use it.
+  ${SNOISE_GLSL}
   /** Simplex rescaled to 0..1, a drop-in for vnoise. Large inputs lose float precision, so
    *  each call's frequency should keep |p| under a few thousand. */
   float snoise01(vec3 p) { return 0.5 + 0.5 * snoise(p); }

@@ -82,11 +82,13 @@ worker.onmessage = (e: MessageEvent<BuildResult | BuildStage>) => {
     $('panel').classList.remove('busy');
     for (const f of drawnListeners) f();
     if (loader) {
-      // Hold the screen through the first frame, which is when the shaders compile.
+      // Hold the screen until the real view draws: the shaders take a while to compile on a
+      // first visit, and meanwhile the view shows a plain stand-in (flat colours, no sky), which
+      // Bill would rather not see (2026-11-02).
       const l = loader;
       loader = null;
       l.step('light');
-      requestAnimationFrame(() => requestAnimationFrame(() => { void l.finish(); }));
+      void view.whenGateReady().then(() => requestAnimationFrame(() => requestAnimationFrame(() => { void l.finish(); })));
     }
     const done = waiters;
     waiters = [];
@@ -375,16 +377,16 @@ window.addEventListener('hashchange', () => {
   request();
 });
 
-// TEMPORARY (2026-11-02): trial switches for world-changing features, judged by eye. B: finer
-// biomes (ecology.ts); D: river deltas (deltas.ts). Each key regenerates the world; the state
-// rides in the link (&ecology=1, &deltas=1).
+// TEMPORARY (2026-11-02): trial switches for world-changing features, judged by eye. D: river
+// deltas (deltas.ts). The key regenerates the world; the state rides in the link (&deltas=1).
+// (B, the finer biomes, was locked in on 2026-11-02: on by default, &ecology=0 turns it off.)
 // Remove once decided.
 {
   const label = document.createElement('div');
   label.className = 'ui';   // hidden in screenshots (body.capture .ui)
   label.style.cssText = 'position:fixed;right:16px;top:84px;padding:6px 10px;border-radius:8px;background:rgba(10,14,22,.78);color:#dfe6ef;font:12px/1.5 system-ui;pointer-events:none;z-index:50;white-space:pre';
   document.body.appendChild(label);
-  const keys = { b: ['ecology', 'More biomes'], d: ['deltas', 'River deltas'] } as const;
+  const keys = { d: ['deltas', 'River deltas'] } as const;
   const show = () => {
     label.textContent = ['Trials (press the key):', ...Object.entries(keys).map(([k, [p, name]]) => `${k.toUpperCase()}  ${name}: ${params[p] > 0.5 ? 'ON' : 'off'}`)].join(String.fromCharCode(10));
   };

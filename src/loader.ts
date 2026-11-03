@@ -27,7 +27,7 @@ const STEPS: { id: LoadStep; label: string; ms: number }[] = [
   { id: 'biomes', label: 'Growing forests and deserts', ms: 5 },
   { id: 'mesh', label: 'Sculpting the terrain', ms: 878 },
   { id: 'clouds', label: 'Gathering clouds', ms: 1454 },
-  { id: 'light', label: 'Lighting the sky', ms: 120 },
+  { id: 'light', label: 'Lighting the sky', ms: 20000 },   // shader compile: long on a first visit, instant after
 ];
 const TOTAL = STEPS.reduce((s, x) => s + x.ms, 0);
 /** Fraction of the bar at the start of each step. */

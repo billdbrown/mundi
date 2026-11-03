@@ -354,6 +354,10 @@ export class PlanetView {
       check();
     });
   }
+  /** Resolves once the view draws for real (not the stand-in): the gate's first stage. */
+  whenGateReady(): Promise<void> {
+    return new Promise((res) => { const check = () => (this.gateReady ? res() : setTimeout(check, 50)); check(); });
+  }
   /** Resolves once the full view draws, low-altitude shaders included (and the map's, if a switch to it is waiting). */
   whenReady(): Promise<void> {
     return new Promise((res) => {
