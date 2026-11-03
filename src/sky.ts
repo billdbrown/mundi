@@ -47,13 +47,15 @@ export interface CloudUniforms extends DuneUniforms {
   uWeather: { value: number };
   /** Snow on mid-latitude peaks, 1 on (was trial S; on for everyone since 2026-11-02). */
   uPeakSnow: { value: number };
+  /** How much of the cloud deck other than storm cloud shows (0..1): below ~1.3 radii only storms do. */
+  uFairVis: { value: number };
   uStorms: { value: THREE.Vector4[] };
 }
 
 export function makeCloudUniforms(): CloudUniforms {
   return { uCloudMap: { value: null }, uCloudRot: { value: 0 }, uCloudShadow: { value: 0 }, uCloudTime: { value: 0 }, uCloudSun: { value: new THREE.Vector3(0, 0, 1) },
     uSeason: { value: 0 }, uSeasonCos: { value: 1 }, uHeat: { value: 0 }, uRelief: { value: 0.013 }, uSnow: { value: 1 }, uMapDist: { value: 1 }, uGrove: { value: 250 }, uErosion: { value: 1 }, uVolc: { value: Array.from({ length: 24 }, () => new THREE.Vector4()) }, uYear: { value: -1 },
-    uWeather: { value: 0 }, uPeakSnow: { value: 1 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, ...makeDuneUniforms() };
+    uWeather: { value: 0 }, uPeakSnow: { value: 1 }, uFairVis: { value: 1 }, uStorms: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, ...makeDuneUniforms() };
 }
 
 /** Value noise in GLSL: cheap, smooth, good enough for normals and colour breakup. */
@@ -87,7 +89,7 @@ export const NOISE_GLSL = /* glsl */`
  */
 const CLOUD_GLSL = /* glsl */`
   uniform sampler2D uCloudMap;
-  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uSeasonCos, uHeat, uRelief, uSnow, uMapDist, uWeather, uPeakSnow;
+  uniform float uCloudRot, uCloudShadow, uCloudTime, uSeason, uSeasonCos, uHeat, uRelief, uSnow, uMapDist, uWeather, uPeakSnow, uFairVis;
   uniform vec3 uCloudSun;
   uniform vec4 uStorms[8];
   /**
@@ -1427,11 +1429,26 @@ export function makeClouds(u: CloudUniforms): THREE.Group {
           vec2 duv = max(abs(dFdx(vMapUv)), abs(dFdy(vMapUv))) * tsz;
           float lod = clamp(log2(max(min(duv.x, 32.0), duv.y)), 0.0, 8.0);
           float cover = coverAt(normalize(vCloudLocal), lod);
-          // Texture inside the cloud: lumpy tops catch more or less light; thick cores grey.
           vec3 cd = normalize(vCloudLocal);
+          // Billows at the edges, finer as you come closer (each octave only once it is several
+          // pixels across): from ~1.1-1.3 radii, where storms now show, the map alone is a smooth
+          // blur with cartoon edges (2026-11-03).
+          float foot = length(fwidth(cd));
+          float bil = 0.0;
+          for (int i = 0; i < 3; i++) {
+            float f = 160.0 * pow(2.7, float(i));
+            bil += (cnNoise(cd * f + float(i) * 7.3) - 0.5) * smoothstep(0.25, 0.08, foot * f) * (0.16 / (1.0 + float(i) * 0.6));
+          }
+          cover += bil * smoothstep(0.3, 0.6, cover);
+          // Texture inside the cloud: lumpy tops catch more or less light; thick cores grey.
           float lumps = cnNoise(cd * 90.0) * 0.6 + cnNoise(cd * 260.0) * 0.4;
-          diffuseColor.rgb = vec3((0.78 + 0.3 * lumps) * (1.0 - 0.22 * smoothstep(0.72, 0.92, cover)));
-          diffuseColor.a = opacity * cloudAlpha(cover);
+          // (and close up the billows: sunlit tops, shadowed between them)
+          diffuseColor.rgb = vec3((0.78 + 0.3 * lumps) * (1.0 - 0.22 * smoothstep(0.72, 0.92, cover)) * (1.0 + 2.6 * bil));
+          // Lower down only storm cloud stays (render.ts): towers seen from above, between the
+          // height where fair-weather cloud has faded and the rain and overcast down low.
+          // (Storm systems, weather.ts, and thunderheads; thick fair-weather cloud hid the land.)
+          float stormy = uFairVis < 1.0 ? max(smoothstep(0.35, 0.6, stormCover(cd)), smoothstep(0.84, 0.94, cover)) : 1.0;
+          diffuseColor.a = opacity * cloudAlpha(cover) * mix(uFairVis, 1.0, stormy);
           cloudFlash = lightning(cd, cover) * (0.5 + lumps);
         #else
           diffuseColor.a = 0.0;   // compiled before the worker's texture arrives

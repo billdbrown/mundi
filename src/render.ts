@@ -1076,7 +1076,12 @@ export class PlanetView {
     // its dappled light.
     const fade = THREE.MathUtils.clamp((d - 1.3) / 1.0, 0, 1);
     const [deck, cirrus] = this.clouds.children as THREE.Mesh[];
-    for (const m of [deck, cirrus]) (m.material as THREE.MeshStandardMaterial).opacity = m.userData.baseOpacity * fade;
+    // Storm cloud stays lower, down to where the weather on the ground takes over (groundWeather,
+    // 1.03-1.07): before, storms vanished between ~1.07 and 1.3 (2026-11-03).
+    const storm = Math.max(fade, THREE.MathUtils.smoothstep(d, 1.045, 1.09));
+    (deck.material as THREE.MeshStandardMaterial).opacity = deck.userData.baseOpacity * storm;
+    (cirrus.material as THREE.MeshStandardMaterial).opacity = cirrus.userData.baseOpacity * fade;
+    this.cloudU.uFairVis.value = storm > 0 ? fade / storm : 1;
     // The deck stays put; the wind bands move its clouds (coverAt). Weather time runs with the
     // Day clock; otherwise (idle, or the Year clock, which would strobe) it drifts slowly.
     deck.rotation.y = 0;
