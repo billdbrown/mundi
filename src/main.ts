@@ -179,7 +179,7 @@ function writeHash() {
   if (!same(viewOpts.relief, DEFAULT_VIEW.relief)) h.set('relief', String(viewOpts.relief));
   if (radiusKm !== DEFAULT_RADIUS) h.set('radius', String(radiusKm));
   if (lens !== DEFAULT_LENS) h.set('lens', lens);
-  for (const p of ['snow', 'valleys']) if (new RegExp(`(^|[#&])${p}=1(&|$)`).test(location.hash)) h.set(p, '1');   // view trials (below)
+  for (const p of ['snow']) if (new RegExp(`(^|[#&])${p}=1(&|$)`).test(location.hash)) h.set(p, '1');   // view trials (below)
   history.replaceState(null, '', location.search + '#' + h.toString());
 }
 
@@ -399,10 +399,10 @@ window.addEventListener('hashchange', () => {
     params = { ...params, [k[0]]: params[k[0]] > 0.5 ? 0 : 1 };
     writeHash(); show(); request();
   });
-  // View trials (no regeneration), kept in the link as &snow=1, &valleys=1.
+  // View trials (no regeneration), kept in the link as &snow=1. (V, the whole planet's valleys,
+  // was locked in on 2026-11-02.)
   const VIEW_TRIALS: [string, string, string, (on: boolean) => void][] = [
     ['s', 'snow', 'Peak snow', (on) => view.setPeakSnow(on)],
-    ['v', 'valleys', 'Valleys (whole planet)', (on) => view.setValleys(on)],
   ];
   const isOn = (p: string) => new RegExp(`(^|[#&])${p}=1(&|$)`).test(location.hash);
   const showAll = () => {

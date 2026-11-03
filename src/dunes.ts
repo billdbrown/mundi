@@ -237,6 +237,20 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
     }
     float hk = k * geo;
 
+    // The whole planet's valleys (valleys.ts) as relief: the ground lowered by their carving,
+    // their walls in the normal, and the gullies below steered down those walls, so they branch
+    // off the valleys. Not faded with distance: it is the land's shape. (The terrain shader
+    // shades the carving on the plain terrain; on the patch the geometry carries it.)
+    float liftC = 0.0;
+    vec3 gC = vec3(0.0);
+    if (uEroOn >= 0.999 && hAbove > 0.0) {
+      float e = uEroR * 2.0 / 512.0;
+      float c0 = groundCarve(base).x, c1 = groundCarve(base + east * e).x, c2 = groundCarve(base + north * e).x;
+      liftC = -c0 * edge;
+      gC = -(east * (c1 - c0) + north * (c2 - c0)) / e;
+      gC *= min(1.0, 0.35 / max(length(gC), 1e-6)) * edge;   // walls no steeper than ~20 deg, as in sky.ts
+    }
+
     // Erosion, as in the terrain shader (sky.ts), at full strength: the drawing shaders fade it
     // with distance from the camera.
     float liftEro = 0.0;
@@ -262,7 +276,7 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
         float cz = max(dot(n0, up), 0.3);
         vec3 macro = -(n0 - up * dot(n0, up)) / cz;
         vec4 hl = hills(base, up, smoothstep(0.02, 0.3, hAbove / uRelief)) * (1.0 - iceK);
-        macro += hl.yzw;
+        macro += hl.yzw + gC;
         float eroK = smoothstep(0.0, 0.07, length(macro)) * (1.0 - iceK) * eroFar;
         liftEro += hl.x * eroFar;
         eroG += hl.yzw * eroFar;
@@ -290,8 +304,9 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
       // Its slope (uphill, tangent) for the normal: d(lift)/d(ground distance).
       chanG = (east * (cE - c0) + north * (cN - c0)) / texel * edge;
     }
-    bake0 = vec4(raw * DUNE_CELL * hk, liftEro, geo, chanLift);
-    bake1 = vec4((east * d.z + north * d.w) * hk + chanG, 0.0);
+    // (x: lift everything follows, trees and rivers included, so the valleys carry them down.)
+    bake0 = vec4(raw * DUNE_CELL * hk + liftC, liftEro, geo, chanLift);
+    bake1 = vec4((east * d.z + north * d.w) * hk + chanG + gC, 0.0);
     bake2 = vec4(eroG, 0.0);
   }
 `;
