@@ -166,7 +166,7 @@ export const PATCH_A = 0.15;         // grid spacing at the centre, relative to 
  */
 /** Valleys cut this much deeper again on the highest ground of the close-up patch (PATCH_BAKE_GLSL). */
 export const MTN_CARVE = 0.8;
-export const RIVER_SINK = 0.0004;
+export const RIVER_SINK = 0.00027;
 export const PATCH_R = 0.05;         // half-width, radians (~320 km on an Earth-sized world)
 export const CAPTURE_SIZE = 512;     // texels along a side of the patch's captures
 
