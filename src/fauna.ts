@@ -3,7 +3,7 @@
  * around").
  *
  * Scale. Plants are already drawn far larger than life (a tree is ~1/40,000 of the radius, ~1 km
- * on an Earth-sized world), and from the lowest camera a deer in true proportion to them would
+ * on an Earth-sized world, ~100-200 m at the 640 km assumed since 2026-11-03), and from the lowest camera a deer in true proportion to them would
  * be a pixel or two. So animals carry their own size
  * multiplier on top (setSize; the A key, `&fauna=N` in the link): how much bigger than in proportion
  * with the trees. Chosen by comparison, like the plants' 1/6. Between kinds, sizes are drawn

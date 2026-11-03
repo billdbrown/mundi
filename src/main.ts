@@ -25,8 +25,13 @@ const displayName = () => worldName ?? planetName(params.seed);
 let viewOpts: ViewOptions = { ...DEFAULT_VIEW };
 let world: World;
 let timings = { gen: 0, mesh: 0, clouds: 0 };
-/** Display only: what the planet's radius means in km, for the scale bar and readouts. */
-let radiusKm = 6371;
+/**
+ * Display only: what the planet's radius means in km, for the scale bar and readouts.
+ * 640 km, a tenth of Earth, since 2026-11-03 (Bill: "let's try assuming a smaller planet"):
+ * at that size the drawn peaks (~8 km), cloud deck (~12 km) and air (~45 km) come out true to
+ * life and trees ~5x, where at Earth's 6,371 km peaks were 83 km and trees 1-2 km.
+ */
+let radiusKm = 640;
 /** The link as opened, before the world's own settings rewrite it (the animal trials read it). */
 const openedHash = new URLSearchParams(location.hash.slice(1));
 let game: GameData | null = null;
@@ -150,7 +155,7 @@ function setView(o: Partial<ViewOptions>): Promise<void> | void {
 // world is just #seed=zalund; a kind from the New world menu adds &kind=archipelago; a custom
 // world lists only the settings that differ from the defaults. ---
 const SETTINGS = (Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[]).filter((k) => k !== 'seed');
-const DEFAULT_LENS: Lens = 'earth', DEFAULT_RADIUS = 6371;
+const DEFAULT_LENS: Lens = 'earth', DEFAULT_RADIUS = 640;
 function readHash() {
   const h = new URLSearchParams(location.hash.slice(1));
   const s = parseSeed(h.get('seed') ?? '');
