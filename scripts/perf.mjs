@@ -8,7 +8,8 @@ const browser = await chromium.launch({ channel: 'msedge', args: ['--use-angle=d
 const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: dpr })).newPage();
 await page.goto('http://localhost:5291/#seed=77', { timeout: 240000 });
 await page.waitForFunction(() => window.mundi?.world, null, { timeout: 240000 });
-await page.waitForFunction(() => window.mundi.view.otherLookReady, null, { timeout: 400000, polling: 500 });
+await page.evaluate(() => window.mundi.view.hurryCompiles());   // (background compiles go one at a time otherwise)
+await page.waitForFunction(() => window.mundi.view.otherLookReady, null, { timeout: 600000, polling: 500 });
 await page.evaluate((m) => {
   const v = window.mundi.view;
   if (m === 'nopatch') { const p = v.dunePatch; p.update = () => { p.mesh.visible = false; }; }

@@ -17,6 +17,7 @@ import { B, landBiome } from './biomes.ts';
 import { WATER_LAND, WATER_OCEAN, type World } from './world.ts';
 import type { SurfaceData } from './surface.ts';
 import { FLORA, FLORA_RICH, KINDS, ICEBERG, CACTUS, ROCK, PALM, BROADLEAF, SCRUB, ACACIA, BIRCH, TUFT, treeGeometry, treeMaterial } from './flora.ts';
+import { FAMILIES, FIRST, VARIANTS, LEAFY_FAMILIES, sp } from './species.ts';
 import { groveField, groveFreq, forestMask, openMask, REF_SPACING } from './groves.ts';
 import { makeRng } from './rng.ts';
 import { makeSimplex, type Noise3 } from './noise.ts';
@@ -264,6 +265,9 @@ export class LodFlora {
     for (let k = 0; k < KINDS; k++) {
       const need = Math.ceil(counts[k] * keep);
       let mesh = this.meshes[k];
+      // (Kinds with nothing near get no mesh: with ~60 kinds most are absent from any one view.)
+      if (need === 0) { if (mesh) mesh.visible = false; continue; }
+      if (mesh) mesh.visible = true;
       if (!mesh || mesh.instanceMatrix.count < need) {
         if (mesh) { this.group.remove(mesh); mesh.dispose(); }
         const cap = Math.max(16, Math.ceil(need * 1.3));
@@ -271,7 +275,8 @@ export class LodFlora {
         const geo = treeGeometry(k).clone();
         geo.setAttribute('cut', new THREE.InstancedBufferAttribute(new Float32Array(cap), 1));
         // Broadleaf trees and scrub change with the seasons (sky.ts TREE_SEASON); conifers don't.
-        const leafy = k === BROADLEAF || k === SCRUB || k === ACACIA || k === BIRCH || k === TUFT ? 1 : 0;
+        const leafy = k === BROADLEAF || k === SCRUB || k === ACACIA || k === BIRCH || k === TUFT
+          || (k >= FIRST && LEAFY_FAMILIES.has(FAMILIES[Math.floor((k - FIRST) / VARIANTS)])) ? 1 : 0;
         geo.setAttribute('leafy', new THREE.BufferAttribute(new Float32Array(geo.getAttribute('position').count).fill(leafy), 1));
         mesh = new THREE.InstancedMesh(geo, treeMaterial, cap);
         mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
@@ -285,6 +290,7 @@ export class LodFlora {
     const fill = new Array(KINDS).fill(0);
     for (const b of parts) {
       for (let k = 0; k < KINDS; k++) {
+        if (!counts[k]) continue;   // (no mesh for kinds with none near)
         const mesh = this.meshes[k]!, cap = mesh.instanceMatrix.count;
         const take = Math.min(keep < 1 ? Math.round(b.n[k] * keep) : b.n[k], cap - fill[k]);
         if (take <= 0) continue;
@@ -297,7 +303,7 @@ export class LodFlora {
     }
     // Upload only the part in use.
     this.meshes.forEach((mesh, k) => {
-      if (!mesh) return;
+      if (!mesh || !mesh.visible) return;
       mesh.count = Math.min(fill[k], mesh.instanceMatrix.count);
       const attrs: [THREE.BufferAttribute, number][] = [[mesh.instanceMatrix, 16], [mesh.instanceColor!, 3], [mesh.geometry.getAttribute('cut') as THREE.BufferAttribute, 1]];
       for (const [a, size] of attrs) {
@@ -435,12 +441,19 @@ export class LodFlora {
           out.push(pt[0], pt[1], pt[2], spacing * (0.024 + 0.03 * r * r), rng() * Math.PI * 2, 0.8 + 0.32 * rng(), PALM, 0x4a8a30, 0);
         }
       }
-      // Along rivers through dry country, a dense band of trees: date palms in hot desert,
-      // poplar and willow elsewhere. Thick at the bank, thinning outward.
+      // Along rivers through dry and open country, a dense band of green: reeds at the water's
+      // edge, then willows and poplars (date and royal palms in hot desert), thick at the bank and
+      // thinning outward. (Was one kind of tree; 2026-11-03, several, as rivers really are lined.)
       const dryHere = DRY.has(baseOf(b)) || (mountain && w.moisture[c] < 0.35);
       if (dryHere && this.riverDist && this.riverNear?.(c)) {
         const hot = w.temperature[c] > 0.62 && w.moisture[c] < 0.2;
-        const kind = hot ? PALM : BROADLEAF, col = hot ? 0x4c7d2c : 0x3f6b2a;
+        const pick = (d: number, r: number): [number, number] => {
+          if (d < RIVERSIDE * 0.25 && r < 0.45) return [sp('reeds', Math.floor(r * 6.6)), 0x5d7a36];
+          if (hot) return r < 0.6 ? [PALM, 0x4c7d2c] : [sp('royalPalm', Math.floor((r - 0.6) * 7.4)), 0x4a7e2e];
+          if (r < 0.45) return [sp('willow', Math.floor(r * 6.6)), 0x46702c];
+          if (r < 0.75) return [sp('poplar', Math.floor((r - 0.45) * 9.9)), 0x47732e];
+          return [BROADLEAF, 0x3f6b2a];
+        };
         const n = count(26 * DENSITY * area * (b === B.DESERT ? 1 : 0.6));
         for (let i = 0; i < n; i++) {
           const pt = this.randomPoint(t, rng, false);
@@ -448,6 +461,7 @@ export class LodFlora {
           const d = this.riverDist(pt[0], pt[1], pt[2], c);
           if (d < 0 || d > RIVERSIDE * (0.6 + 0.8 * rng()) || rng() > 1 - d / (RIVERSIDE * 1.4)) continue;
           const r = rng();
+          const [kind, col] = pick(d, rng());
           const cut = this.clearing && rng() < 0.88 ? this.clearing(pt[0], pt[1], pt[2], c) : 0;
           out.push(pt[0], pt[1], pt[2], spacing * (0.022 + 0.032 * r * r), rng() * Math.PI * 2, 0.8 + 0.32 * rng(), kind, col, cut);
         }
