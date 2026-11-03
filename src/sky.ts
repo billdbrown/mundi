@@ -8,7 +8,7 @@ import { SNOISE_GLSL } from './snoise.ts';
 import { EROSION_GLSL } from './erosion.ts';
 import { SHADOW_GLSL, shadowLights, shadowUniforms } from './terrainshadow.ts';
 import { AERIAL_FULL_GLSL, atmoUniforms, applyAerial } from './atmosphere.ts';
-import { DUNES_GLSL, PATCH_GLSL, LIFT_GLSL, patchUniforms, makeDuneUniforms, type DuneUniforms, type PatchUniforms } from './dunes.ts';
+import { DUNES_GLSL, PATCH_GLSL, LIFT_GLSL, PATCH_R, patchUniforms, makeDuneUniforms, type DuneUniforms, type PatchUniforms } from './dunes.ts';
 
 patchShaderChunks();
 
@@ -237,10 +237,14 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
   // The dune patch (dunepatch.ts): the same ground shading on a fine grid that carries the dunes.
   if (patch) mat.defines = { ...mat.defines, DUNE_PATCH: '' };
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, u, patch ?? {}, shadowUniforms);
+    Object.assign(sh.uniforms, u, patch ?? { uPatchC: patchUniforms.uPatchC, uPatchE: patchUniforms.uPatchE, uPatchN: patchUniforms.uPatchN, uPatchOn: patchUniforms.uPatchOn }, shadowUniforms);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         varying vec3 vCloudP;
+        #ifndef DUNE_PATCH
+          uniform vec3 uPatchC, uPatchE, uPatchN;
+          uniform float uPatchOn, uEroOn;
+        #endif
         #ifdef USE_CLIMATE
           attribute vec2 climate;
           varying vec2 vClim;
@@ -266,6 +270,18 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         #ifdef DUNE_PATCH
           transformed = pSurf;
+        #elif !defined(MERCATOR)
+          // Under the high-detail patch, the plain terrain steps down out of its way: the patch
+          // carves the whole planet's valleys (valleys.ts) into its ground, which then lay below
+          // this uncarved surface, and this drew over it (and over the trees standing on it). At
+          // the patch's edge both fade together (dunes.ts, the same edge band).
+          if (uPatchOn > 0.5 && uEroOn > 0.0) {
+            vec3 wp = (modelMatrix * vec4(transformed, 1.0)).xyz;
+            if (dot(normalize(wp), uPatchC) > 0.9) {
+              float ps = max(abs(dot(wp, uPatchE)), abs(dot(wp, uPatchN))) / ${PATCH_R.toFixed(4)};
+              transformed -= normalize(transformed) * 0.004 * (1.0 - smoothstep(0.8, 0.97, ps)) * uEroOn;
+            }
+          }
         #endif
         vCloudP = (modelMatrix * vec4(transformed, 1.0)).xyz;
         #ifdef USE_CLIMATE
@@ -385,6 +401,22 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         // Analytical erosion, where it covers (weight z), from mid zoom out.
         vec3 carveS = hAbove > 0.0003 ? groundCarve(vCloudP) : vec3(0.0);
         float carveW = carveS.z * smoothstep(0.05, 0.16, camDist) * (1.0 - iceK);
+        // The carving's slope (gradient of the depth, tangent), walls no steeper than ~20°: the
+        // biggest valleys are deep and a texel or two wide, and their walls read as cliffs (pale
+        // rock and black shadow, like a road through the hills).
+        vec3 carveG = vec3(0.0);
+        if (carveS.z > 0.0) {
+          vec3 cu = normalize(vCloudP);
+          vec3 t1 = normalize(cross(cu, abs(cu.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
+          vec3 t2 = cross(cu, t1);
+          float ce = uEroR * 2.0 / 512.0;
+          carveG = (t1 * (groundCarve(vCloudP + t1 * ce).x - carveS.x) + t2 * (groundCarve(vCloudP + t2 * ce).x - carveS.x)) / ce;
+          carveG *= min(1.0, 0.35 / max(length(carveG), 1e-6)) * carveS.z;
+        }
+        #ifdef DUNE_PATCH
+          // On the patch the valleys are geometry (PATCH_BAKE_GLSL): no shading on top.
+          carveW = 0.0;
+        #endif
         float ln = landNoise(vCloudP);
         diffuseColor.rgb *= mix(1.0, 0.74 + 0.52 * ln, (0.45 + 0.55 * highland) * farFade * (1.0 - 0.75 * iceK));
         float foot = length(fwidth(vCloudP));
@@ -420,6 +452,10 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           float eroFar = 1.0 - smoothstep(0.08, 0.22, camDist);
           float cz = max(dot(wN, up), 0.3);
           vec3 macro = -(wN - up * dot(wN, up)) / cz;
+          // The valleys' walls steer the gullies down into them (the valleys lower the land: its
+          // uphill slope gains minus the carving's gradient). On the patch wN is the terrain's,
+          // before the patch's relief, so add them there too, as the bake does.
+          macro -= carveG;
           // Sand seas are flat between their dunes; rocky desert keeps some dry channels (wadis).
           #ifdef USE_CLIMATE
             float sandE = smoothstep(0.24, 0.12, vClim.x) * smoothstep(0.4, 0.55, vClim.y) * (1.0 - highland);
@@ -811,19 +847,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         // Analytical erosion (analyticerosion.ts, via terrainshadow.ts): river valleys and ridges
         // carved into the land around the view, at the scale the mesh is too coarse for and the
         // close-up gullies too fine. Mostly a mid-zoom effect: up close the gullies take over.
-        if (carveW > 0.0) {
-          vec3 up = normalize(vCloudP);
-          vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
-          vec3 t2 = cross(up, t1);
-          float e = uEroR * 2.0 / 512.0;
-          float c1 = groundCarve(vCloudP + t1 * e).x, c2 = groundCarve(vCloudP + t2 * e).x;
-          vec3 cg = (t1 * (c1 - carveS.x) + t2 * (c2 - carveS.x)) / e;
-          // Valley walls no steeper than ~20°: the whole planet's valleys (valleys.ts) cut the
-          // biggest rivers' valleys deep and a texel or two wide, and their walls read as cliffs
-          // (pale rock and black shadow, like a road through the hills).
-          cg *= min(1.0, 0.35 / max(length(cg), 1e-6));
-          normal = normalize(normal + TOVIEW(cg * carveW));
-        }
+        if (carveW > 0.0) normal = normalize(normal + TOVIEW(carveG * carveW / max(carveS.z, 1e-6)));
         // Dunes catch the light on their windward slopes and shade their lee faces.
         // (On the dune patch the nearer dunes are real geometry, already in the normal.)
         #ifdef DUNE_PATCH
@@ -896,7 +920,14 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         if (uSnow > 0.0 && hAbove > 0.0004) {
           vec3 sn = normalize(vCloudP);
           float lat = abs(asin(clamp(sn.y, -1.0, 1.0))) / 1.5707963;
-          float st = seasonalTemp(sn, 1.0 - 1.1 * pow(lat, 1.25) - 0.5 * hAbove / uRelief + uHeat);
+          // On the patch the ground is carved by the whole planet's valleys (valleys.ts); judged by
+          // that height, a snowy range lost nearly all its snow (the coarse map lowers summits a
+          // little too). Most of it back: valley floors hold a little less, peaks keep theirs.
+          float hSn = hAbove;
+          #ifdef DUNE_PATCH
+            hSn += 0.75 * carveS.x * carveS.z;
+          #endif
+          float st = seasonalTemp(sn, 1.0 - 1.1 * pow(lat, 1.25) - 0.5 * hSn / uRelief + uHeat);
           // Lying snow at an equinox: polar margins and high ground. (0.27 put snow over all the
           // tundra and much of the taiga.) The season moves it, via seasonalTemp.
           float line = 0.15;
@@ -908,7 +939,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           // equatorial ranges stay bare. The half rate above stays for everything lower, so
           // plateaus don't turn white. (0.85, the generator's rate and then some, whitened
           // whole ranges, even on the equator.)
-          float hr = hAbove / uRelief;
+          float hr = hSn / uRelief;
           // A slow ramp, so it builds from the crests (and streaks, via lie) to full cover only on
           // the highest ground, rather than one white sheet.
           float stPeak = seasonalTemp(sn, 1.0 - 1.1 * pow(lat, 1.25) - 0.62 * hr + uHeat);

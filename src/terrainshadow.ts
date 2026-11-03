@@ -16,6 +16,7 @@
 import * as THREE from 'three';
 import type { EroRequest, EroResult } from './eroworker.ts';
 import { Valleys, VALLEY_GLSL } from './valleys.ts';
+import { PATCH_R, patchUniforms } from './dunes.ts';
 
 const SIZE = 1024;
 /** Water map resolution. */
@@ -169,11 +170,21 @@ const shadowFragment = /* glsl */`
   uniform sampler2D uHeight;
   ${ERO_GLSL}
   // Height at shadow-map coordinate q (lat), less the analytical erosion's carving.
+  uniform vec3 uPatchC, uPatchE, uPatchN;
+  uniform float uPatchOn;
   float landH(vec2 uv, vec2 q) {
     float h = max(texture(uHeight, uv).r, 0.0) / 50.0;
     if (uEroOn > 0.0) {
-      vec3 c = groundCarve(normalize(uC + uE * q.x + uN * q.y));
-      h -= c.x * c.z;
+      vec3 p = normalize(uC + uE * q.x + uN * q.y);
+      vec3 c = groundCarve(p);
+      // The high-detail patch is in the height map already carved (dunes.ts, faded at its edge
+      // the same way): carving it again sank its valleys twice as deep in shadow.
+      float cover = 0.0;
+      if (uPatchOn > 0.5 && dot(p, uPatchC) > 0.9) {
+        float s = max(abs(dot(p, uPatchE)), abs(dot(p, uPatchN))) / ${PATCH_R};
+        cover = 1.0 - smoothstep(0.8, 0.97, s);
+      }
+      h -= c.x * c.z * (1.0 - cover);
     }
     return h;
   }
@@ -319,10 +330,12 @@ export class TerrainShadow {
    * fade). setErosion(true) brings them back. Nothing runs while off.
    */
   private eroEnabled = false;
-  /** The whole planet's valleys (valleys.ts), trial V. */
+  /** The whole planet's valleys (valleys.ts): on since 2026-11-02 (was trial V). */
   readonly valleys: Valleys;
-  private valleysOn = false;
+  private valleysOn = true;
   setValleys(on: boolean) { this.valleysOn = on; }
+  /** Valleys are on and this world has terrain to carve (so they will arrive). */
+  get valleysWanted() { return this.valleysOn && !!this.source && typeof Worker !== 'undefined'; }
   // Water map: rivers drawn from above, then blurred two ways (blurFragment).
   private riverRaw = new THREE.WebGLRenderTarget(RIV, RIV, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
   private riverTmp = new THREE.WebGLRenderTarget(RIV, RIV, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
@@ -366,6 +379,7 @@ export class TerrainShadow {
       uniforms: {
         uHeight: { value: this.height.texture }, uSun: { value: new THREE.Vector3() },
         uC: this.u.uShC, uE: this.u.uShE, uN: this.u.uShN, uR: { value: 0.1 }, uTexel: { value: 2 / SIZE },
+        uPatchC: patchUniforms.uPatchC, uPatchE: patchUniforms.uPatchE, uPatchN: patchUniforms.uPatchN, uPatchOn: patchUniforms.uPatchOn,
         uValleys: this.u.uValleys, uEroTiles: this.u.uEroTiles, uTileC: this.u.uTileC, uTileE: this.u.uTileE, uTileN: this.u.uTileN, uTileW: this.u.uTileW, uEroR: this.u.uEroR, uEroOn: this.u.uEroOn,
       },
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',

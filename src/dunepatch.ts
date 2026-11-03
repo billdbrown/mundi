@@ -20,7 +20,8 @@ import * as THREE from 'three';
 import { makeTerrainMaterial, NOISE_GLSL, type CloudUniforms } from './sky.ts';
 import { PATCH_N, PATCH_A, PATCH_R, CAPTURE_SIZE, DUNES_GLSL, PATCH_GLSL, PATCH_BAKE_GLSL, patchUniforms, type PatchUniforms } from './dunes.ts';
 import { EROSION_GLSL } from './erosion.ts';
-import { TerrainShadow } from './terrainshadow.ts';
+import { TerrainShadow, shadowUniforms } from './terrainshadow.ts';
+import { VALLEY_GLSL } from './valleys.ts';
 
 const CAPTURE = CAPTURE_SIZE;
 /** Camera heights below which the patch is drawn (dunes are invisible from higher). */
@@ -163,8 +164,8 @@ export class DunePatch {
     // The bake: each grid vertex as one point, at its own texel, writing its relief. Run once per
     // recentre (three passes, one per target), so the drawing shaders stay small.
     this.bakeMat = new THREE.ShaderMaterial({
-      uniforms: { ...cloud, ...this.u, uOut: { value: 0 } },
-      vertexShader: `${NOISE_GLSL}\n${EROSION_GLSL}\n${DUNES_GLSL}\n${PATCH_BAKE_GLSL}
+      uniforms: { ...cloud, ...this.u, uOut: { value: 0 }, uValleys: shadowUniforms.uValleys, uEroOn: shadowUniforms.uEroOn, uEroR: shadowUniforms.uEroR },
+      vertexShader: `${NOISE_GLSL}\n${EROSION_GLSL}\n${VALLEY_GLSL}\n${DUNES_GLSL}\n${PATCH_BAKE_GLSL}
         varying vec4 vOut0, vOut1, vOut2;
         void main() {
           patchBake(position.xy);
@@ -220,9 +221,13 @@ export class DunePatch {
     this.u.uPatchOn.value = on ? 1 : 0;
     if (!on) return;
     const c = centre.clone().normalize();
+    // The whole planet's valleys are baked in once they have fully arrived (valleys.ts).
+    const valleys = shadowUniforms.uEroOn.value >= 0.999 ? 1 : 0;
+    if (valleys !== this.bakedValleys) { this.bakedValleys = valleys; this.dirty = true; }
     if (this.dirty || c.angleTo(this.center) > PATCH_R * 0.12) this.capture(renderer, c);
   }
 
+  private bakedValleys = 0;
   private capture(renderer: THREE.WebGLRenderer, c: THREE.Vector3) {
     const src = this.source!;
     this.dirty = false;

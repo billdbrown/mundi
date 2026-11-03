@@ -117,7 +117,8 @@ export function refineBiomes(w: EcoInput) {
     if (b === B.DESERT || b === B.STEPPE) {
       if (lakeN > 0 && m < 0.3) { out[c] = B.SALT_FLAT; continue; }
       if ((river[c] || riverN > 0) && e > 0.15 && e < 0.6 && m < 0.35) { out[c] = B.CANYONS; continue; }
-      if (e > 0.25 && r > 0.13 && region(c, 9) > 0.55) { out[c] = B.BADLANDS; continue; }
+      // (Rare: 0.7% of land. Bill, 2026-11-02: "look cool but should be rarer" at 2%.)
+      if (e > 0.25 && r > 0.13 && region(c, 9) > 0.68) { out[c] = B.BADLANDS; continue; }
       if (b === B.DESERT && t < 0.55) { out[c] = B.COLD_DESERT; continue; }
       if (b === B.DESERT && m > 0.15) { out[c] = B.DESERT_SCRUB; continue; }
     }

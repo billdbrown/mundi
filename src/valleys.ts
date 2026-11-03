@@ -100,6 +100,8 @@ export class Valleys {
 
   /** A new world: forget the old valleys. */
   reset() {
+    // A job for the old world still running: stop it rather than wait ~6 s behind it.
+    if (this.busy && this.worker) { this.worker.terminate(); this.worker = null; this.busy = false; }
     this.gen++;
     this.done = 0;
     this.started = false;
@@ -150,9 +152,12 @@ export class Valleys {
       this.worker = new Worker(new URL('./valleyworker.ts', import.meta.url), { type: 'module' });
       this.worker.onmessage = (ev: MessageEvent<ValleyResult>) => this.receive(ev.data);
     }
+    this.busy = true;
     this.worker.postMessage(req, [req.half.buffer]);
   }
+  private busy = false;
   private receive(r: ValleyResult) {
+    this.busy = false;
     if (r.gen !== this.gen) return;
     (this.tex.image.data as Uint16Array).set(r.packed);
     this.tex.needsUpdate = true;
@@ -160,6 +165,23 @@ export class Valleys {
     this.done = 6;
     this.timings.total = performance.now() - this.t0;
     this.fadeStart = performance.now();
+  }
+
+  /**
+   * How far the valleys lower the ground at direction (x, y, z), as drawn now (0 until they have
+   * arrived): for the camera, which keeps its height above the ground it looks at. Nearest texel.
+   */
+  carveAt(x: number, y: number, z: number): number {
+    const on = this.u.uEroOn.value;
+    if (on <= 0) return 0;
+    const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z), n = VALLEY_N;
+    let u: number, v: number, f: number;
+    if (ax >= ay && ax >= az) { u = y / ax; v = z / ax; f = x < 0 ? 1 : 0; }
+    else if (ay >= az) { u = z / ay; v = x / ay; f = y < 0 ? 3 : 2; }
+    else { u = x / az; v = y / az; f = z < 0 ? 5 : 4; }
+    const px = Math.min(n - 1, Math.max(0, Math.floor((u * 0.5 + 0.5) * n)));
+    const py = Math.min(n - 1, Math.max(0, Math.floor((v * 0.5 + 0.5) * n)));
+    return THREE.DataUtils.fromHalfFloat((this.tex.image.data as Uint16Array)[((f * n + py) * n + px) * 2]) * on;
   }
 
   /** Each frame: fade the whole planet's valleys in, once, over 1.5 s. */

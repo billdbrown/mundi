@@ -18,7 +18,7 @@ import { makeWaterMaterial, makeClouds, cloudTexturesFromPixels, makeStars, make
 import type { CloudPixels } from './clouds.ts';
 import { groveFreq } from './groves.ts';
 import { DunePatch } from './dunepatch.ts';
-import { TerrainShadow } from './terrainshadow.ts';
+import { TerrainShadow, shadowUniforms } from './terrainshadow.ts';
 import { Atmosphere, applyAerial } from './atmosphere.ts';
 import { CivLayer } from './civview.ts';
 import { Weather } from './weather.ts';
@@ -356,7 +356,7 @@ export class PlanetView {
   }
   /** Trial S: snow on mid-latitude peaks (sky.ts). */
   setPeakSnow(on: boolean) { this.cloudU.uPeakSnow.value = on ? 1 : 0; }
-  /** Trial V: the whole planet's carved valleys (valleys.ts). */
+  /** The whole planet's carved valleys (valleys.ts), on by default. */
   setValleys(on: boolean) { this.terrainShadow.setValleys(on); }
   /** Resolves once the view draws for real (not the stand-in): the gate's first stage. */
   whenGateReady(): Promise<void> {
@@ -365,7 +365,9 @@ export class PlanetView {
   /** Resolves once the full view draws, low-altitude shaders included (and the map's, if a switch to it is waiting). */
   whenReady(): Promise<void> {
     return new Promise((res) => {
-      const check = () => (this.gateReady && this.lowReady && !this.pendingMap ? res() : setTimeout(check, 50));
+      // (and the whole planet's valleys, worked out a few seconds after the view, faded in)
+      const valleys = () => !this.terrainShadow.valleysWanted || this.mapMode || shadowUniforms.uEroOn.value >= 1;
+      const check = () => (this.gateReady && this.lowReady && !this.pendingMap && valleys() ? res() : setTimeout(check, 50));
       check();
     });
   }
@@ -631,7 +633,11 @@ export class PlanetView {
     const s = (a: number, b: number) => THREE.MathUtils.smoothstep(d, a, b);
     // Keep a little clearance over the ground below, so you can skim valleys but not enter hills.
     const c = this.cellBelow();
-    if (c >= 0 && this.surface) this.controls.minDistance = Math.max(1.008, Math.max(this.surface.centerH(c), SEA) + 0.007);
+    if (c >= 0 && this.surface) {
+      const cp = this.virtualPos;   // (the carved valleys lower the ground: you can go down into them)
+      const carve = this.terrainShadow.valleys.carveAt(cp.x, cp.y, cp.z);
+      this.controls.minDistance = Math.max(1.008, Math.max(this.surface.centerH(c) - carve, SEA) + 0.007);
+    }
     // Tilt grows smoothly all the way down from 1.5 radii, most of it near the ground, up to
     // ~66°. The view pivots about the ground point at the middle of the screen, which stays put:
     // zooming in always closes on the spot you were looking at.
@@ -641,7 +647,8 @@ export class PlanetView {
     this.tiltActive = this.tilt > 1e-4;
     if (this.tiltActive) {
       const up = this.camera.position.clone().normalize();
-      const ground = this.probe ? Math.max(SEA, this.probe.heightAt(up.x, up.y, up.z, SEA)) : SEA;
+      // (The ground as drawn: less the valleys' carving, which the patch carries as relief.)
+      const ground = this.probe ? Math.max(SEA, this.probe.heightAt(up.x, up.y, up.z, SEA) - this.terrainShadow.valleys.carveAt(up.x, up.y, up.z)) : SEA;
       const target = up.clone().multiplyScalar(ground);
       let north = new THREE.Vector3(0, 1, 0).addScaledVector(up, -up.y);
       if (north.lengthSq() < 1e-6) north = new THREE.Vector3(0, 0, -1).addScaledVector(up, up.z);
@@ -652,7 +659,7 @@ export class PlanetView {
         .addScaledVector(north, -Math.sin(this.tilt) * dist);
       // Keep clear of hills between the camera and its target.
       const l = pos.length();
-      const under = this.probe ? Math.max(SEA, this.probe.heightAt(pos.x, pos.y, pos.z, SEA)) : SEA;
+      const under = this.probe ? Math.max(SEA, this.probe.heightAt(pos.x, pos.y, pos.z, SEA) - this.terrainShadow.valleys.carveAt(pos.x, pos.y, pos.z)) : SEA;
       if (l < under + 0.0025) pos.multiplyScalar((under + 0.0025) / l);
       this.camera.position.copy(pos);
       this.camera.up.copy(up);
