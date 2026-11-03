@@ -23,6 +23,7 @@ import { Atmosphere, applyAerial, atmoUniforms } from './atmosphere.ts';
 import { CivLayer } from './civview.ts';
 import { Weather } from './weather.ts';
 import { Precip } from './precip.ts';
+import { Fauna } from './fauna.ts';
 import { GroundProbe } from './ground.ts';
 import type { History } from './civ.ts';
 import { MERC_GLSL, MERC_DISCARD, MERC_MAX_Y, mercVertex, mercY, mercLat, setMercator } from './mercator.ts';
@@ -404,6 +405,8 @@ export class PlanetView {
   private weatherDays = 4;
   /** Weather on the ground: overcast, rain, snow, lightning (precip.ts). */
   private precip = new Precip();
+  /** Animals near the camera (fauna.ts). */
+  readonly fauna = new Fauna();
   /** The ambient light's level and the sun's before the weather dims or flashes them. */
   private ambientBase = 0.75;
   private sunBase = 2.8;
@@ -475,6 +478,10 @@ export class PlanetView {
     this.planet.add(this.hover);
     this.planet.add(this.clouds);
     this.planet.add(this.precip.group);
+    this.planet.add(this.fauna.group);
+    // Animals' size over their proportion with the trees (fauna.ts): ?fauna=N to compare.
+    const fs = Number(new URLSearchParams(location.search).get('fauna'));
+    if (fs > 0) this.fauna.setSize(fs);
     for (const m of this.clouds.children as THREE.Mesh[]) applyAerial(m.material as THREE.Material, true);
     applyCloudShadow(treeMaterial, this.cloudU, this.sunU, this.flora.fade);
     applyAerial(treeMaterial, true);
@@ -619,6 +626,11 @@ export class PlanetView {
    * up as it descends (OrbitControls re-aims it at the planet's centre every frame, so the
    * pitch is reapplied each time). The sky and haze come from the atmosphere (atmosphere.ts).
    */
+  /**
+   * The lowest the camera comes over the ground (radii). Trial 2026-11-03 for animals: ?floor=N
+   * in the address (default 0.007).
+   */
+  private floor = Number(new URLSearchParams(location.search).get('floor')) || 0.007;
   private groundCell = 0;
   private virtualPos = new THREE.Vector3();
   private tiltedPos = new THREE.Vector3();
@@ -646,7 +658,7 @@ export class PlanetView {
     if (c >= 0 && this.surface) {
       const cp = this.virtualPos;   // (the carved valleys lower the ground: you can go down into them)
       const carve = this.terrainShadow.valleys.carveAt(cp.x, cp.y, cp.z);
-      this.controls.minDistance = Math.max(1.008, Math.max(this.surface.centerH(c) - carve, SEA) + 0.007);
+      this.controls.minDistance = Math.max(SEA + this.floor + 0.001, Math.max(this.surface.centerH(c) - carve, SEA) + this.floor);
     }
     // Tilt grows smoothly all the way down from 1.5 radii, most of it near the ground, up to
     // ~66°. The view pivots about the ground point at the middle of the screen, which stays put:
@@ -670,7 +682,8 @@ export class PlanetView {
       // Keep clear of hills between the camera and its target.
       const l = pos.length();
       const under = this.probe ? Math.max(SEA, this.probe.heightAt(pos.x, pos.y, pos.z, SEA) - this.terrainShadow.valleys.carveAt(pos.x, pos.y, pos.z)) : SEA;
-      if (l < under + 0.0025) pos.multiplyScalar((under + 0.0025) / l);
+      const clear = Math.min(0.0025, this.floor * 0.35);
+      if (l < under + clear) pos.multiplyScalar((under + clear) / l);
       this.camera.position.copy(pos);
       this.camera.up.copy(up);
       this.camera.lookAt(target);
@@ -839,7 +852,7 @@ export class PlanetView {
   private applyZoom() {
     if (this.zoomPending === 1) return;
     const p = this.camera.position, d = p.length();
-    const ground = this.controls.minDistance - 0.007;
+    const ground = this.controls.minDistance - this.floor;
     const nd = THREE.MathUtils.clamp(ground + (d - ground) * this.zoomPending, this.controls.minDistance, this.controls.maxDistance);
     p.setLength(nd);
     this.zoomPending = 1;
@@ -1077,6 +1090,10 @@ export class PlanetView {
     if (this.streams) this.streams.visible = this.opts.rivers && this.opts.mode === 'biome' && this.streamMat.uniforms.uVis.value > 0.002;
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
     this.groundWeather(dt, d);
+    // Animals, low down only (they are a few pixels at most from higher).
+    const faunaOn = this.gateReady && this.opts.trees && this.opts.mode === 'biome' && !this.mapMode && d < 1.07;
+    if (faunaOn) { const c = this.cellBelow(); this.fauna.update(this.camera.position.clone().normalize(), c, this.time, true); }
+    else this.fauna.update(this.camera.position, -1, this.time, false);
 
     this.flora.update(this.camera.position, this.gateReady && this.opts.trees && this.opts.mode === 'biome' && !this.mapMode, this.frozen !== null);
     const civOn = this.cloudU.uYear.value >= 0;
@@ -1179,6 +1196,8 @@ export class PlanetView {
     this.flora.setSurface(w, data, RELIEF * o.relief);
 
     this.probe = data.style === 'smooth' ? GroundProbe.fromMesh(g, this.terrain, data.faces) : null;
+    const probe0 = this.probe;
+    this.fauna.setWorld(w, probe0 ? (x, y, z) => probe0.heightAt(x, y, z, SEA) : null);
     // Grid outlines, each edge once. On the smooth surface each edge is draped over the ground
     // in a few steps (over water, at the water level), so lines lie on the land rather than
     // floating over valleys.
