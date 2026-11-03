@@ -222,7 +222,17 @@ const multiFrag = ATMO_GLSL + /* glsl */`
     gl_FragColor = vec4(L2 / max(vec3(1.0) - F, vec3(1e-3)), 1.0);
   }`;
 
-const skyFrag = ATMO_LUT_GLSL + /* glsl */`
+/**
+ * Overcast (precip.ts, set by render.ts): the sky goes to an even grey and the sun is hidden
+ * (uOv), and haze closes in with distance (uOvFog, per unit of path; uOvSky its colour, before
+ * uE like the rest). Both 0 in clear weather.
+ */
+const OVERCAST_GLSL = /* glsl */`
+  uniform float uOv, uOvFog;
+  uniform vec3 uOvSky;
+`;
+
+const skyFrag = ATMO_LUT_GLSL + OVERCAST_GLSL + /* glsl */`
   uniform mat4 uInvProj, uCamWorld;
   uniform vec3 uSun;
   uniform float uE;
@@ -243,6 +253,12 @@ const skyFrag = ATMO_LUT_GLSL + /* glsl */`
     } else {
       L += smoothstep(0.9993, 0.9996, dot(rd, uSun)) * vec3(40.0);
     }
+    // Under overcast an even grey, a little brighter overhead.
+    if (uOv > 0.0) {
+      float upward = dot(normalize(ro), rd);
+      L = mix(L, uOvSky * (0.85 + 0.25 * smoothstep(-0.1, 0.6, upward)), uOv);
+      T *= 1.0 - uOv;
+    }
     L *= uE;
     // Stars show through clear, dark sky only.
     float lum = dot(L, vec3(0.2126, 0.7152, 0.0722));
@@ -251,7 +267,7 @@ const skyFrag = ATMO_LUT_GLSL + /* glsl */`
     #include <colorspace_fragment>
   }`;
 
-const apFrag = ATMO_LUT_GLSL + /* glsl */`
+const apFrag = ATMO_LUT_GLSL + OVERCAST_GLSL + /* glsl */`
   uniform mat4 uInvProj, uCamWorld;
   uniform vec3 uSun, uCam;
   uniform float uMax, uSlice;
@@ -265,7 +281,10 @@ const apFrag = ATMO_LUT_GLSL + /* glsl */`
     float t0 = max(top.x, 0.0);
     float t1 = min(top.y, t0 + uMax * pow((uSlice + 1.0) / 32.0, 2.0));
     if (t1 <= t0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
-    gl_FragColor = atMarch(ro, rd, t0, t1, uSun, 12);
+    vec4 m = atMarch(ro, rd, t0, t1, uSun, 12);
+    // Overcast haze, over the slice's whole path (from the camera, which is in the air low down).
+    float fT = exp(-uOvFog * (t1 - t0));
+    gl_FragColor = vec4(m.rgb * fT + uOvSky * (1.0 - fT), m.a * fT);
   }`;
 
 const quadVert = 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
@@ -321,6 +340,8 @@ export class Atmosphere {
   private skyMat: THREE.ShaderMaterial;
   private ready = false;
   private u = atmoUniforms;
+  /** Overcast (see OVERCAST_GLSL). */
+  readonly overcast = { uOv: { value: 0 }, uOvFog: { value: 0 }, uOvSky: { value: new THREE.Vector3() } };
 
   constructor() {
     this.ap.texture.minFilter = this.ap.texture.magFilter = THREE.LinearFilter;
@@ -329,7 +350,7 @@ export class Atmosphere {
     this.u.uAtAP.value = this.ap.texture;
     const lut = { uAtTrans: { value: this.trans.texture }, uAtMulti: { value: this.multi.texture } };
     this.apMat = new THREE.ShaderMaterial({
-      uniforms: { ...lut, uInvProj: { value: new THREE.Matrix4() }, uCamWorld: { value: new THREE.Matrix4() }, uSun: this.u.uAtSun, uCam: { value: new THREE.Vector3() }, uMax: this.u.uAtMax, uSlice: { value: 0 } },
+      uniforms: { ...lut, uInvProj: { value: new THREE.Matrix4() }, uCamWorld: { value: new THREE.Matrix4() }, uSun: this.u.uAtSun, uCam: { value: new THREE.Vector3() }, uMax: this.u.uAtMax, uSlice: { value: 0 }, ...this.overcast },
       vertexShader: quadVert, fragmentShader: apFrag, depthTest: false, depthWrite: false,
     });
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.apMat);
@@ -338,7 +359,7 @@ export class Atmosphere {
     // The sky: a full-screen triangle at the far plane, drawn after the opaque scene, so only
     // pixels nothing covered run it; it adds its light and dims what's behind (stars).
     this.skyMat = new THREE.ShaderMaterial({
-      uniforms: { ...lut, uInvProj: { value: new THREE.Matrix4() }, uCamWorld: { value: new THREE.Matrix4() }, uSun: this.u.uAtSun, uE: this.u.uAtE },
+      uniforms: { ...lut, uInvProj: { value: new THREE.Matrix4() }, uCamWorld: { value: new THREE.Matrix4() }, uSun: this.u.uAtSun, uE: this.u.uAtE, ...this.overcast },
       vertexShader: 'varying vec2 vNdc; void main() { vNdc = position.xy; gl_Position = vec4(position.xy, 1.0, 1.0); }',
       fragmentShader: skyFrag,
       depthTest: true, depthWrite: false, depthFunc: THREE.LessEqualDepth,

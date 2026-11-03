@@ -19,9 +19,10 @@ import type { CloudPixels } from './clouds.ts';
 import { groveFreq } from './groves.ts';
 import { DunePatch } from './dunepatch.ts';
 import { TerrainShadow, shadowUniforms } from './terrainshadow.ts';
-import { Atmosphere, applyAerial } from './atmosphere.ts';
+import { Atmosphere, applyAerial, atmoUniforms } from './atmosphere.ts';
 import { CivLayer } from './civview.ts';
 import { Weather } from './weather.ts';
+import { Precip } from './precip.ts';
 import { GroundProbe } from './ground.ts';
 import type { History } from './civ.ts';
 import { MERC_GLSL, MERC_DISCARD, MERC_MAX_Y, mercVertex, mercY, mercLat, setMercator } from './mercator.ts';
@@ -401,6 +402,11 @@ export class PlanetView {
   /** Weather: storm schedule for this world, and weather time in days. */
   private weather?: Weather;
   private weatherDays = 4;
+  /** Weather on the ground: overcast, rain, snow, lightning (precip.ts). */
+  private precip = new Precip();
+  /** The ambient light's level and the sun's before the weather dims or flashes them. */
+  private ambientBase = 0.75;
+  private sunBase = 2.8;
   /** Exact ground height on the current terrain mesh (smooth style only). */
   private probe: GroundProbe | null = null;   // a few days in, so storms are already about at load
   private sunU = { uSunDir: { value: new THREE.Vector3(0, 0, 1) } };
@@ -468,6 +474,7 @@ export class PlanetView {
     this.hover.visible = false;
     this.planet.add(this.hover);
     this.planet.add(this.clouds);
+    this.planet.add(this.precip.group);
     for (const m of this.clouds.children as THREE.Mesh[]) applyAerial(m.material as THREE.Material, true);
     applyCloudShadow(treeMaterial, this.cloudU, this.sunU, this.flora.fade);
     applyAerial(treeMaterial, true);
@@ -548,6 +555,7 @@ export class PlanetView {
       m.needsUpdate = true;
     });
     this.cloudU.uCloudMap.value = tex.main;
+    this.precip.setClouds(px);
   }
 
   /** Visibility-only options apply at once; mesh options take effect with the next setData. */
@@ -582,6 +590,7 @@ export class PlanetView {
       this.ambient.intensity = 0.75;
       this.ambient.color.set(0xc8d8f0);
     }
+    this.ambientBase = this.ambient.intensity;
   }
 
   private applyVisibility() {
@@ -1067,6 +1076,7 @@ export class PlanetView {
     if (this.rivers) this.rivers.visible = this.opts.rivers && this.opts.mode === 'biome' && this.riverMat.uniforms.uVis.value > 0.002;
     if (this.streams) this.streams.visible = this.opts.rivers && this.opts.mode === 'biome' && this.streamMat.uniforms.uVis.value > 0.002;
     this.cloudU.uCloudShadow.value = this.clouds.visible ? 0.22 + 0.13 * fade : 0;
+    this.groundWeather(dt, d);
 
     this.flora.update(this.camera.position, this.gateReady && this.opts.trees && this.opts.mode === 'biome' && !this.mapMode, this.frozen !== null);
     const civOn = this.cloudU.uYear.value >= 0;
@@ -1083,6 +1093,43 @@ export class PlanetView {
     } else {
       this.renderer.render(this.scene, cam);
     }
+  }
+
+  /**
+   * Weather down low (precip.ts): the cloud over the camera sets how grey the sky is, how far
+   * you can see, whether rain or snow falls, and lightning. Faded in below ~1.06 radii, as the
+   * camera comes down toward the cloud deck (1.019); above that you are over the weather. Off
+   * on the map, with clouds off, and outside the biome view.
+   */
+  private groundWeather(dt: number, zoom: number) {
+    const w = this.world, cam = this.camera, d = cam.position.length();
+    const on = !!w && this.opts.clouds && this.opts.mode === 'biome' && !this.mapMode && this.gateReady;
+    const low = on ? 1 - THREE.MathUtils.smoothstep(zoom, 1.03, 1.07) : 0;
+    const up = cam.position.clone().normalize();
+    let cover = 0, ground = SEA, temp = 1;
+    if (low > 0) {
+      cover = this.precip.coverAt(up, this.weatherDays, this.cloudU.uCloudTime.value, this.cloudU.uStorms.value);
+      ground = this.probe ? Math.max(SEA, this.probe.heightAt(up.x, up.y, up.z, SEA)) : SEA;
+      // sky.ts meanTemp and seasonalTemp, on the ground under the camera.
+      const lat = Math.abs(Math.asin(Math.max(-1, Math.min(1, up.y)))) / (Math.PI / 2);
+      temp = 1 - 1.1 * Math.pow(lat, 1.25) - 0.55 * Math.max(0, ground - 1) / this.cloudU.uRelief.value + this.cloudU.uHeat.value
+        + 0.24 * up.y * this.cloudU.uSeason.value;
+    }
+    // (How high the sun is over the camera: the overcast's grey, and rain seen by, follow it.)
+    const day = THREE.MathUtils.smoothstep(up.dot(this.sunDir), -0.15, 0.25);
+    this.precip.daylight = day;
+    this.precip.update(dt, cam, up, Math.max(0.0005, d - ground), temp, cover, low, this.renderer.domElement.height);
+    const g = this.precip.state, ov = g.overcast;
+    // Under cloud the sun is hidden and the light goes flat: less direct, a little more ambient.
+    this.sun.intensity = this.sunBase * (1 - 0.8 * ov);
+    this.ambient.intensity = this.ambientBase * (1 + 0.35 * ov) + 0.9 * g.flash;
+    // The grey of the sky and the haze, dark at night, lit by lightning.
+    const grey = (0.025 + 0.5 * day) * (1 - 0.25 * (g.rain + g.snow)) + 0.45 * g.flash;
+    const a = this.atmo.overcast, e = atmoUniforms.uAtE.value;
+    a.uOv.value = Math.min(0.95, ov * 1.1);
+    a.uOvSky.value.set(grey * 0.92, grey * 0.96, grey * 1.04).divideScalar(e);
+    // Haze per unit of path: overcast thickens it a little, rain more, snow most.
+    a.uOvFog.value = ov * 4 + g.rain * 12 + g.snow * 26;
   }
 
   private dispose() {
