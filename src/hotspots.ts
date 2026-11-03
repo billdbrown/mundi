@@ -18,7 +18,7 @@
  * few hotspots go in the open ocean, far from land, which is where they are most often found
  * and where small islands are most wanted.
  */
-import { makeRng } from './rng.ts';
+import { makeRng, hash01 } from './rng.ts';
 import type { Grid } from './grid.ts';
 
 export interface HotspotInput {
@@ -85,12 +85,17 @@ export function addHotspots(w: HotspotInput): HotspotResult {
       c = best;
     }
   };
-  // A shield volcano: a broad, gentle cone, raising whatever is there toward its peak.
-  const build = (p: number[], start: number, peak: number, radius: number) => {
+  // A shield volcano: a broad, gentle cone, raising whatever is there toward its peak. Its
+  // reach varies cell to cell (rough), so a small island isn't a cell and its six neighbours,
+  // whose coast drew a six-pointed star (2026-11-03).
+  // (Their own random stream, so the chains themselves are where they were before.)
+  const shape = makeRng(w.seed * 131 + 29), salt = Math.floor(shape() * 1e6);
+  const build = (p: number[], start: number, peak: number, radius: number, rough = 0) => {
     const centre = cellAt(p, start), r = radius * spacing, seen = new Set([centre]), ring = [centre];
     for (let i = 0; i < ring.length; i++) {
       const c = ring[i];
-      const d = Math.acos(Math.min(1, P[c * 3] * p[0] + P[c * 3 + 1] * p[1] + P[c * 3 + 2] * p[2])) / r;
+      const jitter = rough && c !== centre ? 1 + rough * (hash01(c * 7919 + salt) - 0.5) : 1;
+      const d = jitter * Math.acos(Math.min(1, P[c * 3] * p[0] + P[c * 3 + 1] * p[1] + P[c * 3 + 2] * p[2])) / r;
       if (d >= 1) continue;
       const f = Math.pow(1 - d, 1.4);
       const target = E[c] + (peak - E[c]) * f;
@@ -142,7 +147,21 @@ export function addHotspots(w: HotspotInput): HotspotResult {
       const peak = k < above ? peak0 * Math.pow(1 - k / above, 1.3) + 0.02 : -0.04 - 0.06 * (k - above);
       // (A little wider than life, ~1.7 cells: at Hawaii's real size the islands were specks.)
       const radius = Math.max(1.1, 2.4 - 0.15 * k);
-      const centre = build(p, cell, peak, radius);
+      const centre = build(p, cell, peak, radius, 0.6);
+      // An island is several volcanoes grown together (the Big Island is five): one or two
+      // lower cones beside the main one, off to random sides, so each island has its own shape.
+      if (peak > 0) {
+        const extra = 1 + Math.floor(shape() * 2);
+        for (let e = 0; e < extra; e++) {
+          // A direction in the tangent plane at p, and a step of 0.8-1.4 of the cone's radius.
+          const ax = Math.abs(p[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+          const t1 = [p[1] * ax[2] - p[2] * ax[1], p[2] * ax[0] - p[0] * ax[2], p[0] * ax[1] - p[1] * ax[0]];
+          const tl = Math.hypot(t1[0], t1[1], t1[2]);
+          const dirAxis = rotate(t1.map((v) => v / tl), p, shape() * 2 * Math.PI);
+          const q = rotate(p, dirAxis, (0.8 + 0.6 * shape()) * radius * spacing);
+          build(q, centre, peak * (0.35 + 0.35 * shape()), radius * (0.55 + 0.25 * shape()), 0.6);
+        }
+      }
       out.volcanoes.push({ cell: centre, age: k, peak, chain });
       if (k === 0) out.active.push(centre);
       const lat = Math.abs(Math.asin(Math.max(-1, Math.min(1, p[1])))) * 57.2958;

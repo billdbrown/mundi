@@ -8,7 +8,7 @@ import { SNOISE_GLSL } from './snoise.ts';
 import { EROSION_GLSL } from './erosion.ts';
 import { SHADOW_GLSL, shadowLights, shadowUniforms } from './terrainshadow.ts';
 import { AERIAL_FULL_GLSL, atmoUniforms, applyAerial } from './atmosphere.ts';
-import { DUNES_GLSL, PATCH_GLSL, LIFT_GLSL, PATCH_R, patchUniforms, makeDuneUniforms, type DuneUniforms, type PatchUniforms } from './dunes.ts';
+import { DUNES_GLSL, PATCH_GLSL, LIFT_GLSL, PATCH_R, RIVER_SINK, patchUniforms, makeDuneUniforms, type DuneUniforms, type PatchUniforms } from './dunes.ts';
 
 patchShaderChunks();
 
@@ -1112,7 +1112,9 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         vec4 w = modelMatrix * vec4(position, 1.0);
         // Rivers follow the ground as the high-detail patch shapes it (dunepatch.ts).
         #if defined(USE_FADE) && !defined(MERCATOR)
-          w.xyz += normalize(w.xyz) * patchLiftK(w.xyz, 0.0);
+          // Set down between its banks there (dunes.ts RIVER_SINK); toward the sea, where the
+          // mouth fades out over the water, it keeps its height.
+          w.xyz += normalize(w.xyz) * (patchLiftK(w.xyz, 0.0) - ${RIVER_SINK} * patchEdge(w.xyz) * smoothstep(0.3, 0.9, fade));
         #endif
         vWorld = w.xyz;
         #ifdef MERCATOR

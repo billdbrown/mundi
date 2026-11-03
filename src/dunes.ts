@@ -158,6 +158,13 @@ export const patchUniforms: PatchUniforms = {
 };
 export const PATCH_N = 288;          // vertices along a side
 export const PATCH_A = 0.15;         // grid spacing at the centre, relative to an even grid
+/**
+ * How far below its drawn height a river's water sits where the patch is drawn. The river is
+ * built just above the plain terrain (render.ts, the lowest of its middle and banks + 0.0002), so
+ * it never hides there; on the patch the banks are cut to just above it, and it sat ~0.0002 above
+ * the ground on both sides: a sheet laid on the land rather than water in a channel (2026-11-03).
+ */
+export const RIVER_SINK = 0.0004;
 export const PATCH_R = 0.05;         // half-width, radians (~320 km on an Earth-sized world)
 export const CAPTURE_SIZE = 512;     // texels along a side of the patch's captures
 
@@ -192,6 +199,7 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
   uniform sampler2D uCapR;
   uniform float uRelief;
   const float CHANNEL = 0.0003;   // river bed below the water (radians; exaggerated, like all relief)
+  const float RIVER_SINK = ${RIVER_SINK};   // the water as the patch draws it, below the mask's height
   /** How far the ground at uv (height h above the sea) drops for a river channel (0 or less). */
   float channelLift(vec2 uv, float h) {
     float t = 1.0 / ${CAPTURE_SIZE}.0;
@@ -207,7 +215,7 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
       bank = max(bank, max(a.r * 0.75, b.r * 0.4));
     }
     if (sm < 0.02) return 0.0;
-    float wH = sg / sm / 50.0;
+    float wH = sg / sm / 50.0 - RIVER_SINK;
     float inWater = smoothstep(0.1, 0.7, c.r);
     float ceilH = wH + 0.00008 + 0.0005 * (1.0 - bank);   // banks rise away from the water
     return min(0.0, mix(ceilH, wH - CHANNEL, inWater) - h);
@@ -358,6 +366,12 @@ export const LIFT_GLSL = /* glsl */`
     const float A = ${PATCH_A};
     float ax = min(abs(x) / ${PATCH_R}, 1.0);
     return sign(x) * (-A + sqrt(A * A + 4.0 * (1.0 - A) * ax)) / (2.0 * (1.0 - A));
+  }
+  /** Where the patch is drawn at full strength (1), fading to 0 at its edge, as in the bake. */
+  float patchEdge(vec3 p) {
+    if (uPatchOn < 0.5 || dot(normalize(p), uPatchC) < 0.9) return 0.0;
+    vec2 lat = vec2(dot(p, uPatchE), dot(p, uPatchN));
+    return 1.0 - smoothstep(0.8, 0.97, max(abs(lat.x), abs(lat.y)) / ${PATCH_R});
   }
   float patchLiftK(vec3 p, float chan) {
     if (uPatchOn < 0.5 || dot(normalize(p), uPatchC) < 0.9) return 0.0;
