@@ -215,10 +215,12 @@ const CLOUD_GLSL = /* glsl */`
    * tropics, where thunderstorms are (the equatorial band, the cyclones' cores and bands), fewer
    * toward the poles. The sky is cut into cells ~90 km across; each, every ~0.8 s, may flash
    * at a random point in it, flickering a stroke or two. Real time (uCloudTime), not weather time.
+   * Tuned down 2026-11-03 (Bill: too distracting at night): 1 in 40 chances, not 1 in 10, and
+   * only the thickest cloud.
    */
   float convective(vec3 d, float cover) {
     float lat = abs(asin(clamp(d.y, -1.0, 1.0)));
-    return smoothstep(0.64, 0.9, cover) * mix(0.3, 1.0, 1.0 - smoothstep(0.3, 0.75, lat)) * (1.0 - smoothstep(1.0, 1.25, lat));
+    return smoothstep(0.72, 0.94, cover) * mix(0.3, 1.0, 1.0 - smoothstep(0.3, 0.75, lat)) * (1.0 - smoothstep(1.0, 1.25, lat));
   }
   float lightning(vec3 d, float cover) {
     float conv = convective(d, cover);
@@ -229,7 +231,7 @@ const CLOUD_GLSL = /* glsl */`
       vec3 c = i0 + vec3(float(k % 3), float((k / 3) % 3), float(k / 9));
       float T = uCloudTime * 1.25 + cnHash(c * 1.7 + 3.1) * 17.0;
       float ep = floor(T), ph = fract(T);
-      if (cnHash(c + ep * 13.17) > 0.1 || ph > 0.16) continue;
+      if (cnHash(c + ep * 13.17) > 0.025 || ph > 0.16) continue;
       // (Near the cell's middle, and the glow gone within ~1.3 cells: only the 27 cells round
       // the point are looked at, and a glow reaching past them is cut off in wedges.)
       vec3 at = c + 0.3 + 0.4 * vec3(cnHash(c + ep + 0.31), cnHash(c + ep + 0.57), cnHash(c + ep + 0.83));

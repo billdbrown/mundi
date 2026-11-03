@@ -215,7 +215,7 @@ export class Precip {
     st.snow = falling * cold * low;
     st.thunder = smooth(0.8, 0.95, cover) * smooth(0.35, 0.6, temp) * low;
     // Lightning: now and then, more in a stronger storm; a flicker of a stroke and a restrike.
-    if (dt > 0 && st.thunder > 0 && this.flashT > 0.6 && Math.random() < dt * 0.5 * st.thunder) { this.flashT = 0; this.flashPeak = 0.5 + 0.5 * Math.random(); }
+    if (dt > 0 && st.thunder > 0 && this.flashT > 0.6 && Math.random() < dt * 0.15 * st.thunder) { this.flashT = 0; this.flashPeak = 0.5 + 0.5 * Math.random(); }
     this.flashT += dt;
     const f = this.flashT;
     st.flash = this.flashPeak * (f < 0.06 ? 1 : f < 0.1 ? 0.2 : f < 0.16 ? 0.7 : f < 0.4 ? 0.7 * (1 - (f - 0.16) / 0.24) : 0);
