@@ -32,12 +32,24 @@
     #hint { left: 50%; bottom: 12px; transform: translateX(-50%); color: #c9d3da; font-size: 12px; padding: 6px 12px; }
     .capture .card { display: none; }
     #timing { color: #7d8b95; font-size: 11px; margin-top: 8px; }
+    #more { display: none; float: right; background: #2a3540; color: #dfe6eb; border: 1px solid #3c4955; border-radius: 7px; font: inherit; font-size: 12px; padding: 2px 8px; }
+    /* Phones: a slim panel with just the styles; "More" opens the rest. No inset map or key hints. */
+    @media (max-width: 700px) {
+      #panel { left: 8px; right: 8px; top: 8px; width: auto; padding: 8px 10px; max-height: 60vh; overflow-y: auto; }
+      #panel h1 { font-size: 14px; }
+      #more { display: inline-block; }
+      #panel:not(.open) > :not(h1):not(#styles) { display: none; }
+      #styles { grid-template-columns: repeat(5, 1fr); gap: 4px; margin-bottom: 4px; }
+      #styles button { padding: 6px 2px; text-align: center; font-size: 12px; }
+      #styles button small, #styles button kbd { display: none; }
+      #inset, #hint { display: none; }
+    }
   </style>
 </head>
 <body>
   <div id="view"></div>
   <div id="panel" class="card">
-    <h1><span id="title">Hex</span><a id="back" href="/">← planet</a></h1>
+    <h1><button id="more" type="button">More</button><span id="title">Hex</span><a id="back" href="/">← planet</a><a href="/hexes.html">gallery</a></h1>
     <div id="facts"></div>
     <div id="styles"></div>
     <label class="row">Tilt-shift <input id="tilt" type="checkbox" style="justify-self:start" /><span></span></label>
@@ -55,6 +67,7 @@
   <div id="inset" class="card"><canvas id="map" width="480" height="480"></canvas><div>The planet's view of this ground · white = this hex</div></div>
   <div id="busy" class="card">Building the hex…</div>
   <div id="hint" class="card">Drag to orbit · 1–5 style · T tilt-shift · right-drag to pan · scroll to zoom · H hex outline · the red figure is 1.8 m</div>
+  <script>document.getElementById('more').onclick = () => document.getElementById('panel').classList.toggle('open');</script>
   <script type="module" src="/src/hex.ts"></script>
 </body>
 </html>

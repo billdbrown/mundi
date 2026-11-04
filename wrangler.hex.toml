@@ -1,0 +1,14 @@
+# mundi-hex.bill.computer: a preview of the hex-drilldown branch, kept apart from mundi.bill.computer.
+# Static files only: no claims Worker and no Durable Object, so it shares nothing with the live site
+# (the planet there says claims are unavailable, as in `npm run dev`). Deploy with ./deploy-hex.sh.
+name = "mundi-hex"
+compatibility_date = "2026-10-31"
+# Pinned because the API token has no account-level enumerate. Not a credential.
+account_id = "af045bb950d46af2b6aee70965d97f0a"
+
+[assets]
+directory = "./dist"
+
+[[routes]]
+pattern = "mundi-hex.bill.computer"
+custom_domain = true

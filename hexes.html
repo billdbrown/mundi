@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mundi · hex styles</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Cpath d=%22M16 2l12 7v14l-12 7-12-7V9z%22 fill=%22%236f8a45%22/%3E%3C/svg%3E" />
+  <style>
+    body { margin: 0; background: #14191e; color: #e3e8ec; font: 15px/1.5 system-ui, sans-serif; }
+    header, section { max-width: 1400px; margin: 0 auto; padding: 0 16px; }
+    header { padding-top: 20px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    header p { color: #9aa8b2; margin: 0 0 6px; max-width: 70ch; }
+    a { color: #8fc0e8; }
+    h2 { font-size: 18px; margin: 28px 0 2px; }
+    h2 small { color: #8a98a2; font-weight: 400; font-size: 13px; margin-left: 6px; }
+    .row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(260px, 1fr); gap: 12px;
+           overflow-x: auto; scroll-snap-type: x mandatory; padding: 10px 0 14px; }
+    .card { scroll-snap-align: start; background: #1e252c; border-radius: 10px; overflow: hidden;
+            text-decoration: none; color: inherit; display: block; }
+    .card img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; background: #283039; }
+    .card .eye { border-top: 2px solid #14191e; }
+    .card div { padding: 8px 10px 10px; }
+    .card b { display: block; }
+    .card span { color: #8a98a2; font-size: 13px; }
+    .card:active, .card:hover { outline: 2px solid #6aa4cf; }
+    footer { color: #6f7d87; font-size: 13px; padding: 24px 16px 40px; max-width: 1400px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Mundi hex drill-down: five styles</h1>
+    <p>Each planet hex opened as a walkable local map (seed 1, content-aware 10×). Rows are hexes,
+      cards are styles: from above, then at eye level. <b>Tap a card to open it live</b>, then drag to
+      orbit, pinch to zoom, and switch styles from the panel.</p>
+    <p><a href="/">The planet</a> (double-click a hex there to open any other)</p>
+  </header>
+  <main id="rows"></main>
+  <footer>Work in progress from the <code>hex-drilldown</code> branch, not the live Mundi site.
+    Screenshots made on a desktop; the live view builds the hex in your browser and takes a few seconds.</footer>
+  <script type="module">
+    const hexes = [
+      [12010, 'River', 'Zival, the biggest town on the planet'],
+      [11783, 'Coast', 'a lagoon and a fishing village'],
+      [15979, 'Forest', 'deep woods'],
+      [5602, 'Mountain', 'high ground, snow by temperature'],
+      [35274, 'Desert', 'dunes'],
+    ];
+    const styles = [
+      ['tabletop', 'Tabletop', 'A painted tile on a warm table'],
+      ['storybook', 'Storybook', 'Bold, saturated, sculpted'],
+      ['golden', 'Golden hour', 'Natural materials, low warm sun'],
+      ['earth', 'Earth', "The planet's own colours, haze and grade"],
+      ['homestead', 'Homestead', 'Muted, lived-in, seen from above'],
+    ];
+    const el = document.getElementById('rows');
+    for (const [cell, name, note] of hexes) {
+      const s = document.createElement('section');
+      s.innerHTML = `<h2>${name}<small>hex ${cell} · ${note}</small></h2><div class="row"></div>`;
+      for (const [id, label, blurb] of styles) {
+        const a = document.createElement('a');
+        a.className = 'card';
+        a.href = `hex.html#seed=1&cell=${cell}&style=${id}`;
+        a.innerHTML = `<img src="hexes/${cell}-${id}.jpg" loading="lazy" alt="${name} in ${label}, from above">`
+          + `<img class="eye" src="hexes/${cell}-${id}-eye.jpg" loading="lazy" alt="${name} in ${label}, eye level">`
+          + `<div><b>${label}</b><span>${blurb}</span></div>`;
+        s.querySelector('.row').appendChild(a);
+      }
+      el.appendChild(s);
+    }
+  </script>
+</body>
+</html>

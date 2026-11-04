@@ -519,6 +519,10 @@ function build(m: LocalMap) {
   applyLook(m);
 }
 
+/** Views are framed for a 16:10 screen; on a narrower one (a phone held upright) the camera backs
+ * off by this much so most of the width still fits, and the fog thins to match. */
+const narrowness = () => Math.max(1, (1.6 / camera.aspect) ** 0.75);
+
 /** Light, sky, fog and grade for the current style. */
 function applyLook(m: LocalMap) {
   const st = style, size = m.size;
@@ -532,7 +536,7 @@ function applyLook(m: LocalMap) {
   (scene.background as THREE.Texture | null)?.dispose?.();
   scene.background = tex;
   const fog = scene.fog as THREE.FogExp2;
-  fog.color.setHex(st.fogColor); fog.density = st.fog / size;
+  fog.color.setHex(st.fogColor); fog.density = st.fog / size / narrowness();
   hemi.color.setHex(st.hemi.sky); hemi.groundColor.setHex(st.hemi.ground); hemi.intensity = st.hemi.intensity;
   const el = st.sun.elev * Math.PI / 180, az = st.sun.azim * Math.PI / 180, d = size * 1.2;
   sun.color.setHex(st.sun.color); sun.intensity = st.sun.intensity;
@@ -700,7 +704,8 @@ function resetView() {
   let hi = -Infinity, lo = Infinity;
   for (const v of map.heights) { hi = Math.max(hi, v); lo = Math.min(lo, v); }
   // Back off for tall terrain, or a mountain overfills the frame.
-  const fit = (map.localWidth * 0.62 + Math.max(0, hi - Math.max(lo, 0)) * 0.6) / Math.tan((c.fov * Math.PI / 180) / 2) * c.dist;
+  const narrow = narrowness();
+  const fit = (map.localWidth * 0.62 + Math.max(0, hi - Math.max(lo, 0)) * 0.6) / Math.tan((c.fov * Math.PI / 180) / 2) * c.dist * narrow;
   const t = c.tilt * Math.PI / 180;
   controls.target.set(0, g, 0);
   camera.position.set(0, g + Math.cos(t) * fit, Math.sin(t) * fit);

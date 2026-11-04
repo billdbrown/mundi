@@ -10,6 +10,6 @@ try { build = execSync('git rev-parse --short HEAD').toString().trim(); } catch 
 // claims, build and run `npx wrangler@4 dev`, which serves dist/ and the Worker together.
 export default defineConfig({
   define: { __MUNDI_BUILD__: JSON.stringify(build) },
-  // Two pages: the planet, and the hex view opened from it.
-  build: { rollupOptions: { input: { main: 'index.html', hex: 'hex.html' } } },
+  // The planet, the hex view opened from it, and a gallery of hexes in each style.
+  build: { rollupOptions: { input: { main: 'index.html', hex: 'hex.html', hexes: 'hexes.html' } } },
 });
