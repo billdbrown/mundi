@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Mundi · hex</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%2214%22 fill=%22%23123c66%22/%3E%3Cpath d=%22M9 12c4-3 8 0 11-2s3 5-1 7-9 1-10 5-3-7 0-10z%22 fill=%22%236f8a45%22/%3E%3C/svg%3E" />
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #a9c3d6; font: 13px/1.45 system-ui, sans-serif; color: #e9edf0; }
+    #view { position: fixed; inset: 0; }
+    .card { position: fixed; background: rgba(18, 24, 30, 0.82); border-radius: 10px; padding: 12px 14px; backdrop-filter: blur(6px); }
+    #panel { top: 12px; left: 12px; width: 300px; }
+    #panel h1 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+    #panel h1 a { color: #9cc3e6; font-weight: 400; font-size: 12px; margin-left: 8px; text-decoration: none; }
+    #facts { color: #b9c4cc; margin-bottom: 10px; }
+    #facts b { color: #fff; font-weight: 600; }
+    #variants { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
+    #variants button { background: #2a3540; color: #dfe6eb; border: 1px solid #3c4955; border-radius: 7px; padding: 6px 6px; text-align: left; cursor: pointer; font: inherit; }
+    #variants button small { display: block; color: #93a2ad; font-size: 11px; }
+    #variants button.on { background: #35607f; border-color: #6aa4cf; }
+    #variants button kbd { float: right; color: #93a2ad; font: 11px monospace; }
+    label.row { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 6px; margin: 3px 0; color: #b9c4cc; }
+    label.row output { text-align: right; color: #fff; }
+    select, input[type=range] { width: 100%; }
+    .buttons { display: flex; gap: 6px; margin-top: 10px; }
+    .buttons button { flex: 1; background: #35607f; color: #fff; border: 0; border-radius: 7px; padding: 7px; cursor: pointer; font: inherit; }
+    #inset { right: 12px; bottom: 12px; padding: 8px; }
+    #inset canvas { display: block; width: 240px; height: 240px; border-radius: 6px; }
+    #inset div { color: #93a2ad; font-size: 11px; margin-top: 4px; text-align: center; }
+    #busy { top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 15px; }
+    #hint { left: 50%; bottom: 12px; transform: translateX(-50%); color: #c9d3da; font-size: 12px; padding: 6px 12px; }
+    #timing { color: #7d8b95; font-size: 11px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div id="view"></div>
+  <div id="panel" class="card">
+    <h1><span id="title">Hex</span><a id="back" href="/">← planet</a></h1>
+    <div id="facts"></div>
+    <div id="variants"></div>
+    <label class="row">Smaller by <input id="mag" type="range" min="4" max="40" step="1" /><output id="mag-out"></output></label>
+    <label class="row">Heights ÷ <input id="vscale" type="range" min="1" max="40" step="0.5" /><output id="vscale-out"></output></label>
+    <label class="row">Big heights <select id="vsoft"><option value="0">Same as small</option><option value="300">Squeezed hard</option><option value="450">Squeezed</option><option value="600">Squeezed gently</option><option value="1000">Squeezed lightly</option></select><span></span></label>
+    <label class="row">Rivers <select id="river"><option value="scaled">Shrunk with the map</option><option value="flow">Life-size, from flow</option></select><span></span></label>
+    <label class="row">Crags <input id="crags" type="checkbox" style="justify-self:start" /><span></span></label>
+    <label class="row">Detail <select id="res"><option value="257">Low</option><option value="513">Medium</option><option value="769">High</option></select><span></span></label>
+    <div class="buttons"><button id="walk">Walk (W A S D)</button><button id="reset">Reset view</button></div>
+    <div id="timing"></div>
+  </div>
+  <div id="inset" class="card"><canvas id="map" width="480" height="480"></canvas><div>The planet's view of this ground · white = this hex</div></div>
+  <div id="busy" class="card">Building the hex…</div>
+  <div id="hint" class="card">Drag to orbit · right-drag to pan · scroll to zoom · 1–4 switch variant · H hex outline · the red figure is 1.8 m</div>
+  <script type="module" src="/src/hex.ts"></script>
+</body>
+</html>

@@ -312,12 +312,24 @@ view.renderer.domElement.addEventListener('pointermove', (e) => {
     (game && game.resources[c] ? `<span>resources</span> ${RESOURCE_NAMES.filter(([b]) => game!.resources[c] & b).map(([, n]) => n).join(', ')}<br>` : '') +
     `<span>elev</span> ${world.elevation[c].toFixed(2)} <span>temp</span> ${pct(world.temperature[c])} ` +
     `<span>wet</span> ${pct(world.moisture[c])}<br><span>lat</span> ${lat.toFixed(0)}° <span>cell</span> ${c} ` +
-    `<span>plate</span> ${world.plate[c]}`;
+    `<span>plate</span> ${world.plate[c]}<br><span>double-click to open this hex</span>`;
   info.style.left = `${e.clientX}px`;
   info.style.top = `${e.clientY}px`;
   info.hidden = false;
 });
 view.renderer.domElement.addEventListener('pointerleave', () => { info.hidden = true; view.highlight(-1); lastCell = -1; });
+
+// --- Double-click a hex to open it as a local map (hex.html), in a new tab so the planet stays. ---
+view.renderer.domElement.addEventListener('dblclick', (e) => {
+  if (!world) return;
+  const c = view.pick(e.clientX, e.clientY);
+  if (c < 0) return;
+  const h = new URLSearchParams();
+  for (const k of Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[]) h.set(k, String(params[k]));
+  h.set('radius', String(radiusKm));
+  h.set('cell', String(c));
+  window.open(`hex.html#${h.toString()}`, '_blank');
+});
 
 // --- Debug handle for the console, scripts/shot.mjs and scripts/visual.mjs ---
 (window as unknown as Record<string, unknown>).mundi = {
