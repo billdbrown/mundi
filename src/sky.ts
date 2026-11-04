@@ -315,7 +315,11 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
             vec3 wp = (modelMatrix * vec4(transformed, 1.0)).xyz;
             if (dot(normalize(wp), uPatchC) > 0.9) {
               float ps = max(abs(dot(wp, uPatchE)), abs(dot(wp, uPatchN))) / ${PATCH_R.toFixed(4)};
-              transformed -= normalize(transformed) * 0.004 * (1.0 - smoothstep(0.8, 0.97, ps)) * uEroOn;
+              // 0.012, about the whole relief: by 0.004 the patch's mountain valleys (carved up to
+              // 1.8x the valley depth, dunes.ts MTN_CARVE) went below it, and this lowered,
+              // snowless surface showed through in every valley, the snow left as hard-edged
+              // masses on the ridges (2026-11-04).
+              transformed -= normalize(transformed) * 0.012 * (1.0 - smoothstep(0.8, 0.97, ps)) * uEroOn;
             }
           }
         #endif
@@ -956,16 +960,16 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         if (uSnow > 0.0 && hAbove > 0.0004) {
           vec3 sn = normalize(vCloudP);
           float lat = abs(asin(clamp(sn.y, -1.0, 1.0))) / 1.5707963;
-          // On the patch the ground is carved by the whole planet's valleys (valleys.ts); judged by
-          // that height, a snowy range lost nearly all its snow (the coarse map lowers summits a
-          // little too). Most of it back: valley floors hold a little less, peaks keep theirs.
-          // Off the patch the drawn ground is not carved, so the valleys are taken off here: they
-          // cut dark lines through a snowy range, as from the air, where it was one white sheet.
-          // (2026-11-03; both ways the valleys count VALLEY_SNOW of their depth.)
+          // Judged by the ground before the close-up patch's relief (vBase: the plain terrain's
+          // height), the same way on and off the patch, less VALLEY_SNOW of the valleys' depth:
+          // they cut dark lines through a snowy range, as from the air. By the patch's carved
+          // and eroded height, with the carving added back by other weights, ranges lost most of
+          // their snow as you came down, the patch's edge a hard line across them (2026-11-04).
           #define VALLEY_SNOW 0.45
-          float hSn = hAbove - VALLEY_SNOW * carveS.x * carveS.z;
           #ifdef DUNE_PATCH
-            hSn += carveS.x * carveS.z * (1.0 + ${MTN_CARVE} * highland);
+            float hSn = length(vBase) - 1.0 - VALLEY_SNOW * carveS.x * carveS.z;
+          #else
+            float hSn = hAbove - VALLEY_SNOW * carveS.x * carveS.z;
           #endif
           float st = seasonalTemp(sn, 1.0 - 1.1 * pow(lat, 1.25) - 0.5 * hSn / uRelief + uHeat);
           // Lying snow at an equinox: polar margins and high ground. (0.27 put snow over all the
@@ -989,6 +993,11 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           #else
             float slope = 1.0 - dot(normalize((vec4(normalize(mix(geoN, normal, detailFade)), 0.0) * viewMatrix).xyz), sn);
           #endif
+          #ifdef DUNE_PATCH
+            // Mostly the plain terrain's slope: the patch's relief is steep nearly everywhere, and
+            // snow shed off all of it but flat tops, hard-edged white masses on bare ranges.
+            slope = mix(1.0 - dot(normalize(vTerrN), sn), slope, 0.55);
+          #endif
           // Value noise shows its grid once thresholded, so warp it and rotate each octave.
           vec3 q = vCloudP * 160.0;
           q += vec3(vnoise(q * 0.37), vnoise(q * 0.37 + 5.2), vnoise(q * 0.37 + 9.1)) * 2.5;
@@ -1001,7 +1010,13 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           // from the shadow height map: ground lower than the ring around it.
           float gfade;
           vec2 guv = groundUv(vCloudP, gfade);
-          if (gfade > 0.0 && st < line + 0.13 && hAbove / uRelief > 0.15) {
+          // (Glaciers too go by the ground before the patch's relief.)
+          #ifdef DUNE_PATCH
+            float hG = length(vBase) - 1.0;
+          #else
+            float hG = hAbove;
+          #endif
+          if (gfade > 0.0 && st < line + 0.13 && hG / uRelief > 0.15) {
             float rr = 0.0015 / (2.0 * uShR);
             float hc = texture(uShH, guv).r / 50.0, ring = 0.0, ring2 = 0.0;
             for (int i = 0; i < 6; i++) {
@@ -1016,7 +1031,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
                                smoothstep(0.0003, 0.0015, ring2 / 6.0 - hc));
             valley = clamp(valley, 0.0, 1.0);
             float iceZone = smoothstep(line + 0.13, line + 0.03, st + edge * 0.5);
-            float gl = valley * iceZone * gfade * smoothstep(0.15, 0.3, hAbove / uRelief);
+            float gl = valley * iceZone * gfade * smoothstep(0.15, 0.3, hG / uRelief);
             if (gl > 0.01) {
               // Downhill, from the height map, for streaks along the flow.
               vec2 gh = vec2(texture(uShH, guv + vec2(rr, 0.0)).r - texture(uShH, guv - vec2(rr, 0.0)).r,

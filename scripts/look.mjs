@@ -67,6 +67,7 @@ async function aim(seed, target, alt, lens) {
       m.orbit(Math.atan2(P[best * 3], P[best * 3 + 2]) * 57.2958, Math.asin(P[best * 3 + 1]) * 57.2958, a);
       return best;
     }
+    if (/^[0-9]+$/.test(t)) { const c = Number(t); m.orbit(Math.atan2(P[c * 3], P[c * 3 + 2]) * 57.2958, Math.asin(P[c * 3 + 1]) * 57.2958, a); return c; }
     if (t.startsWith('@')) { const [lo, la] = t.slice(1).split(',').map(Number); m.orbit(lo, la, a); return -1; }
     if (t === 'hills') {
       // Upland away from mountains: land cells of middling height in a block of the same.
@@ -114,11 +115,13 @@ for (const spec of specs) {
   if (process.env.HOUR) await page.evaluate((h) => { const v = window.mundi.view; v.setOptions({ light: 'cycle' }); v.setLocalHour(Number(h)); }, process.env.HOUR);
   if (process.env.NOSHADOW) await page.evaluate(() => { window.mundi.view.terrainShadow.update = () => { window.mundi.view.terrainShadow.u.uShOn.value = 0; }; });
   if (process.env.DAY) await page.evaluate((d) => { window.mundi.view.day = Number(d); }, process.env.DAY);
-  if (process.env.NOPATCH) await page.evaluate(() => { const p = window.mundi.view.dunePatch; p.update = () => { p.mesh.visible = false; }; });
+  if (process.env.NOPATCH) await page.evaluate(() => { const p = window.mundi.view.dunePatch; p.update = () => { p.mesh.visible = false; p.heightMesh.visible = false; p.u.uPatchOn.value = 0; }; });
   if (process.env.NORIVER) await page.evaluate(() => { const v = window.mundi.view; v.riverMat.colorWrite = false; if (v.streamMat) v.streamMat.colorWrite = false; });
   if (process.env.MAGENTA) await page.evaluate(() => { window.mundi.view.renderer.setClearColor(0xff00ff, 1); });
   if (process.env.NOPRE) await page.evaluate(() => { const p = window.mundi.view.dunePatch; p.depth.visible = false; p.colour.material.depthWrite = true; });
   if (process.env.NOTREES) await page.evaluate(() => { window.mundi.view.setOptions({ trees: false }); });
+  if (process.env.NOSNOW) await page.evaluate(() => { window.mundi.view.cloudU.uSnow.value = 0; });
+  if (process.env.PEAKSNOW) await page.evaluate((v) => { window.mundi.view.cloudU.uPeakSnow.value = Number(v); }, process.env.PEAKSNOW);
   if (process.env.PATCHWIRE) await page.evaluate(() => { window.mundi.view.dunePatch.colour.material.wireframe = true; });
   if (process.env.NOWATER) await page.evaluate(() => { const v = window.mundi.view; v.water.visible = false; v.applyVisibility = () => {}; });
   // Let the camera settle (it eases after a jump) and the ground patch recentre under it, or
