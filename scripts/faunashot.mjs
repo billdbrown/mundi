@@ -6,7 +6,7 @@
 import { chromium } from 'playwright-core';
 const [out, seed = '77', sizes = '1,4,8', alt = '1.009', kinds = 'bison,deer,rabbit,bird,wildebeest,caribou'] = process.argv.slice(2);
 const browser = await chromium.launch({ channel: 'msedge', args: ['--use-angle=d3d11', '--enable-gpu'] });
-const page = await (await browser.newContext({ viewport: { width: 900, height: 600 } })).newPage();
+const page = await (await browser.newContext({ viewport: { width: Number(process.env.VW ?? 900), height: Number(process.env.VH ?? 600) } })).newPage();
 const errors = [];
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text().slice(0, 400)); });
 page.on('pageerror', (e) => errors.push(String(e).slice(0, 400)));
