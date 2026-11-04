@@ -1323,7 +1323,7 @@ export class PlanetView {
       if (pts.length < 2) return;
       const wt = buf === riverBuf ? 1 : 0.5;
       for (let i = 0; i < pts.length - 1; i++) {
-        if (pts[i].f < 0.5) continue;   // (past the shore)
+        if (pts[i].f < 0.5 || Math.hypot(pts[i + 1].x, pts[i + 1].y, pts[i + 1].z) < SEA + 0.00005) continue;   // (past the shore)
         lines.push(pts[i].x, pts[i].y, pts[i].z, pts[i + 1].x, pts[i + 1].y, pts[i + 1].z, wt);
       }
       const base = buf.pos.length / 3;
@@ -1392,14 +1392,15 @@ export class PlanetView {
         // Mouth points sit just above the sea; on land the water lies just above the ground as
         // drawn (the lowest of the channel's middle and its two banks), so it never floats.
         let h = (o.h < SEA ? o.h : Math.max(o.h, SEA)) + LIFT;
-        // Toward the mouth: on the ground as drawn, and gone where the ground is under the sea
-        // (it ran on out over beach and sea as a flat sheet).
+        // Toward the mouth: on the ground as drawn across the beach, then down onto the sea's
+        // surface where the ground goes under it, fading as the mouth points say (never above
+        // the water: 2026-11-03, Bill: the ribbon must not float over the ocean).
         if (this.probe && o.f <= 0.95) {
           const g0 = this.probe.heightAt(d[0], d[1], d[2], h);
-          if (g0 < SEA + 0.0001) { h = SEA + 0.00005; o.f = 0; } else h = g0 + 0.0002;
+          h = Math.max(g0 + 0.0002, SEA + 0.00002);
         } else if (this.probe && this.probe.heightAt(d[0], d[1], d[2], h) < SEA + 0.0001) {
-          // Ground at or under the sea (a delta's edge, an estuary): the sea is the water there.
-          h = SEA + 0.00005; o.f = 0;
+          // Ground at or under the sea (an estuary): on the sea's surface, still drawn.
+          h = SEA + 0.00002;
         } else if (this.probe && o.h >= SEA && o.f > 0.5) {
           const hw = o.w;
           const g0 = this.probe.heightAt(d[0], d[1], d[2], h);
@@ -1480,9 +1481,25 @@ export class PlanetView {
           // dissolves into the water instead of ending in a painted-on block.
           const sea = w.water[next] === WATER_OCEAN;
           const ctr = center(c);
-          const outP = unit(e[0] + (e[0] - ctr[0]) * 0.25, e[1] + (e[1] - ctr[1]) * 0.25, e[2] + (e[2] - ctr[2]) * 0.25);
-          cps.push({ p: e, h: h0, w: wid, d: dep * 0.8, river, cell: -1, f: 0.9 });
-          cps.push({ p: outP, h: sea ? SEA - LIFT + 0.0002 : h0, w: wid, d: sea ? MOUTH_DEPTH : dep, river, cell: -1, f: 0 });
+          const along = (k: number) => unit(e[0] + (e[0] - ctr[0]) * k, e[1] + (e[1] - ctr[1]) * k, e[2] + (e[2] - ctr[2]) * k);
+          // The cell edge isn't where the water shows: the drawn shore can lie a beach's width
+          // further out. Run on until the ground is under the sea; the water shader fades it out
+          // where the sea's own shore begins (drawn on over the sea it showed as a block).
+          let wl = -1;
+          if (sea && this.probe) {
+            for (let k = 0.05; k <= 2.5; k += 0.05) {
+              const q = along(k);
+              if (this.probe.heightAt(q[0], q[1], q[2], SEA) < SEA - 0.0002) { wl = k; break; }
+            }
+          }
+          cps.push({ p: e, h: h0, w: wid, d: dep * 0.8, river, cell: -1, f: 0.95 });
+          if (wl > 0) {
+            if (wl > 0.3) cps.push({ p: along(wl * 0.5), h: h0, w: wid * 1.1, d: dep * 0.7, river, cell: -1, f: 0.95 });
+            cps.push({ p: along(wl), h: SEA, w: wid * 1.2, d: dep * 0.4, river, cell: -1, f: 0.9 });
+            cps.push({ p: along(wl + 0.1), h: SEA, w: wid * 1.3, d: dep * 0.3, river, cell: -1, f: 0 });
+          } else {
+            cps.push({ p: along(0.25), h: sea ? SEA - LIFT + 0.0002 : h0, w: wid, d: sea ? MOUTH_DEPTH : dep, river, cell: -1, f: 0 });
+          }
         } else if (junction >= 0) {
           cps.push({ p: e, h: h0, w: wid, d: dep, river, cell: junction });
           const join = nearest(junction, e) ?? { p: center(junction), h: s.centerH(junction) };

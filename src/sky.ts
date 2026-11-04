@@ -1369,6 +1369,12 @@ export function makeWaterMaterial(cloud: CloudUniforms, fade = false): THREE.Sha
         gl_FragColor = vec4(col, max(a, foam * 0.9));
         #ifdef USE_FADE
           gl_FragColor.a *= vFade * uVis;
+          #ifndef MERCATOR
+            // A river mouth melts into the sea where the sea's own shore begins (the water map,
+            // which is what draws the sea's edge), wherever the coarse ground puts the coast.
+            float rc = groundCoast(vWorld);
+            if (rc >= 0.0) gl_FragColor.a *= 1.0 - smoothstep(0.46, 0.56, rc);
+          #endif
         #endif
         #ifndef MERCATOR
           gl_FragColor.rgb = aerialApply(gl_FragColor.rgb, (viewMatrix * vec4(vWorld - cameraPosition, 0.0)).xyz);
