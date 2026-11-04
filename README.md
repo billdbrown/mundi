@@ -42,8 +42,8 @@ crags on high ground. **Hex tiles** draws flat terraces with cliff walls. On top
 
 - water that knows its depth: turquoise shallows to deep blue, drifting ripples, sun glint, surf
   ([src/sky.ts](src/sky.ts)); lakes as calm open water
-- rivers as ribbons of the water surface that widen downstream, meander, carve valleys, split
-  into deltas, and gain thin streams as you zoom in
+- rivers as ribbons of the water surface that widen downstream, meander, carve valleys, run
+  into the sea, and gain thin streams as you zoom in
 - rain shadows and ocean-current effects on climate; snow, rock and sand shaded per vertex; a
   detail shader for rocky ground
 - instanced trees by biome in groves and clearings, plus rocks, cacti and icebergs

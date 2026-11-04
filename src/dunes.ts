@@ -379,9 +379,10 @@ export const PATCH_GLSL = PATCH_BASE_GLSL + /* glsl */`
     // land a little below the sea on the coarse mesh (beaches, river mouths) sank into pits, black
     // walls beside the rivers; by a deeper threshold, the patch's square edge showed in the
     // shallows (2026-11-04).
-    // In proportion to the water's depth, from nothing at the waterline: dropped 0.002 at once,
-    // the step showed through the shallow surf as a notch round every river mouth.
-    if (capA.x < 0.0) pSurf -= up * min(0.002, -capA.x / 50.0 * 3.0) * smoothstep(0.3, 0.7, texture(uCapR, capUv).b);
+    // In proportion to the water's depth past the clear shallows (0.0003), where the sea hides it:
+    // dropped 0.002 at once, the step showed through the surf as a notch round every river mouth;
+    // from the waterline, a step along the drawn sea's edge (cell edges, not the waterline).
+    if (capA.x < 0.0) pSurf -= up * min(0.002, max(0.0, -capA.x / 50.0 - 0.0003) * 4.0) * smoothstep(0.3, 0.7, texture(uCapR, capUv).b);
     pNorm = normalize(n0 - b1.xyz - b2.xyz * farDist);
     pCol = capB.rgb;
     pClim = vec2(capA.w, capB.w);

@@ -48,7 +48,7 @@ const res = await page.evaluate((land) => {
   const vx = (i, j) => {
     const lx = map(i / (N - 1) * 2 - 1), ly = map(j / (N - 1) * 2 - 1), k = (j * N + i) * 4;
     const ca = samp(capA, lx, ly), cr = samp(capR, lx, ly), h = ca[0] / 50;
-    const sea = ca[0] < 0 ? Math.min(0.002, -h * 3) * Math.min(1, Math.max(0, (cr[2] - 0.3) / 0.4)) : 0;
+    const sea = ca[0] < 0 ? Math.min(0.002, Math.max(0, -h - 0.0003) * 4) * Math.min(1, Math.max(0, (cr[2] - 0.3) / 0.4)) : 0;
     return { h, carve: b0.f[k], ero: b0.f[k + 1], chan: b0.f[k + 3], sea: -sea, r: cr[0], b: cr[2], lat: Math.hypot(lx, ly) };
   };
   const tot = (o) => o.h + o.carve + o.ero + o.chan + o.sea;

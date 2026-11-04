@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { baseOf } from './ecology.ts';
-import { isDelta } from './deltas.ts';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -1532,52 +1531,6 @@ export class PlanetView {
       }
       cells.reverse();                       // source first, mouth (or junction) last
       drawPath(cells, junction);
-    }
-
-    // Deltas (deltas.ts): a fan of distributaries (2026-11-03; Bill: D was "a step in the right
-    // direction"). From a point on the landward side of each delta cell, channels fork two or three
-    // times as they run seaward, wandering a little, narrower at each fork, and end where the
-    // delta's ground goes under the sea (emit drops what is past the shore), each at its own mouth.
-    for (let x = 0; x < N; x++) {
-      if (!isDelta(w.water, w.elevation, x)) continue;
-      const ctr = center(x);
-      // Seaward: toward the sea neighbours, on the ground's tangent plane.
-      let sx = 0, sy = 0, sz = 0;
-      for (const n of g.neighbors[x]) if (w.water[n] === WATER_OCEAN) { sx += P[n * 3] - ctr[0]; sy += P[n * 3 + 1] - ctr[1]; sz += P[n * 3 + 2] - ctr[2]; }
-      const su = sx * ctr[0] + sy * ctr[1] + sz * ctr[2];
-      sx -= ctr[0] * su; sy -= ctr[1] * su; sz -= ctr[2] * su;
-      const sl = Math.hypot(sx, sy, sz);
-      if (sl < 1e-9) continue;
-      const S = [sx / sl, sy / sl, sz / sl];
-      const R = [ctr[1] * S[2] - ctr[2] * S[1], ctr[2] * S[0] - ctr[0] * S[2], ctr[0] * S[1] - ctr[1] * S[0]];
-      const at = (u: number, v: number) => unit(ctr[0] + S[0] * u + R[0] * v, ctr[1] + S[1] * u + R[1] * v, ctr[2] + S[2] * u + R[2] * v);
-      const main = w.river[x] === 2, h0 = s.centerH(x);
-      const levels = main ? 3 : 2;
-      const branch = (u: number, v: number, ang: number, len: number, lvl: number, wid: number, dep: number, key: number) => {
-        const cps: CP[] = [{ p: at(u, v), h: h0, w: wid, d: dep, river: true, cell: x }];
-        const STEPS = 3;
-        for (let i = 1; i <= STEPS; i++) {
-          ang += (hash01(key * 31 + i) - 0.5) * 0.6;
-          u += Math.cos(ang) * len / STEPS; v += Math.sin(ang) * len / STEPS;
-          cps.push({ p: at(u, v), h: h0, w: wid, d: dep, river: true, cell: x });
-        }
-        if (lvl + 1 < levels) {
-          emit(cps);
-          // Fork: two narrower channels, splayed either side.
-          const spread = 0.35 + 0.3 * hash01(key * 17 + 5);
-          branch(u, v, ang - spread, len * 0.7, lvl + 1, wid * 0.72, dep * 0.85, key * 2 + 1);
-          branch(u, v, ang + spread, len * 0.7, lvl + 1, wid * 0.72, dep * 0.85, key * 2 + 2);
-        } else {
-          // On out past the shore, fading into the sea.
-          u += Math.cos(ang) * len * 0.8; v += Math.sin(ang) * len * 0.8;
-          cps.push({ p: at(u, v), h: SEA - LIFT + 0.0002, w: wid * 1.3, d: MOUTH_DEPTH, river: true, cell: -1, f: 0 });
-          emit(cps);
-        }
-      };
-      const wid = widthOf(w.flow[x]) * 0.55, dep = depthOf(w.flow[x]) * 0.7;
-      const L = spacing * (main ? 0.2 : 0.24);
-      // Two first channels either side of seaward (the main river runs down the middle).
-      for (const side of [-1, 1]) branch(-spacing * 0.22, 0, side * (0.3 + 0.25 * hash01(x * 3 + side + 7)), L, 0, wid, dep, x * 8 + side + 3);
     }
 
     const mesh = (b: Buf) => {

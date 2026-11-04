@@ -383,7 +383,8 @@ window.addEventListener('hashchange', () => {
 });
 
 // (Trial switches, 2026-11-02: B finer biomes, D river deltas, S peak snow and V whole-planet
-// valleys were all locked in; the keys and their label are gone. &ecology=0 / &deltas=0 still work.)
+// valleys were all locked in; the keys and their label are gone. &ecology=0 still works. River deltas
+// were dropped 2026-11-04: every mouth ends the same way, render.ts drawPath.)
 
 // (Animal trials, 2026-11-03: Bill picked size 6x and the high camera floor, 0.007; the A and G
 // keys and their label are gone.)

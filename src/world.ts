@@ -3,7 +3,6 @@ import { makeRng } from './rng.ts';
 import { makeSimplex, fbm } from './noise.ts';
 import { B, landBiome } from './biomes.ts';
 import { refineBiomes } from './ecology.ts';
-import { buildDeltas } from './deltas.ts';
 import { addHotspots, type HotspotResult } from './hotspots.ts';
 import { erodeLand, EROSION_DEFAULTS } from './erode.ts';
 
@@ -27,12 +26,10 @@ export interface WorldParams {
   erosion: number;
   /** Finer biomes (ecology.ts): 1 on, 0 the broad climate biomes only. */
   ecology: number;
-  /** River deltas (deltas.ts): 1 on. */
-  deltas: number;
 }
 
 export const DEFAULT_PARAMS: WorldParams = {
-  seed: 1, detail: 60, ocean: 0.68, plates: 20, continents: 4, roughness: 0.45, heat: 0, wetness: 0, rivers: 1, erosion: 1, ecology: 1, deltas: 0,
+  seed: 1, detail: 60, ocean: 0.68, plates: 20, continents: 4, roughness: 0.45, heat: 0, wetness: 0, rivers: 1, erosion: 1, ecology: 1,
 };
 
 export const WATER_LAND = 0, WATER_OCEAN = 1, WATER_LAKE = 2;
@@ -529,7 +526,6 @@ export function generateWorld(params: WorldParams, stage?: (step: GenStep) => vo
   }
 
   if (params.ecology > 0.5) refineBiomes({ grid, elevation: elev, temperature, moisture, water, river, biome, seed: params.seed });
-  if (params.deltas > 0.5) buildDeltas({ grid, elevation: elev, surface, temperature, moisture, water, biome, downstream, flow, river, riverThreshold: threshold });
   // Hotspot chains' drowned volcanoes in warm seas are atolls: coral grew as they sank.
   if (params.ecology > 0.5) for (const c of hotspots.atolls) if (water[c] === WATER_OCEAN && biome[c] !== B.SEA_ICE) biome[c] = B.REEF;
 
