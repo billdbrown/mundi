@@ -136,26 +136,46 @@ function build(m: LocalMap) {
   terrain.receiveShadow = true; terrain.castShadow = true;
   world.add(terrain);
 
-  // Sea, lake, rivers.
-  if (m.sea) {
-    const sea = new THREE.Mesh(new THREE.PlaneGeometry(size, size), waterMat());
-    sea.rotation.x = -Math.PI / 2; sea.receiveShadow = true;
-    world.add(sea);
-  }
-  if (!Number.isNaN(m.lakeLevel)) {
+  // Earthen sides, so the map reads as a tile cut from the planet (and nothing shows under it).
+  let lo = 0;
+  for (const h of m.heights) lo = Math.min(lo, h);
+  const floor = lo - Math.max(15, size * 0.02), sp: number[] = [];
+  const edge = (i: number, j: number) => [-half + i * step, m.heights[j * res + i], half - j * step];
+  const sideRun = (pts: number[][]) => {
+    for (let k = 0; k < pts.length - 1; k++) {
+      const [ax, ay, az] = pts[k], [bx, by, bz] = pts[k + 1];
+      sp.push(ax, ay, az, ax, floor, az, bx, by, bz, bx, by, bz, ax, floor, az, bx, floor, bz);
+    }
+  };
+  const S: number[][] = [], E: number[][] = [], Nn: number[][] = [], Wt: number[][] = [];
+  for (let i = 0; i < res; i++) { S.push(edge(i, 0)); Nn.push(edge(res - 1 - i, res - 1)); }
+  for (let j = 0; j < res; j++) { E.push(edge(res - 1, j)); Wt.push(edge(0, res - 1 - j)); }
+  sideRun(S); sideRun(E); sideRun(Nn); sideRun(Wt);
+  const sg = new THREE.BufferGeometry();
+  sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
+  sg.computeVertexNormals();
+  world.add(new THREE.Mesh(sg, new THREE.MeshStandardMaterial({ color: 0x4a3c2e, roughness: 1, side: THREE.DoubleSide })));
+
+  // Sea and lake: water only over ground that is below it, so no sheet sticks out past the map.
+  const waterOver = (level: number, mask: Float32Array | null) => {
     const lp: number[] = [];
     for (let j = 0; j < res - 1; j++) for (let i = 0; i < res - 1; i++) {
       const v = j * res + i;
-      if (Math.max(m.lakeMask[v], m.lakeMask[v + 1], m.lakeMask[v + res], m.lakeMask[v + res + 1]) < 0.35) continue;
-      if (Math.min(m.heights[v], m.heights[v + 1], m.heights[v + res], m.heights[v + res + 1]) > m.lakeLevel) continue;
-      const x0 = -half + i * step, x1 = x0 + step, z0 = half - j * step, z1 = z0 - step, y = m.lakeLevel;
+      if (mask && Math.max(mask[v], mask[v + 1], mask[v + res], mask[v + res + 1]) < 0.5) continue;
+      if (Math.min(m.heights[v], m.heights[v + 1], m.heights[v + res], m.heights[v + res + 1]) > level) continue;
+      const x0 = -half + i * step, x1 = x0 + step, z0 = half - j * step, z1 = z0 - step, y = level;
       lp.push(x0, y, z0, x1, y, z0, x0, y, z1, x1, y, z0, x1, y, z1, x0, y, z1);
     }
+    if (!lp.length) return;
     const lg = new THREE.BufferGeometry();
     lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lp), 3));
     lg.computeVertexNormals();
-    world.add(new THREE.Mesh(lg, waterMat()));
-  }
+    const mesh = new THREE.Mesh(lg, waterMat()); mesh.receiveShadow = true;
+    world.add(mesh);
+  };
+  if (m.sea) waterOver(0, null);
+  if (!Number.isNaN(m.lakeLevel)) waterOver(m.lakeLevel, m.lakeMask);
+  const inside = (x: number, y: number) => Math.abs(x) <= half && Math.abs(y) <= half;
   for (const r of m.rivers) {
     const p = r.pts, k = p.length / 4, rp = new Float32Array(k * 6), ri: number[] = [];
     for (let s = 0; s < k; s++) {
@@ -164,8 +184,10 @@ function build(m: LocalMap) {
       const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
       const hw = p[s * 4 + 3] * 0.55, x = p[s * 4], y = p[s * 4 + 1], lv = p[s * 4 + 2] + 0.05;
       rp.set([x - ty * hw, lv, -(y + tx * hw), x + ty * hw, lv, -(y - tx * hw)], s * 6);
-      if (s < k - 1) ri.push(s * 2, s * 2 + 1, s * 2 + 2, s * 2 + 1, s * 2 + 3, s * 2 + 2);
+      // Only the stretch on the map: pieces from cells further out ran past its edge.
+      if (s < k - 1 && inside(x, y) && inside(p[s * 4 + 4], p[s * 4 + 5])) ri.push(s * 2, s * 2 + 1, s * 2 + 2, s * 2 + 1, s * 2 + 3, s * 2 + 2);
     }
+    if (!ri.length) continue;
     const rg = new THREE.BufferGeometry();
     rg.setAttribute('position', new THREE.BufferAttribute(rp, 3));
     rg.setIndex(ri);
@@ -422,7 +444,24 @@ request();
 (window as unknown as Record<string, unknown>).hex = {
   get map() { return map; },
   get busy() { return busy; },
-  pickVariant, resetView,
+  pickVariant, resetView, scene,
+  /** Hide the panels for clean screenshots. */
+  capture: (on: boolean) => document.body.classList.toggle('capture', on),
+  /**
+   * Match a planet-view camera: `distRadii` from the ground point at the screen's centre (in
+   * planet radii), tilted `tilt` radians from straight down, looking north, with a `fov` lens.
+   * The distance is shrunk by mag like the ground, so the hex fills the frame alike. The ground
+   * point is (eastM, northM) real metres from the cell's centre.
+   */
+  pose: (distRadii: number, tilt: number, fov: number, eastM = 0, northM = 0) => {
+    if (!map) return;
+    const d = distRadii * opts.radiusKm * 1000 / opts.mag;
+    const tx = eastM / opts.mag, ty = northM / opts.mag, g = groundAt(tx, ty);
+    camera.fov = fov; camera.updateProjectionMatrix();
+    controls.target.set(tx, g, -ty);
+    camera.position.set(tx, g + Math.cos(tilt) * d, -ty + Math.sin(tilt) * d);
+    controls.update();
+  },
   /** Camera at (x, y north) metres, height above ground, looking at (tx, ty). */
   look: (x: number, y: number, up: number, tx: number, ty: number) => {
     camera.position.set(x, groundAt(x, y) + up, -y);

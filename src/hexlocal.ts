@@ -110,9 +110,10 @@ const WOOD: Partial<Record<number, [number, number]>> = {
   [B.BADLANDS]: [0.01, TREE_SHRUB], [B.SALT_MARSH]: [0.01, TREE_SHRUB],
 };
 
-/** How snow-capped each biome's high ground is, 0..1. */
+/** Snow by biome, 0..1, for ice caps only: elsewhere snow follows temperature, as on the planet
+ * (biome snow painted a 3 °C "snowy peak" white where the planet draws green alpine slopes). */
 const SNOWY: Partial<Record<number, number>> = {
-  [B.PEAK]: 0.45, [B.ICE]: 1, [B.MOUNTAIN]: 0.15, [B.POLAR_DESERT]: 0.5, [B.TUNDRA]: 0.15, [B.ALPINE_MEADOW]: 0.1,
+  [B.ICE]: 1, [B.POLAR_DESERT]: 0.4,
 };
 
 /** Real metres to map metres. Sea level stays 0; see LocalOptions.vSoft. */
@@ -207,14 +208,16 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   const cellTrueH = new Float32Array(M), cellLocalH = new Float32Array(M), cellT = new Float32Array(M);
   const cellCol = new Float32Array(M * 3), cellWater = new Uint8Array(M);
   let lakeLevel = NaN;
-  for (let i = 0; i < M; i++) cellTrueH[i] = trueHeight(w, cellList[i], reliefM);
+  for (let i = 0; i < M; i++) { cellTrueH[i] = trueHeight(w, cellList[i], reliefM); cellT[i] = tempC(w.temperature[cellList[i]]); }
   const toLocal = localHeights(o, cellTrueH[0]);
   for (let i = 0; i < M; i++) {
     const c = cellList[i];
     cellWater[i] = w.water[c] === WATER_OCEAN || w.water[c] === WATER_LAKE ? 1 : 0;
     cellLocalH[i] = toLocal(cellTrueH[i]);
-    cellT[i] = tempC(w.temperature[c]);
-    const hx = BIOMES[w.biome[c]].color;
+    // Mountain biomes are rock in the map palette, but the planet's photo look grows alpine
+    // meadow on them wherever it is warm enough: follow the planet.
+    const mtnBiome = w.biome[c] === B.PEAK || w.biome[c] === B.MOUNTAIN;
+    const hx = mtnBiome && cellT[i] > -4 ? BIOMES[B.ALPINE_MEADOW].color : BIOMES[w.biome[c]].color;
     for (let k = 0; k < 3; k++) cellCol[i * 3 + k] = Math.pow(((hx >> (16 - 8 * k)) & 255) / 255, 2.2);
     if (w.water[c] === WATER_LAKE && Number.isNaN(lakeLevel)) lakeLevel = toLocal(cellTrueH[i] + 25 - 1);
   }
@@ -258,7 +261,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       const x = -half + i * step, y = -half + j * step, v = j * res + i;
       blendAt(x, y);
       let h = 0, ht = 0, t = 0, r = 0, gr = 0, b = 0, lake = 0, sea = 0, wd = 0, best = 0, bestW = 0, snow = 0;
-      let lr = 0, lg = 0, lb = 0, lw = 0;
+      let lr = 0, lg = 0, lb = 0, lw = 0, landH = 0, seaH = 0;
       for (let m = 0; m < M; m++) {
         const wt = weights[m];
         if (wt === 0) continue;
@@ -268,10 +271,20 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
         if (!cellWater[m]) { lr += wt * cellCol[m * 3]; lg += wt * cellCol[m * 3 + 1]; lb += wt * cellCol[m * 3 + 2]; lw += wt; }
         snow += wt * (SNOWY[w.biome[c]] ?? 0);
         if (w.water[c] === WATER_LAKE) lake += wt;
-        if (w.water[c] === WATER_OCEAN) sea += wt;
+        if (w.water[c] === WATER_OCEAN) { sea += wt; seaH += wt * cellLocalH[m]; } else landH += wt * cellLocalH[m];
         const wo = WOOD[w.biome[c]];
         if (wo) wd += wt * wo[0];
         if (wt > bestW) { bestW = wt; best = m; }
+      }
+      // Sea cells are sea and land cells land, as on the planet: the coast follows the boundary
+      // between them (where the sea's weight passes one half), not wherever a blend of the
+      // heights crosses zero, which let a ring of land cells lift a whole lagoon out of the water.
+      if (sea > 0.02 && sea < 0.98) {
+        // Land eases down to the shore and the sea floor shelves away from it: beaches, not cliffs.
+        const lh = 0.6 + Math.max(0, landH / (1 - sea) - 0.6) * smooth(0.5, 0.12, sea);
+        const sh = Math.min(-1.5, seaH / sea) * smooth(0.5, 0.85, sea) - 1.5;
+        const t = smooth(0.42, 0.58, sea);
+        h = lh + (sh - lh) * t;
       }
       heights[v] = h; baseLocal[v] = h; baseTrue[v] = ht; tBase[v] = t; lakeMask[v] = lake; oceanW[v] = sea; wood[v] = wd; snowW[v] = snow;
       // Land takes its colour from land cells only, or a lagoon's turquoise tints the beach.
@@ -309,8 +322,13 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
           heights[v] += mtn * cragA * (s / norm - 0.25);
         }
       }
-      // Lake beds sit below the lake's surface; the sea floor below the sea.
-      if (lakeMask[v] > 0.5 && !Number.isNaN(lakeLevel)) heights[v] = Math.min(heights[v], lakeLevel - (lakeMask[v] - 0.5) * 12);
+      // A lake is a basin: its bed below the surface inside (mask > 0.5), and a rim at least at
+      // the surface around it, or a lake higher than the ground beside it spills over the forest.
+      if (!Number.isNaN(lakeLevel)) {
+        const lm = lakeMask[v];
+        if (lm > 0.5) heights[v] = Math.min(heights[v], lakeLevel - (lm - 0.5) * 12);
+        else if (lm > 0.2) heights[v] = Math.max(heights[v], lakeLevel + 0.3 + (heights[v] - lakeLevel - 0.3) * smooth(0.5, 0.2, lm));
+      }
     }
   }
 
@@ -442,7 +460,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       if (sea && h < 2.5 && oceanW[v] > 0.05 && T > -2) mix(v, SAND, smooth(2.5, 0.8, h));
       if (riverNear[v] < 1) mix(v, MUD, 0.8);
       else if (riverNear[v] < 4) for (let k = 0; k < 3; k++) colors[v * 3 + k] *= 0.88;
-      mix(v, ROCK, smooth(0.55, 1.1, slope + 0.15 * cn));
+      mix(v, ROCK, smooth(0.8, 1.5, slope + 0.2 * cn));
       // Snow: cold enough here, or a snowy biome's upper ground (Mundi's temperatures run warm on
       // peaks; its own renderer also snows by biome and height).
       const above = (h - loH) / Math.max(1, hiH - loH);
@@ -451,7 +469,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       if (h < 0) for (let k = 0; k < 3; k++) colors[v * 3 + k] *= 0.6;
       // Warmth-limited trees: the tree line follows temperature, so it climbs with the variant's heights.
       wood[v] *= smooth(-3, 1, T) * (1 - smooth(0.6, 0.9, slope)) * (riverNear[v] < 1.6 ? 0 : 1);
-      if (h < 0.3 || (lakeMask[v] > 0.45 && h < lakeLevel + 0.2)) wood[v] = 0;
+      if (h < 0.3 || (lakeMask[v] > 0.5 && h < lakeLevel + 0.2)) wood[v] = 0;
     }
   }
 
