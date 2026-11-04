@@ -513,6 +513,12 @@ export class PlanetView {
     this.renderer.setAnimationLoop(() => this.frame());
   }
 
+  /** Stop or restart drawing, while the hex view covers the planet. The clock skips the pause. */
+  setRunning(on: boolean) {
+    if (on) this.clock.getDelta();
+    this.renderer.setAnimationLoop(on ? () => this.frame() : null);
+  }
+
   /** Run the clock at `rate` days per second (0 pauses). */
   setClock(rate: number) { this.clockRate = rate; }
   getDay() { return this.day; }

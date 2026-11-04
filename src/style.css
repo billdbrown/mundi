@@ -294,3 +294,11 @@ body.capture .loader { display: none; }
 .ui .pclaim { pointer-events: auto; margin-left: 8px; vertical-align: 1px; padding: 3px 9px; font-size: 12px; border-radius: 999px;
   background: rgba(255, 200, 90, 0.16); border: 1px solid rgba(255, 200, 90, 0.4); color: #ffe3a6; text-shadow: none; }
 .ui .pclaim:hover { border-color: rgba(255, 200, 90, 0.8); }
+
+/* The hex view, over the planet (main.ts): hidden until a hex is opened, then faded in. */
+#hexframe { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 50;
+  opacity: 0; visibility: hidden; transition: opacity .25s, visibility 0s .25s; background: #000; }
+#hexframe.open { opacity: 1; visibility: visible; transition: opacity .25s; }
+/* On touch, the readout stays put and its button can be pressed. */
+#info.tap { pointer-events: auto; }
+#info button { margin-top: 6px; font: inherit; color: #fff; background: #35607f; border: 0; border-radius: 7px; padding: 6px 10px; }

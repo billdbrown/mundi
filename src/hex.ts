@@ -20,6 +20,7 @@ import { parseSeed } from './seedname.ts';
 import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, L_FOREST, HOUSE_STRIDE, type LocalMap, type LocalOptions } from './hexlocal.ts';
 import { STYLE, paintGround, STYLE_GRADE, TILT_SHIFT, type HexStyle } from './hexstyle.ts';
 import { daylight, hourForElevation, type RGB } from './daylight.ts';
+import type { HexJob } from './hexworker.ts';
 import type { Spot } from './debug.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -50,6 +51,28 @@ let showCtx = h.get('around') !== '0';
 const back = new URLSearchParams(h);
 for (const k of ['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around']) back.delete(k);
 $<HTMLAnchorElement>('back').href = '/#' + back.toString();
+/** Inside the planet page (main.ts): the planet stays loaded underneath, so "← planet" just
+ * uncovers it, and new hexes arrive by message instead of by loading this page again. */
+const embedded = h.get('embed') === '1';
+if (embedded) {
+  $<HTMLAnchorElement>('back').onclick = (e) => { e.preventDefault(); goBack(); };
+  for (const a of document.querySelectorAll<HTMLAnchorElement>('#panel a[href="/hexes.html"]')) a.target = '_top';
+}
+function goBack() { parent.postMessage({ type: 'mundi-hex-back' }, location.origin); }
+/** Read a planet link (world settings, radius, cell) into the current state. */
+function applyHash(hash: string) {
+  const q = new URLSearchParams(hash);
+  const sd = parseSeed(q.get('seed') ?? '');
+  if (sd) params.seed = sd.seed;
+  for (const k of Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[]) {
+    const v = q.get(k);
+    if (k !== 'seed' && v !== null && v !== '' && !Number.isNaN(Number(v))) params[k] = Number(v);
+  }
+  opts.radiusKm = Number(q.get('radius')) || LOCAL_DEFAULTS.radiusKm;
+  cell = Number(q.get('cell') ?? -1);
+  for (const k of [...back.keys()]) back.delete(k);
+  for (const [k, v] of q) if (!['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around'].includes(k)) back.set(k, v);
+}
 
 // --- Scene ---
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -979,23 +1002,39 @@ function facts(m: LocalMap) {
     (rw ? `<br>River here: ${rw}` : '');
 }
 
-// --- Building, off the main thread. One request in flight; later changes collapse into one. ---
+// --- Building, off the main thread: one worker for the hex, one for the backdrop of neighbours,
+// so both build at once. One request in flight; later changes collapse into one. ---
 const worker = new Worker(new URL('./hexworker.ts', import.meta.url), { type: 'module' });
+const ctxWorker = new Worker(new URL('./hexworker.ts', import.meta.url), { type: 'module' });
 let busy = false, again = false, firstBuild = true;
 function request() {
   writeHash();
   if (busy) { again = true; return; }
   busy = true; $('busy').hidden = false;
-  worker.postMessage({ params, cell, spot: cell < 0 ? (spot ?? 'river') : undefined, opts });
+  const job: HexJob = { kind: 'hex', params, cell, spot: cell < 0 ? (spot ?? 'river') : undefined, opts };
+  worker.postMessage(job);
+  // The backdrop needs the cell; with a named spot it follows once the hex says which.
+  if (cell >= 0) ctxWorker.postMessage({ ...job, kind: 'context' });
 }
+/** Both workers build the world now (the hex view loading hidden behind the planet). */
+function warm() {
+  for (const [w, kind] of [[worker, 'hex'], [ctxWorker, 'context']] as const) w.postMessage({ kind, params, cell: -1, opts, warm: true } satisfies HexJob);
+}
+/** Start building a hex before it is opened (the planet's pointer is resting on it). */
+function prefetch(c: number) {
+  if (c < 0) return;
+  for (const [w, kind] of [[worker, 'hex'], [ctxWorker, 'context']] as const) w.postMessage({ kind, params, cell: c, opts, prefetch: true } satisfies HexJob);
+}
+ctxWorker.onmessage = (e: MessageEvent<{ context?: LocalMap; warmed?: boolean }>) => {
+  if (!e.data.context) return;
+  ctxMap = e.data.context;
+  if (map) addContext(true);
+};
 worker.onmessage = (e: MessageEvent<{ map: LocalMap; ms: { world: number; local: number }; context?: LocalMap }>) => {
-  if (e.data.context) {
-    ctxMap = e.data.context;
-    if (map) addContext(true);
-    return;
-  }
+  if ((e.data as { warmed?: boolean }).warmed) return;
   busy = false;
   const m = e.data.map;
+  if (cell < 0) ctxWorker.postMessage({ kind: 'context', params, cell: m.cell, opts } satisfies HexJob);
   // Keep the camera's place relative to the map size, so changes compare from the same angle.
   const rel = map && !firstBuild ? { p: camera.position.clone().divideScalar(map.size), t: controls.target.clone().divideScalar(map.size) } : null;
   cell = m.cell;
@@ -1019,7 +1058,8 @@ function resetView() {
   // Back off for tall terrain, or a mountain overfills the frame.
   const narrow = narrowness();
   const fit = (map.localWidth * 0.62 + Math.max(0, hi - Math.max(lo, 0)) * 0.6) / Math.tan((c.fov * Math.PI / 180) / 2) * c.dist * narrow;
-  const t = c.tilt * Math.PI / 180;
+  // Standing further back on a narrow screen, look down more steeply, or near hills hide the hex.
+  const t = Math.max(30, c.tilt - 12 * (narrow - 1)) * Math.PI / 180;
   controls.target.set(0, g, 0);
   camera.position.set(0, g + Math.cos(t) * fit, Math.sin(t) * fit);
   controls.update();
@@ -1050,6 +1090,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'BracketLeft') { playing = false; setTime(hourNow() - 0.5); }
   if (e.code === 'BracketRight') { playing = false; setTime(hourNow() + 0.5); }
   if (e.code === 'KeyP') $('play').click();
+  if (e.code === 'Escape' && embedded) goBack();
   if (e.code === 'KeyT') setTilt(!tiltOn);
   if (e.code === 'KeyN') setAround(!showCtx);
   if (e.code === 'KeyH' && outline) outline.visible = !outline.visible;
@@ -1059,7 +1100,7 @@ addEventListener('keyup', (e) => keys.delete(e.code));
 const timer = new THREE.Timer();
 const fwd = new THREE.Vector3(), right = new THREE.Vector3();
 let frames = 0, fpsT = 0;
-renderer.setAnimationLoop(() => {
+const loop = () => {
   timer.update();
   const dt = Math.min(0.1, timer.getDelta());
   frames++; fpsT += dt;
@@ -1100,7 +1141,8 @@ renderer.setAnimationLoop(() => {
     renderPass.camera = camera;
   }
   renderFrame();
-});
+};
+renderer.setAnimationLoop(embedded && cell < 0 ? null : loop);
 
 function renderFrame() {
   if (!ctxMesh || !showCtx) { composer.render(); return; }
@@ -1128,7 +1170,40 @@ function renderFrame() {
 }
 
 syncPanel();
-request();
+if (embedded && cell < 0) {
+  // Loaded hidden: build the world now, so the first hex opened is quick.
+  warm();
+} else request();
+if (embedded) {
+  addEventListener('message', (e) => {
+    if (e.origin !== location.origin || !e.data) return;
+    if (e.data.type === 'mundi-hex-open') {
+      const was = JSON.stringify(params) + cell + opts.radiusKm;
+      applyHash(e.data.hash);
+      if (!map || JSON.stringify(params) + cell + opts.radiusKm !== was) {
+        // A different hex: clear the old one at once rather than show it while the new one builds.
+        world.visible = false; ctxMap = null; firstBuild = true;
+        request();
+      }
+      renderer.setAnimationLoop(loop);
+    }
+    if (e.data.type === 'mundi-hex-close') {
+      playing = false;
+      if (walker.isLocked) walker.unlock();
+      renderer.setAnimationLoop(null);
+    }
+    if (e.data.type === 'mundi-hex-warm') { applyHash(e.data.hash); warm(); }
+    if (e.data.type === 'mundi-hex-prefetch') {
+      // The world settings may be new; which hex is shown is not, until it is opened.
+      const shown = cell;
+      applyHash(e.data.hash);
+      const c = cell;
+      cell = shown;
+      prefetch(c);
+    }
+  });
+  parent.postMessage({ type: 'mundi-hex-ready' }, location.origin);
+}
 void LAYERS; void L_DEPTH;
 (window as unknown as Record<string, unknown>).hex = {
   get map() { return map; },

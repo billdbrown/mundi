@@ -78,6 +78,7 @@ worker.onmessage = (e: MessageEvent<BuildResult | BuildStage>) => {
     world = r.world;
     game = gameData(world);
     siteAt = new Map(game.sites.map((s) => [s.cell, s.name]));
+    warmHex();
   }
   if (r.clouds) view.setClouds(r.clouds);
   if (!queued) {
@@ -298,8 +299,18 @@ $('collapse').addEventListener('click', () => {
 const info = $('info');
 let lastCell = -1;
 view.renderer.domElement.addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'touch') { if (e.buttons) info.hidden = true; return; }
   if (e.buttons || !world) { info.hidden = true; return; }
-  const c = view.pick(e.clientX, e.clientY);
+  showInfo(view.pick(e.clientX, e.clientY), e.clientX, e.clientY, false);
+});
+/** The readout for a cell; on touch it carries a button to open the hex (no double-tap there).
+ * Resting on a hex (or tapping it) starts building it in the hex view, so opening is quick. */
+let dwell = 0;
+function showInfo(c: number, x: number, y0: number, touch: boolean) {
+  if (c !== lastCell || touch) {
+    clearTimeout(dwell);
+    if (c >= 0) dwell = window.setTimeout(() => { if (hexReady && !hexOpen) hexSend({ type: 'mundi-hex-prefetch', hash: hexHash(c) }); }, touch ? 0 : 350);
+  }
   if (c !== lastCell) { view.highlight(c); lastCell = c; }
   if (c < 0) { info.hidden = true; return; }
   const pct = (v: number) => `${Math.round(v * 100)}%`;
@@ -312,24 +323,91 @@ view.renderer.domElement.addEventListener('pointermove', (e) => {
     (game && game.resources[c] ? `<span>resources</span> ${RESOURCE_NAMES.filter(([b]) => game!.resources[c] & b).map(([, n]) => n).join(', ')}<br>` : '') +
     `<span>elev</span> ${world.elevation[c].toFixed(2)} <span>temp</span> ${pct(world.temperature[c])} ` +
     `<span>wet</span> ${pct(world.moisture[c])}<br><span>lat</span> ${lat.toFixed(0)}° <span>cell</span> ${c} ` +
-    `<span>plate</span> ${world.plate[c]}<br><span>double-click to open this hex</span>`;
-  info.style.left = `${e.clientX}px`;
-  info.style.top = `${e.clientY}px`;
+    `<span>plate</span> ${world.plate[c]}<br>` +
+    (touch ? `<button id="openhex" type="button">Open this hex ›</button>` : `<span>double-click to open this hex</span>`);
+  info.style.left = `${x}px`;
+  info.style.top = `${y0}px`;
+  info.classList.toggle('tap', touch);
   info.hidden = false;
+  if (touch) $('openhex').onclick = () => openHex(c);
+}
+// A tap (not a drag) on touch screens shows the readout with the open button.
+let tapFrom: [number, number] | null = null;
+view.renderer.domElement.addEventListener('pointerdown', (e) => { tapFrom = e.pointerType === 'touch' ? [e.clientX, e.clientY] : null; });
+view.renderer.domElement.addEventListener('pointerup', (e) => {
+  if (!tapFrom || !world || Math.hypot(e.clientX - tapFrom[0], e.clientY - tapFrom[1]) > 8) return;
+  showInfo(view.pick(e.clientX, e.clientY), e.clientX, e.clientY, true);
 });
-view.renderer.domElement.addEventListener('pointerleave', () => { info.hidden = true; view.highlight(-1); lastCell = -1; });
+view.renderer.domElement.addEventListener('pointerleave', (e) => {
+  if (e.pointerType === 'touch') return;   // fires after every tap; the readout must stay for its button
+  info.hidden = true; view.highlight(-1); lastCell = -1;
+});
 
-// --- Double-click a hex to open it as a local map (hex.html), in a new tab so the planet stays. ---
-view.renderer.domElement.addEventListener('dblclick', (e) => {
-  if (!world) return;
-  const c = view.pick(e.clientX, e.clientY);
-  if (c < 0) return;
+// --- The hex view, in this page. It loads hidden once the planet is up, so its worker builds the
+// world (and history) while Bill looks around; opening a hex then only builds that hex, and going
+// back just uncovers the planet, which never unloads. Double-click (or tap → Open) to go in; the
+// hex's "← planet", Esc or the browser's Back to come out. ---
+let hexFrame: HTMLIFrameElement | null = null, hexReady = false, hexOpen = false, hexPending: string | null = null;
+function hexHash(cell?: number) {
   const h = new URLSearchParams();
   for (const k of Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[]) h.set(k, String(params[k]));
   h.set('radius', String(radiusKm));
-  h.set('cell', String(c));
-  window.open(`hex.html#${h.toString()}`, '_blank');
+  h.set('embed', '1');
+  if (cell !== undefined) h.set('cell', String(cell));
+  return h.toString();
+}
+function hexSend(msg: Record<string, unknown>) { hexFrame?.contentWindow?.postMessage(msg, location.origin); }
+function ensureHexFrame() {
+  if (hexFrame) return hexFrame;
+  const f = document.createElement('iframe');
+  f.id = 'hexframe';
+  f.title = 'Hex view';
+  f.src = `hex.html#${hexHash()}`;
+  document.body.appendChild(f);
+  hexFrame = f;
+  return f;
+}
+function openHex(c: number) {
+  if (!world || c < 0) return;
+  const f = ensureHexFrame();
+  const hash = hexHash(c);
+  if (hexReady) hexSend({ type: 'mundi-hex-open', hash }); else hexPending = hash;
+  if (!hexOpen) history.pushState({ mundiHex: c }, '');
+  hexOpen = true;
+  info.hidden = true;
+  f.classList.add('open');
+  f.contentWindow?.focus();
+  view.setRunning(false);
+}
+function closeHex(fromHistory = false) {
+  if (!hexOpen) return;
+  hexOpen = false;
+  hexFrame?.classList.remove('open');
+  hexSend({ type: 'mundi-hex-close' });
+  view.setRunning(true);
+  if (!fromHistory) history.back();
+}
+addEventListener('message', (e) => {
+  if (e.origin !== location.origin || !e.data) return;
+  if (e.data.type === 'mundi-hex-ready') {
+    hexReady = true;
+    if (hexPending) { hexSend({ type: 'mundi-hex-open', hash: hexPending }); hexPending = null; }
+    else hexSend({ type: 'mundi-hex-warm', hash: hexHash() });
+  }
+  if (e.data.type === 'mundi-hex-back') closeHex();
 });
+addEventListener('popstate', () => { if (hexOpen) closeHex(true); });
+view.renderer.domElement.addEventListener('dblclick', (e) => {
+  if (!world) return;
+  openHex(view.pick(e.clientX, e.clientY));
+});
+/** Once a world is drawn, get the hex view ready for it (after the planet has settled). */
+function warmHex() {
+  void loaderGone.then(() => setTimeout(() => {
+    if (!hexFrame) ensureHexFrame();
+    else if (hexReady && !hexOpen) hexSend({ type: 'mundi-hex-warm', hash: hexHash() });
+  }, 2500));
+}
 
 // --- Debug handle for the console, scripts/shot.mjs and scripts/visual.mjs ---
 (window as unknown as Record<string, unknown>).mundi = {
