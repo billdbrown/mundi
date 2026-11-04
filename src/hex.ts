@@ -287,9 +287,15 @@ function addContext(aerial: boolean) {
   // No tree models out here, so woods are painted as canopy, or blurred forest reads as bare ground.
   const canopy = col(st.ground === 'palette' ? st.palette.forest : 0x2e4424).multiplyScalar(0.8);
   const edge = half * 0.98;
+  // Near the hex the backdrop takes the hex's own ground, so the seam always matches; further out
+  // it blends into the wide map (the two agree except where each carved its own river channels).
+  let reach = 0;
+  for (let k = 0; k < map.hex.length; k += 2) reach = Math.max(reach, Math.hypot(map.hex[k], map.hex[k + 1]));
   for (let j = 0; j < R; j++) for (let i = 0; i < R; i++) {
     const v = j * R + i, x = -half + i * step, y = -half + j * step;
     let hv = c.heights[v], r = paint[v * 3], g = paint[v * 3 + 1], b = paint[v * 3 + 2];
+    const own = 1 - THREE.MathUtils.smoothstep(Math.hypot(x, y) / reach, 1.05, 1.25);
+    if (own > 0) hv += (groundAtMap(map, x, y) - hv) * own;
     const f = Math.min(1, c.layers[v * LAYERS + L_FOREST] * 1.3) * 0.8;
     r += (canopy.r - r) * f; g += (canopy.g - g) * f; b += (canopy.b - b) * f;
     let lvl = c.sea ? 0 : -Infinity;
@@ -337,12 +343,20 @@ function addContext(aerial: boolean) {
   ctxOccluder.renderOrder = -1;
   world.add(ctxOccluder);
 
-  // The neighbours' outlines, draped on the ground, fading with distance. The hex's own edge is
-  // its neighbours' edge too, so it shows as a faint rim.
-  if (ctxLines) { world.remove(ctxLines); ctxLines.geometry.dispose(); (ctxLines.material as THREE.Material).dispose(); }
-  const lp: number[] = [], la: number[] = [];
-  const at = (x: number, y: number) => Math.max(c.sea ? 0 : -Infinity, groundAtMap(c, x, y)) + 1;
+  // The neighbours' outlines: soft cream ribbons lying on the ground, with a small round marker at
+  // each corner, like a board-game map; fading with distance. The hex's own edge is its
+  // neighbours' edge too, so it shows as a rim. Shared edges are drawn once.
+  if (ctxLines) { world.remove(ctxLines); dispose(ctxLines); }
+  const ownAt = (x: number, y: number) => {
+    const w = 1 - THREE.MathUtils.smoothstep(Math.hypot(x, y) / reach, 1.05, 1.25);
+    const hc = groundAtMap(c, x, y);
+    return Math.max(c.sea ? 0 : -Infinity, w > 0 ? hc + (groundAtMap(map!, x, y) - hc) * w : hc);
+  };
+  const lift = 1.5, wR = map.size * 0.005;
   const fade = (x: number, y: number) => 1 - THREE.MathUtils.smoothstep(Math.hypot(x, y), edge * 0.35, edge * 0.75);
+  const rp: number[] = [], ruv: number[] = [], rc: number[] = [], ri: number[] = [];
+  const seen = new Set<string>(), corners = new Map<string, [number, number]>();
+  const key = (x: number, y: number) => `${Math.round(x)},${Math.round(y)}`;
   for (let i = 0; i < c.cells.length; i++) {
     if (c.cells[i] === map.cell) continue;
     const p0 = c.polyStart[i], p1 = c.polyStart[i + 1];
@@ -350,22 +364,54 @@ function addContext(aerial: boolean) {
       const q = p + 1 < p1 ? p + 1 : p0;
       const ax = c.polyXY[p * 2], ay = c.polyXY[p * 2 + 1], bx = c.polyXY[q * 2], by = c.polyXY[q * 2 + 1];
       if (fade(ax, ay) <= 0 && fade(bx, by) <= 0) continue;
-      const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / (step * 2)));
-      for (let k = 0; k < n; k++) {
-        const x0 = ax + (bx - ax) * k / n, y0 = ay + (by - ay) * k / n;
-        const x1 = ax + (bx - ax) * (k + 1) / n, y1 = ay + (by - ay) * (k + 1) / n;
-        lp.push(x0, at(x0, y0), -y0, x1, at(x1, y1), -y1);
-        la.push(fade(x0, y0), fade(x1, y1));
+      const ka = key(ax, ay), kb = key(bx, by), ek = ka < kb ? ka + '|' + kb : kb + '|' + ka;
+      if (seen.has(ek)) continue;
+      seen.add(ek);
+      corners.set(ka, [ax, ay]); corners.set(kb, [bx, by]);
+      const len = Math.hypot(bx - ax, by - ay), nx = -(by - ay) / len * wR / 2, ny = (bx - ax) / len * wR / 2;
+      const n = Math.max(1, Math.ceil(len / (step * 1.5))), base = rp.length / 3;
+      for (let k = 0; k <= n; k++) {
+        const x = ax + (bx - ax) * k / n, y = ay + (by - ay) * k / n, f = fade(x, y) * 0.38;
+        for (const sd of [-1, 1]) {
+          const px = x + nx * sd, py = y + ny * sd;
+          rp.push(px, ownAt(px, py) + lift, -py);
+          ruv.push(k / n, (sd + 1) / 2);
+          rc.push(1, 1, 1, f);
+        }
+        if (k < n) { const o = base + k * 2; ri.push(o, o + 1, o + 2, o + 1, o + 3, o + 2); }
       }
     }
   }
-  const lg = new THREE.BufferGeometry();
-  lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
-  const lc = new Float32Array(la.length * 4);
-  la.forEach((a, k) => { lc[k * 4] = lc[k * 4 + 1] = lc[k * 4 + 2] = 1; lc[k * 4 + 3] = a * 0.2; });
-  lg.setAttribute('color', new THREE.BufferAttribute(lc, 4));
-  ctxLines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, color: 0xfff2dc }));
+  const softTex = (radial: boolean) => {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+    const g = cv.getContext('2d')!;
+    const gr = radial ? g.createRadialGradient(32, 32, 0, 32, 32, 32) : g.createLinearGradient(0, 0, 0, 64);
+    if (radial) { gr.addColorStop(0, '#fff'); gr.addColorStop(0.55, '#fff'); gr.addColorStop(0.75, '#888'); gr.addColorStop(1, '#000'); }
+    else { gr.addColorStop(0, '#000'); gr.addColorStop(0.3, '#999'); gr.addColorStop(0.5, '#fff'); gr.addColorStop(0.7, '#999'); gr.addColorStop(1, '#000'); }
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(cv);
+  };
+  const overGround = { transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, side: THREE.DoubleSide };
+  const rg = new THREE.BufferGeometry();
+  rg.setAttribute('position', new THREE.Float32BufferAttribute(rp, 3));
+  rg.setAttribute('uv', new THREE.Float32BufferAttribute(ruv, 2));
+  rg.setAttribute('color', new THREE.Float32BufferAttribute(rc, 4));
+  rg.setIndex(ri);
+  const ribbons = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({ color: 0xfff0d6, vertexColors: true, alphaMap: softTex(false), ...overGround }));
+  // Corner markers: small discs, sized by how far out they are.
+  const cl = [...corners.values()].filter(([x, y]) => fade(x, y) > 0.05);
+  const dots = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xfff0d6, alphaMap: softTex(true), opacity: 0.6, ...overGround }), Math.max(1, cl.length));
+  dots.count = cl.length;
+  const dm = new THREE.Matrix4(), dq = new THREE.Quaternion(), dv = new THREE.Vector3(), ds = new THREE.Vector3();
+  cl.forEach(([x, y], k) => {
+    const r = wR * 1.6 * Math.sqrt(fade(x, y));
+    dots.setMatrixAt(k, dm.compose(dv.set(x, ownAt(x, y) + lift * 1.3, -y), dq, ds.set(r, 1, r)));
+  });
+  ctxLines = new THREE.Group();
   ctxLines.name = 'ctxlines';
+  ribbons.name = dots.name = 'ctxlines';
+  ctxLines.add(ribbons, dots);
   world.add(ctxLines);
   syncAround();
   if (map) applyTime();
@@ -376,14 +422,15 @@ function addContext(aerial: boolean) {
 function syncAround() {
   const on = showCtx && !!ctxMesh;
   if (sidesMesh) sidesMesh.visible = !on;
+  if (skirtMesh) skirtMesh.visible = on;
   if (ctxLines) ctxLines.visible = on;
   if (ctxOccluder) ctxOccluder.visible = on;
 }
 let glow: THREE.Points | null = null;
 let sidesMat: THREE.MeshBasicMaterial | null = null;
-let sidesMesh: THREE.Mesh | null = null;
+let sidesMesh: THREE.Mesh | null = null, skirtMesh: THREE.Mesh | null = null;
 /** Faint outlines of the neighbouring hexes, drawn sharp over the blurred backdrop. */
-let ctxLines: THREE.LineSegments | null = null;
+let ctxLines: THREE.Group | null = null;
 /** The same ground, invisible, in the main pass: it only fills the depth buffer, so a nearer ridge
  * hides the tile behind it (the backdrop alone can't: a background is behind everything). */
 let ctxOccluder: THREE.Mesh | null = null;
@@ -397,7 +444,7 @@ const glowTex = (() => {
 
 function build(m: LocalMap) {
   scene.remove(world); dispose(world);
-  windows = null; glow = null; sidesMat = null; sidesMesh = null; ctxMesh = null; ctxLines = null; ctxOccluder = null;
+  windows = null; glow = null; sidesMat = null; sidesMesh = null; skirtMesh = null; ctxMesh = null; ctxLines = null; ctxOccluder = null;
   world = new THREE.Group();
   const st = style;
   const { res, size } = m, half = size / 2, step = size / (res - 1);
@@ -494,6 +541,32 @@ function build(m: LocalMap) {
   sides.name = 'sides';
   sidesMat = sides.material;
   sidesMesh = sides;
+
+  // With the neighbours on, the sides give way to a short skirt in the edge's own ground colour:
+  // the backdrop is coarser than the tile, and the skirt covers any sliver of gap at the seam.
+  if (cut) {
+    const tc = tg.getAttribute('color').array as Float32Array;
+    const skp: number[] = [], skc: number[] = [], depth = Math.max(4, size * 0.02);
+    const colAt = (x: number, y: number) => {
+      const i = Math.max(0, Math.min(res - 1, Math.round((x + half) / step))), j = Math.max(0, Math.min(res - 1, Math.round((y + half) / step)));
+      const v = j * res + i;
+      return [tc[v * 3] * 0.8, tc[v * 3 + 1] * 0.8, tc[v * 3 + 2] * 0.8];
+    };
+    for (let k = 0; k < ring.length - 1; k++) {
+      const [ax, ay] = ring[k], [bx, by] = ring[k + 1];
+      const ga = groundAtMap(m, ax, ay), gb = groundAtMap(m, bx, by);
+      skp.push(ax, ga, -ay, ax, ga - depth, -ay, bx, gb, -by, bx, gb, -by, ax, ga - depth, -ay, bx, gb - depth, -by);
+      const ca = colAt(ax, ay), cb = colAt(bx, by);
+      for (const cc of [ca, ca, cb, cb, ca, cb]) skc.push(cc[0], cc[1], cc[2]);
+    }
+    const skg = new THREE.BufferGeometry();
+    skg.setAttribute('position', new THREE.Float32BufferAttribute(skp, 3));
+    skg.setAttribute('color', new THREE.Float32BufferAttribute(skc, 3));
+    skg.computeVertexNormals();
+    skirtMesh = new THREE.Mesh(skg, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide }));
+    skirtMesh.name = 'skirt';
+    world.add(skirtMesh);
+  }
   world.add(sides);
 
   // Water: coloured by depth, shallow to deep, with foam where it meets the land.
@@ -700,7 +773,7 @@ function build(m: LocalMap) {
   // The atmosphere on everything (a no-op outside the Earth style).
   world.traverse((o) => {
     const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh || o.name === 'plants' || o.name === 'sides' || o.name === 'windows' || o.name === 'occluder') return;
+    if (!mesh.isMesh || o.name === 'plants' || o.name === 'sides' || o.name === 'windows' || o.name === 'occluder' || o.name === 'ctxlines') return;
     for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) applyAerial(mat, true);
   });
   // Where the map sits on the planet: x east, y up, z south (three.js), metres to radii.
@@ -794,7 +867,7 @@ function applyTime() {
   }
   sun.target.updateMatrixWorld(); rim.target.updateMatrixWorld();
   if (sidesMat) sidesMat.color.setRGB(L.sideLight * L.tint[0], L.sideLight * L.tint[1], L.sideLight * L.tint[2]);
-  if (ctxLines) (ctxLines.material as THREE.LineBasicMaterial).color.setRGB(L.sideLight, L.sideLight * 0.95, L.sideLight * 0.86);
+  if (ctxLines) for (const o of ctxLines.children) ((o as THREE.Mesh).material as THREE.MeshBasicMaterial).color.setRGB(L.sideLight, L.sideLight * 0.94, L.sideLight * 0.84);
   if (glow) {
     glow.visible = L.windows > 0.01;
     (glow.material as THREE.PointsMaterial).opacity = 0.5 * L.windows;
@@ -1039,7 +1112,7 @@ function renderFrame() {
   renderer.shadowMap.autoUpdate = true;
   cam.layers.set(0);
   // 2. Blurred, once each way: soft, but the land still reads.
-  const sp = Math.max(1, ctxRT.height / 500);
+  const sp = 0.6 * Math.max(1, ctxRT.height / 500);
   for (let it = 0; it < 1; it++) {
     blurMat.uniforms.tSrc.value = ctxRT.texture; blurMat.uniforms.uDir.value.set(sp / ctxRT.width, 0);
     renderer.setRenderTarget(blurRT); blurQuad.render(renderer);

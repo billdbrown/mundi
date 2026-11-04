@@ -54,3 +54,22 @@ test('the hex is drawn mag times smaller than it is', () => {
   assert.ok(Math.abs(a.localWidth / b.localWidth - 2) < 1e-6);
   assert.ok(Math.abs(a.trueWidthKm - b.trueWidthKm) < 1e-6);
 });
+
+test('the wide backdrop map has the same ground as the hex where they overlap', () => {
+  for (const spot of ['river', 'mountain', 'coast'] as const) {
+    const c = findSpot(world, spot);
+    // Same grid spacing: 3x the ground on 3x the samples (less one), so grid points coincide.
+    const a = buildLocalMap(world, c, { res: 65 });
+    const b = buildLocalMap(world, c, { res: 193, extent: 3, plants: false });
+    // Rivers are carved per map from paths clipped to it, so their channels may differ a little
+    // (the view takes the hex's own heights near the seam); the ground itself must match.
+    let worst = 0, off = 0;
+    for (let j = 0; j < 65; j++) for (let i = 0; i < 65; i++) {
+      const d = Math.abs(a.heights[j * 65 + i] - b.heights[(j + 64) * 193 + i + 64]);
+      worst = Math.max(worst, d);
+      if (d > 0.05) off++;
+    }
+    assert.ok(off / (65 * 65) < 0.1, `${spot}: ${off} of ${65 * 65} points differ`);
+    assert.ok(worst < 3, `${spot}: heights differ by up to ${worst.toFixed(2)} m`);
+  }
+});

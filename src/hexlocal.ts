@@ -253,7 +253,9 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     const bx = hex[((k + 1) % cc.length) * 2], by = hex[((k + 1) % cc.length) * 2 + 1];
     apothem = Math.min(apothem, Math.abs(ax * by - ay * bx) / Math.hypot(bx - ax, by - ay));
   }
-  const size = reach * 2 * 1.3 * o.extent;
+  // The usual square; the backdrop asks for more ground (extent) but the same terrain, so every
+  // scale below is taken from the usual square, not the wider one.
+  const baseSize = reach * 2 * 1.3, size = baseSize * o.extent;
   const res = o.res, step = size / (res - 1), half = size / 2;
 
   // Cells in reach.
@@ -376,7 +378,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   const reliefLocal = (hiTrue - loTrue) / o.vScale;
   // Rolling ground is capped: scaled with relief it turned an 8 km peak into a field of needles.
   const rollA = 1.5 + 0.02 * Math.min(reliefLocal, 300), rollL = 140;
-  const cragL = Math.max(150, size * 0.32), cragA = size * 0.06;
+  const cragL = Math.max(150, baseSize * 0.32), cragA = baseSize * 0.06;
   for (let j = 0; j < res; j++) {
     for (let i = 0; i < res; i++) {
       const x = -half + i * step, y = -half + j * step, v = j * res + i;
@@ -442,7 +444,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   };
   const widthOf = (c: number) => {
     const wt = trueRiverWidth(w, c);
-    return o.riverMode === 'scaled' ? wt / o.mag : Math.min(Math.max(6, wt * 0.8), size * 0.05);
+    return o.riverMode === 'scaled' ? wt / o.mag : Math.min(Math.max(6, wt * 0.8), baseSize * 0.05);
   };
 
   const riverCells = cellList.filter((c) => w.river[c] && w.water[c] !== WATER_OCEAN);
