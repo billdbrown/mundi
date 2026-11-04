@@ -88,6 +88,11 @@ export interface LocalMap {
   base: Float32Array;
   /** LAYERS values per sample (L_GRASS...). */
   layers: Float32Array;
+  /** Where the hex is on the planet: its centre, east and north, unit vectors (9 values), and the
+   * scale it was drawn at, so a view can put the map back in planet coordinates. */
+  frame: Float32Array;
+  mag: number;
+  radiusKm: number;
   /** Placeholder houses where the history put towns (hextown.ts), HOUSE_STRIDE values each. */
   houses: Float32Array;
   townNames: string[];
@@ -713,6 +718,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     cell, res, size,
     trueWidthKm: apothem * 2 * o.mag / 1000,
     localWidth: apothem * 2,
+    frame: Float32Array.of(cx, cy, cz, ex, ey, ez, nx, ny, nz), mag: o.mag, radiusKm: o.radiusKm,
     heights, colors, base, layers, houses, townNames, sea, lakeLevel, lakeMask, rivers, hex,
     trees: new Float32Array(treeOut),
     cells: Int32Array.from(cellList), cellXY,

@@ -54,6 +54,9 @@ export interface HexStyle {
   grade: { sat: number; contrast: number; tint: RGB; vignette: number; lift: number };
   /** The Earth look's own photographic grade (grade.ts) instead of the parametric one. */
   photoGrade: boolean;
+  /** The planet's own atmosphere (atmosphere.ts): the map is drawn in place on the planet, at
+   * true size, so the sky, haze and sunlight are the planet's. */
+  atmosphere: boolean;
   camera: { tilt: number; fov: number; dist: number };
   tiltShift: boolean;
 }
@@ -75,7 +78,7 @@ export const STYLES: HexStyle[] = [
     plants: { sat: 1.15, bright: 1.1, scale: 1.6, keep: 0.4, tufts: false },
     town: { path: 0xc9a77a, hedge: 0x4a6a34, crops: [0xe8a83a, 0xd88a2e, 0xc6c050, 0xb07a44, 0x9ab84e], walls: [0xe8dcc4, 0xd9c9a8, 0xc8a882, 0xb8a090], roofs: [0xd2563a, 0xc0462e, 0x3f8f9a, 0x8a5a3a, 0xe0703e], scale: 1.6 },
     grade: { sat: 1.08, contrast: 1.04, tint: [1.04, 1.0, 0.94], vignette: 0.22, lift: 0.01 },
-    photoGrade: false, camera: { tilt: 50, fov: 30, dist: 0.85 }, tiltShift: true,
+    photoGrade: false, atmosphere: false, camera: { tilt: 50, fov: 30, dist: 0.85 }, tiltShift: true,
   },
   {
     id: 'storybook', label: 'Storybook', blurb: 'Bold, saturated, sculpted',
@@ -93,7 +96,7 @@ export const STYLES: HexStyle[] = [
     plants: { sat: 1.35, bright: 1.1, scale: 1.7, keep: 0.4, tufts: false },
     town: { path: 0xd8b878, hedge: 0x2f6a26, crops: [0xf0c040, 0x9acd40, 0xd8a050, 0xc8d860], walls: [0xf4ecdc, 0xe8d8b8, 0xdcc8a0], roofs: [0x3a6ad0, 0xd84a3a, 0xe8b040, 0x8a4a2a], scale: 1.3 },
     grade: { sat: 1.18, contrast: 1.1, tint: [1.0, 1.0, 1.02], vignette: 0.15, lift: 0.0 },
-    photoGrade: false, camera: { tilt: 55, fov: 40, dist: 1.0 }, tiltShift: false,
+    photoGrade: false, atmosphere: false, camera: { tilt: 55, fov: 40, dist: 1.0 }, tiltShift: false,
   },
   {
     id: 'golden', label: 'Golden hour', blurb: 'Natural materials, low warm sun',
@@ -111,7 +114,7 @@ export const STYLES: HexStyle[] = [
     plants: { sat: 1.0, bright: 1.0, scale: 1.2, keep: 0.75, tufts: true },
     town: { path: 0x9a8060, hedge: 0x3a4a28, crops: [0xc8a050, 0x8a8a40, 0x7a5e44, 0xb09850], walls: [0xc8b8a0, 0xa89880, 0x8a7a68], roofs: [0x9a5a3a, 0x7a4a32, 0x8a7a5a, 0x6a5040], scale: 1.0 },
     grade: { sat: 1.05, contrast: 1.12, tint: [1.05, 1.0, 0.92], vignette: 0.3, lift: 0.0 },
-    photoGrade: false, camera: { tilt: 62, fov: 35, dist: 0.95 }, tiltShift: true,
+    photoGrade: false, atmosphere: false, camera: { tilt: 62, fov: 35, dist: 0.95 }, tiltShift: true,
   },
   {
     id: 'earth', label: 'Earth', blurb: "The planet's own colours, haze and grade",
@@ -128,7 +131,7 @@ export const STYLES: HexStyle[] = [
     plants: { sat: 1, bright: 1, scale: 1, keep: 1, tufts: true },
     town: { path: 0x8a7458, hedge: 0x34502a, crops: [0xc9a654, 0x8a9a46, 0x7a6248, 0xa8b060], walls: [0xc8bca8, 0xb0a490], roofs: [0x8a4a34, 0x6a5444, 0x7a6a5a], scale: 1.0 },
     grade: { sat: 1, contrast: 1, tint: [1, 1, 1], vignette: 0, lift: 0 },
-    photoGrade: true, camera: { tilt: 65, fov: 50, dist: 1.0 }, tiltShift: false,
+    photoGrade: true, atmosphere: true, camera: { tilt: 65, fov: 50, dist: 1.0 }, tiltShift: false,
   },
   {
     id: 'homestead', label: 'Homestead', blurb: 'Muted, lived-in, seen from above',
@@ -146,7 +149,7 @@ export const STYLES: HexStyle[] = [
     plants: { sat: 0.9, bright: 0.95, scale: 1.3, keep: 0.6, tufts: true },
     town: { path: 0x8a7a60, hedge: 0x3e5030, crops: [0xa89860, 0x7a8a48, 0x6a5a44, 0x9a9a5a], walls: [0x8a7a64, 0x9a8a70, 0x7a6a56], roofs: [0x7a6a50, 0x6a5a44, 0x8a7458], scale: 1.0 },
     grade: { sat: 0.9, contrast: 1.0, tint: [1.0, 1.01, 0.96], vignette: 0.12, lift: 0.01 },
-    photoGrade: false, camera: { tilt: 35, fov: 40, dist: 1.0 }, tiltShift: false,
+    photoGrade: false, atmosphere: false, camera: { tilt: 35, fov: 40, dist: 1.0 }, tiltShift: false,
   },
 ];
 

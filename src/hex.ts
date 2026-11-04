@@ -11,6 +11,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GRADE_SHADER } from './grade.ts';
+import { Atmosphere, applyAerial } from './atmosphere.ts';
 import { treeGeometry, treeMaterial, TUFT } from './flora.ts';
 import { FIRST, FAMILIES, VARIANTS } from './species.ts';
 import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
@@ -65,9 +66,22 @@ sun.shadow.bias = -0.0004;
 const rim = new THREE.DirectionalLight(0xdfe8ff, 0);
 scene.add(hemi, sun, sun.target, rim, rim.target);
 
+// The planet's atmosphere, for the Earth style: the map is put back on the planet (planet radii,
+// true size) and drawn through a camera that mirrors the orbit camera, so the planet's own sky,
+// haze and reddened sunlight apply. Every material carries it; it is off in the other styles.
+const atmo = new Atmosphere();
+scene.add(atmo.sky);
+applyAerial(treeMaterial, true);
+const planetCam = new THREE.PerspectiveCamera(50, 1, 1e-6, 1);
+/** Map metres to planet radii, for the current map (identity until a map is in). */
+const toPlanet = new THREE.Matrix4(), toPlanetRot = new THREE.Quaternion();
+let planetScale = 1;
+const sunDir = new THREE.Vector3();
+
 // Post: render, grade (the style's, or the planet's photo grade), tilt-shift, tone map and encode.
 const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
+const renderPass = new RenderPass(scene, camera);
+composer.addPass(renderPass);
 const photoPass = new ShaderPass(GRADE_SHADER);
 const gradePass = new ShaderPass(STYLE_GRADE);
 const tiltH = new ShaderPass(TILT_SHIFT), tiltV = new ShaderPass(TILT_SHIFT);
@@ -376,6 +390,28 @@ function build(m: LocalMap) {
   outline.visible = showOutline && !cut;
   world.add(outline);
 
+  // The atmosphere on everything (a no-op outside the Earth style).
+  world.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || o.name === 'plants') return;
+    for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) applyAerial(mat, true);
+  });
+  // Where the map sits on the planet: x east, y up, z south (three.js), metres to radii.
+  const F = m.frame;
+  planetScale = m.mag / (m.radiusKm * 1000);
+  const ps2 = planetScale;
+  toPlanet.set(
+    F[3] * ps2, F[0] * ps2, -F[6] * ps2, F[0],
+    F[4] * ps2, F[1] * ps2, -F[7] * ps2, F[1],
+    F[5] * ps2, F[2] * ps2, -F[8] * ps2, F[2],
+    0, 0, 0, 1,
+  );
+  toPlanetRot.setFromRotationMatrix(new THREE.Matrix4().extractRotation(toPlanet));
+  if (st.atmosphere) {
+    world.matrixAutoUpdate = false;
+    world.matrix.copy(toPlanet);
+    world.matrixWorldNeedsUpdate = true;
+  }
   scene.add(world);
   applyLook(m);
 }
@@ -401,10 +437,20 @@ function applyLook(m: LocalMap) {
   rim.intensity = st.rim;
   rim.position.set(-sun.position.x, size * 0.3, -sun.position.z);
   renderer.toneMappingExposure = st.exposure;
+  sun.target.position.set(0, 0, 0);
+  // In the Earth style everything is in planet radii: the lights move with the map.
+  const k = st.atmosphere ? planetScale : 1;
+  if (st.atmosphere) {
+    sun.position.applyMatrix4(toPlanet); rim.position.applyMatrix4(toPlanet);
+    sun.target.position.set(0, 0, 0).applyMatrix4(toPlanet); rim.target.position.copy(sun.target.position);
+    fog.density = 0;
+    scene.background = new THREE.Color(0x0a1424);
+  } else rim.target.position.set(0, 0, 0);
+  sun.target.updateMatrixWorld(); rim.target.updateMatrixWorld();
   const sc = sun.shadow.camera;
-  sc.left = -size * 0.75; sc.right = size * 0.75; sc.top = size * 0.75; sc.bottom = -size * 0.75;
-  sc.near = 1; sc.far = size * 4; sc.updateProjectionMatrix();
-  sun.shadow.normalBias = (size / (m.res - 1)) * 0.5;
+  sc.left = -size * 0.75 * k; sc.right = size * 0.75 * k; sc.top = size * 0.75 * k; sc.bottom = -size * 0.75 * k;
+  sc.near = 1 * k; sc.far = size * 4 * k; sc.updateProjectionMatrix();
+  sun.shadow.normalBias = (size / (m.res - 1)) * 0.5 * k;
   camera.far = size * 8; camera.fov = st.camera.fov; camera.updateProjectionMatrix();
   photoPass.enabled = st.photoGrade;
   gradePass.enabled = !st.photoGrade;
@@ -608,6 +654,20 @@ renderer.setAnimationLoop(() => {
     camera.position.z = Math.max(-lim, Math.min(lim, camera.position.z));
     camera.position.y = waterAt(camera.position.x, -camera.position.z) + 1.7;
   } else controls.update();
+  sunDir.copy(sun.position).sub(sun.target.position).normalize();
+  if (style.atmosphere && map) {
+    camera.updateMatrixWorld();
+    planetCam.position.copy(camera.position).applyMatrix4(toPlanet);
+    planetCam.quaternion.copy(toPlanetRot).multiply(camera.quaternion);
+    planetCam.fov = camera.fov; planetCam.aspect = camera.aspect;
+    planetCam.near = camera.near * planetScale; planetCam.far = camera.far * planetScale;
+    planetCam.updateProjectionMatrix(); planetCam.updateMatrixWorld();
+    atmo.update(renderer, planetCam, sunDir, true);
+    renderPass.camera = planetCam;
+  } else {
+    atmo.update(renderer, camera, sunDir, false);
+    renderPass.camera = camera;
+  }
   composer.render();
 });
 
