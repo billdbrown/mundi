@@ -30,6 +30,9 @@ import { FLORA_RICH, CONIFER, BROADLEAF, SCRUB, PALM, ROCK as ROCK_KIND, CACTUS,
 import { FIRST, VARIANTS as SPECIES_VARIANTS, FAMILIES } from './species.ts';
 import { climateColour, ECO, OWN_COLOUR } from './surface.ts';
 import { Color } from 'three';
+import type { History } from './civ.ts';
+import { layoutTowns, HOUSE_STRIDE } from './hextown.ts';
+export { HOUSE_STRIDE };
 
 export type RiverMode = 'scaled' | 'flow';
 
@@ -63,9 +66,12 @@ export interface LocalRiver {
  * regenerating (hexstyle.ts). Each 0..1 unless noted, LAYERS values per sample.
  */
 export const L_GRASS = 0, L_MOTTLE = 1, L_FOREST = 2, L_ROCK = 3, L_SNOW = 4, L_SAND = 5, L_BED = 6,
-  L_LUSH = 7, L_ALPINE = 8, L_DEPTH = 9, L_AO = 10, L_CLEARING = 11;
-/** (L_DEPTH is metres of water over the ground, 0 on land; L_AO how sunken the spot is, a crease.) */
-export const LAYERS = 12;
+  L_LUSH = 7, L_ALPINE = 8, L_DEPTH = 9, L_AO = 10, L_CLEARING = 11, L_PATH = 12, L_FIELD = 13, L_FIELDKIND = 14, L_HEDGE = 15, L_ELEV = 16;
+/** (L_DEPTH is metres of water over the ground, 0 on land; L_AO how sunken the spot is, a crease;
+ * L_FIELDKIND which crop a field grows, 0..1; L_HEDGE how close to a field's edge.) */
+/** L_ELEV: how high a sample stands on this map's own land, 0..1, scaled down where the map is
+ * nearly flat: for styles that paint mountains their own way (alpine, rock, snow caps). */
+export const LAYERS = 17;
 
 export interface LocalMap {
   cell: number;
@@ -82,6 +88,9 @@ export interface LocalMap {
   base: Float32Array;
   /** LAYERS values per sample (L_GRASS...). */
   layers: Float32Array;
+  /** Placeholder houses where the history put towns (hextown.ts), HOUSE_STRIDE values each. */
+  houses: Float32Array;
+  townNames: string[];
   /** Sea level is 0 (when the map has sea). */
   sea: boolean;
   /** Lake surface and a 0..1 mask of where it is, or NaN level for none. */
@@ -199,7 +208,7 @@ export function trueRiverWidth(w: World, c: number): number {
   return Math.max(8, Math.min(600, 12 * Math.sqrt(w.flow[c] / w.riverThreshold)));
 }
 
-export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions> = {}): LocalMap {
+export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions> = {}, history?: History): LocalMap {
   const o = { ...LOCAL_DEFAULTS, ...opts };
   const g = w.grid, P = g.centers, K = g.cornerPos;
   const R = o.radiusKm * 1000, reliefM = RELIEF_RADII * R;
@@ -612,6 +621,47 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     }
   }
 
+  // Height on this map's own land, for styles that draw their own mountain bands.
+  {
+    let lo = Infinity, hi = -Infinity;
+    for (let v = 0; v < N; v++) if (heights[v] > 0.3 && layers[v * LAYERS + L_DEPTH] === 0) { lo = Math.min(lo, heights[v]); hi = Math.max(hi, heights[v]); }
+    const mtn = smooth(120, 500, hi - lo);
+    // By rank, not by height: 0.9 means higher than 90% of the land, so a style's snow caps cover
+    // the top tenth of a range rather than everything above the lowest valley.
+    const sample: number[] = [];
+    for (let v = 0; v < N; v += 7) if (heights[v] > 0.3 && layers[v * LAYERS + L_DEPTH] === 0) sample.push(heights[v]);
+    sample.sort((a, b) => a - b);
+    const rank = (hv: number) => {
+      let a = 0, b = sample.length;
+      while (a < b) { const mid = (a + b) >> 1; if (sample[mid] < hv) a = mid + 1; else b = mid; }
+      return a / Math.max(1, sample.length);
+    };
+    if (hi > lo && sample.length) for (let v = 0; v < N; v++) layers[v * LAYERS + L_ELEV] = heights[v] > 0.3 ? rank(heights[v]) * mtn : 0;
+  }
+
+  // --- Towns (placeholders) where the history put them: roads, houses, fields. Before the plants,
+  // which they clear.
+  let houses: Float32Array = new Float32Array(0), townNames: string[] = [];
+  if (history) {
+    const t = layoutTowns({
+      w, history, cellList, indexOf, cellXY, res, size, step, half, heights, grow, riverNear, layers, LAYERS,
+      L_PATH, L_FIELD, L_FIELDKIND, L_HEDGE, edgeMid, noise, rng, sea,
+      arable: (v) => tempV[v] > 0.25 && moistV[v] > 0.12 && layers[v * LAYERS + L_SNOW] < 0.2 && layers[v * LAYERS + L_ROCK] < 0.3,
+    });
+    houses = t.houses; townNames = t.names;
+    // The Earth look gets them too: dirt paths, crops, hedges.
+    const DIRT = lin(0x8a7458), HEDGE = lin(0x34502a);
+    const CROPS = [lin(0xc9a654), lin(0x8a9a46), lin(0x7a6248), lin(0xa8b060)];
+    for (let v = 0; v < N; v++) {
+      const L0 = v * LAYERS;
+      if (layers[L0 + L_FIELD] > 0) {
+        mix(v, CROPS[Math.min(3, Math.floor(layers[L0 + L_FIELDKIND] * 4))], 0.75);
+        mix(v, HEDGE, layers[L0 + L_HEDGE] * 0.8);
+      }
+      mix(v, DIRT, layers[L0 + L_PATH] * 0.85);
+    }
+  }
+
   // --- Plants: the planet's own models in its per-biome mix (flora.ts), life-size, on a jittered
   // grid, trees clumped into groves (the same pattern as the canopy colour).
   const treeOut: number[] = [];
@@ -624,7 +674,9 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       if (grow[v] <= 0) continue;
       const pl = plantingOf(w.biome[cellList[owner[v]]]);
       // Solid in the groves, the odd lone tree outside them.
-      const pTree = pl.treeD > 0 ? (0.015 + 0.8 * groveIn(x, y, pl.treeD / FULL)) * grow[v] * treeLine[v] : 0;
+      // (Scaled by how wooded the biome is: a forest's groves are solid, a desert's the odd tree;
+      // solid groves everywhere put 21,000 Joshua trees in one desert hex.)
+      const pTree = pl.treeD > 0 ? (0.015 + 0.8 * groveIn(x, y, pl.treeD / FULL)) * Math.min(1, pl.treeD / 5) * grow[v] * treeLine[v] : 0;
       let e: [TreeKind, number, number, number] | null = null;
       if (pl.trees.length && r1 < pTree) e = pick(pl.trees, pl.treeD, r2);
       else if (pl.small.length && r1 > 1 - Math.min(0.6, pl.smallD / (FULL * 1.6)) * grow[v]) e = pick(pl.small, pl.smallD, r2);
@@ -661,7 +713,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     cell, res, size,
     trueWidthKm: apothem * 2 * o.mag / 1000,
     localWidth: apothem * 2,
-    heights, colors, base, layers, sea, lakeLevel, lakeMask, rivers, hex,
+    heights, colors, base, layers, houses, townNames, sea, lakeLevel, lakeMask, rivers, hex,
     trees: new Float32Array(treeOut),
     cells: Int32Array.from(cellList), cellXY,
     info: {

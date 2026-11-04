@@ -11,10 +11,11 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GRADE_SHADER } from './grade.ts';
-import { treeGeometry, treeMaterial } from './flora.ts';
+import { treeGeometry, treeMaterial, TUFT } from './flora.ts';
+import { FIRST, FAMILIES, VARIANTS } from './species.ts';
 import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
 import { parseSeed } from './seedname.ts';
-import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, type LocalMap, type LocalOptions } from './hexlocal.ts';
+import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, HOUSE_STRIDE, type LocalMap, type LocalOptions } from './hexlocal.ts';
 import { STYLES, paintGround, STYLE_GRADE, TILT_SHIFT, type HexStyle } from './hexstyle.ts';
 import type { Spot } from './debug.ts';
 
@@ -268,7 +269,7 @@ function build(m: LocalMap) {
       const bank = tint(W.foamDepth * 0.85, new THREE.Color());
       rc.set([bank.r, bank.g, bank.b, mid.r, mid.g, mid.b, bank.r, bank.g, bank.b], s2 * 9);
       // Only the stretch on the map.
-      if (s2 < k - 1 && inFrame(x, y) && inFrame(p[s2 * 4 + 4], p[s2 * 4 + 5])) {
+      if (s2 < k - 1 && inFrame(x, y) && inFrame(p[s2 * 4 + 4], p[s2 * 4 + 5]) && !(m.sea && lv < 0.3 && groundAtMap(m, x, y) < 0)) {
         const o = s2 * 3;
         ri.push(o, o + 1, o + 3, o + 1, o + 4, o + 3, o + 1, o + 2, o + 4, o + 2, o + 5, o + 4);
       }
@@ -290,6 +291,9 @@ function build(m: LocalMap) {
   for (let i = 0; i < count; i++) {
     if (!inFrame(T[i * STRIDE], T[i * STRIDE + 1])) continue;
     if (st.plants.keep < 1 && ((i * 2246822519) >>> 0) / 4294967296 > st.plants.keep) continue;
+    // Grass tufts and reeds are too fine for the stylised looks: scribbles at this distance.
+    const kk = T[i * STRIDE + 4];
+    if (!st.plants.tufts && (kk === TUFT || (kk >= FIRST && FAMILIES[Math.floor((kk - FIRST) / VARIANTS)] === 'reeds'))) continue;
     const k = T[i * STRIDE + 4];
     if (!byKind.has(k)) byKind.set(k, []);
     byKind.get(k)!.push(i);
@@ -314,18 +318,46 @@ function build(m: LocalMap) {
     world.add(mesh);
   }
 
-  // A person (1.8 m) and a cottage at the centre, for scale.
+  // Houses (placeholders where the history put towns): walls and a pitched roof, instanced, in the
+  // style's colours; scaled up a little in the stylised looks, like the trees.
+  const HS = m.houses, nh = HS.length / HOUSE_STRIDE;
+  if (nh) {
+    const keep: number[] = [];
+    for (let k = 0; k < nh; k++) if (inFrame(HS[k * HOUSE_STRIDE], HS[k * HOUSE_STRIDE + 1])) keep.push(k);
+    const wallGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+    // A roof: a triangular prism along x, 1 wide, 1 deep, 1 tall, eaves overhanging a little.
+    const roofGeo = new THREE.BufferGeometry();
+    const rv = [-0.55, 0, -0.6, 0.55, 0, -0.6, 0, 1, -0.6, -0.55, 0, 0.6, 0, 1, 0.6, 0.55, 0, 0.6];
+    roofGeo.setAttribute('position', new THREE.Float32BufferAttribute([
+      // gable ends
+      rv[0], rv[1], rv[2], rv[3], rv[4], rv[5], rv[6], rv[7], rv[8],
+      rv[9], rv[10], rv[11], rv[15], rv[16], rv[17], rv[12], rv[13], rv[14],
+      // slopes
+      rv[0], rv[1], rv[2], rv[6], rv[7], rv[8], rv[9], rv[10], rv[11], rv[9], rv[10], rv[11], rv[6], rv[7], rv[8], rv[12], rv[13], rv[14],
+      rv[3], rv[4], rv[5], rv[15], rv[16], rv[17], rv[6], rv[7], rv[8], rv[6], rv[7], rv[8], rv[15], rv[16], rv[17], rv[12], rv[13], rv[14],
+    ], 3));
+    roofGeo.rotateY(Math.PI / 2);
+    roofGeo.computeVertexNormals();
+    const walls = new THREE.InstancedMesh(wallGeo, new THREE.MeshStandardMaterial({ roughness: 0.9 }), keep.length);
+    const roofs = new THREE.InstancedMesh(roofGeo, new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true, side: THREE.DoubleSide }), keep.length);
+    const hm = new THREE.Matrix4(), hq = new THREE.Quaternion(), hs = new THREE.Vector3(), hp = new THREE.Vector3(), hc = new THREE.Color();
+    const up2 = new THREE.Vector3(0, 1, 0), K = st.town.scale;
+    keep.forEach((k, n) => {
+      const o = k * HOUSE_STRIDE, x = HS[o], y = HS[o + 1], gy = HS[o + 2], rot = HS[o + 3];
+      const wd = HS[o + 4] * K, dp = HS[o + 5] * K, wh = HS[o + 6] * K, ch = HS[o + 7];
+      hq.setFromAxisAngle(up2, rot);
+      walls.setMatrixAt(n, hm.compose(hp.set(x, gy - 0.6, -y), hq, hs.set(wd, wh + 0.6, dp)));
+      walls.setColorAt(n, hc.setHex(st.town.walls[Math.floor(ch * 7919) % st.town.walls.length]));
+      roofs.setMatrixAt(n, hm.compose(hp.set(x, gy + wh, -y), hq, hs.set(dp * 1.0, Math.min(wd, dp) * 0.55, wd * 1.0)));
+      roofs.setColorAt(n, hc.setHex(st.town.roofs[Math.floor(ch * st.town.roofs.length) % st.town.roofs.length]));
+    });
+    for (const im of [walls, roofs]) { im.castShadow = true; im.receiveShadow = true; world.add(im); }
+  }
+
+  // A person (1.8 m) beside the centre, for scale.
   const person = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 1.3, 4, 8), new THREE.MeshStandardMaterial({ color: 0xc0392b }));
   person.position.set(6, groundAtMap(m, 6, 0) + 0.9, 0); person.castShadow = true;
-  const cottage = new THREE.Group();
-  const walls = new THREE.Mesh(new THREE.BoxGeometry(9, 4, 6), new THREE.MeshStandardMaterial({ color: 0xd8cdb4 }));
-  walls.position.y = 2;
-  const roof = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 4.2, 9.6, 3, 1), new THREE.MeshStandardMaterial({ color: 0x7a3b2a }));
-  roof.rotation.z = Math.PI / 2; roof.position.y = 4 + 1.05; roof.scale.set(1, 1, 0.82);
-  cottage.add(walls, roof);
-  cottage.position.set(0, groundAtMap(m, 0, 0) - 0.5, 0);
-  cottage.traverse((o) => { o.castShadow = true; o.receiveShadow = true; });
-  world.add(person, cottage);
+  world.add(person);
 
   // The hex outline, draped over the ground (on the cut tile, its edge is the outline already).
   const ol: number[] = [], H = m.hex, nc = H.length / 2;
@@ -515,7 +547,10 @@ worker.onmessage = (e: MessageEvent<{ map: LocalMap; ms: { world: number; local:
 function resetView() {
   if (!map) return;
   const g = groundAt(0, 0), c = style.camera;
-  const fit = map.localWidth * 0.62 / Math.tan((c.fov * Math.PI / 180) / 2) * c.dist;
+  let hi = -Infinity, lo = Infinity;
+  for (const v of map.heights) { hi = Math.max(hi, v); lo = Math.min(lo, v); }
+  // Back off for tall terrain, or a mountain overfills the frame.
+  const fit = (map.localWidth * 0.62 + Math.max(0, hi - Math.max(lo, 0)) * 0.6) / Math.tan((c.fov * Math.PI / 180) / 2) * c.dist;
   const t = c.tilt * Math.PI / 180;
   controls.target.set(0, g, 0);
   camera.position.set(0, g + Math.cos(t) * fit, Math.sin(t) * fit);
