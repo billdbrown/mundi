@@ -205,6 +205,9 @@ export function paintGround(m: LocalMap, st: HexStyle): Float32Array {
         const g = C.grass[k] + (C.dry[k] - C.grass[k]) * pale;
         c[k] = g + ([b0, b1, b2][k] - g) * p.keepBase;
       }
+      // True desert (no grass, no forest, a pale tan climate colour) is sand, not dry grass.
+      const arid = pale * (1 - Math.min(1, (ly(L_GRASS) + ly(L_FOREST) + ly(L_CLEARING)) * 4));
+      mix(C.sand, arid * 0.85);
       const mt = ly(L_MOTTLE);
       if (p.mottle > 0 && ly(L_GRASS) > 0) {
         const f = 1 + (mt - 0.5) * 0.5 * p.mottle * ly(L_GRASS);

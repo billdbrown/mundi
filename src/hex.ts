@@ -141,9 +141,10 @@ function animateWater(mat: THREE.MeshStandardMaterial) {
           vec2 p = vWP.xz;
           float t = uWTime;
           vec2 g = vec2(
-            sin(p.x * 0.31 + t * 1.1) * 0.5 + sin(p.x * 0.73 - p.y * 0.41 + t * 1.7) * 0.3 + sin((p.x + p.y) * 1.9 + t * 2.6) * 0.12,
-            sin(p.y * 0.29 - t * 0.9) * 0.5 + sin(p.y * 0.67 + p.x * 0.37 - t * 1.5) * 0.3 + sin((p.y - p.x) * 2.1 - t * 2.3) * 0.12);
-          normal = normalize(normal + (viewMatrix * vec4(g.x * 0.09, 0.0, g.y * 0.09, 0.0)).xyz);
+            sin(p.x * 0.11 + p.y * 0.05 + t * 0.9) * 0.6 + sin(p.x * 0.23 - p.y * 0.17 + t * 1.4) * 0.4,
+            sin(p.y * 0.1 - p.x * 0.04 - t * 0.8) * 0.6 + sin(p.y * 0.21 + p.x * 0.13 - t * 1.2) * 0.4);
+          // Long, gentle swells only: finer, regular waves tiled into a waffle of glints.
+          normal = normalize(normal + (viewMatrix * vec4(g.x * 0.035, 0.0, g.y * 0.035, 0.0)).xyz);
         }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         {
@@ -353,7 +354,8 @@ function build(m: LocalMap) {
     lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
     lg.setAttribute('color', new THREE.Float32BufferAttribute(lc, 3));
     lg.computeVertexNormals();
-    const mesh = new THREE.Mesh(lg, waterMat()); mesh.receiveShadow = true;
+    // (No shadows on open water: at a high sun they speckled it into a mesh-like grid.)
+    const mesh = new THREE.Mesh(lg, waterMat());
     world.add(mesh);
   };
   if (m.sea) waterOver(0, null);
