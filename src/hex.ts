@@ -18,6 +18,7 @@ import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
 import { parseSeed } from './seedname.ts';
 import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, HOUSE_STRIDE, type LocalMap, type LocalOptions } from './hexlocal.ts';
 import { STYLES, paintGround, STYLE_GRADE, TILT_SHIFT, type HexStyle } from './hexstyle.ts';
+import { daylight, hourForElevation, type RGB } from './daylight.ts';
 import type { Spot } from './debug.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -39,8 +40,11 @@ if (h.get('river') === 'scaled' || h.get('river') === 'flow') opts.riverMode = h
 if (h.get('crags')) opts.crags = h.get('crags') === '1';
 let style: HexStyle = STYLES.find((x) => x.id === h.get('style')) ?? STYLES[0];
 let tiltOn = h.get('tilt') === null ? style.tiltShift : h.get('tilt') === '1';
+/** The hour of local solar time, once Bill has set one; until then each style's own hour. */
+let userHour: number | null = h.get('time') !== null && h.get('time') !== '' ? ((Number(h.get('time')) % 24) + 24) % 24 : null;
+let playing = false;
 const back = new URLSearchParams(h);
-for (const k of ['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt']) back.delete(k);
+for (const k of ['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time']) back.delete(k);
 $<HTMLAnchorElement>('back').href = '/#' + back.toString();
 
 // --- Scene ---
@@ -76,7 +80,7 @@ const planetCam = new THREE.PerspectiveCamera(50, 1, 1e-6, 1);
 /** Map metres to planet radii, for the current map (identity until a map is in). */
 const toPlanet = new THREE.Matrix4(), toPlanetRot = new THREE.Quaternion();
 let planetScale = 1;
-const sunDir = new THREE.Vector3();
+const sunDir = new THREE.Vector3(), sunOrigin = new THREE.Vector3();
 
 // Post: render, grade (the style's, or the planet's photo grade), tilt-shift, tone map and encode.
 const composer = new EffectComposer(renderer);
@@ -238,8 +242,22 @@ function hexShape(m: LocalMap) {
   return { inside, nearest, H, n };
 }
 
+/** Lit windows in the towns, shown from dusk, and a soft glow over each lit house so a town reads
+ * from afar; the tile's sides (unlit, dimmed by the hour). */
+let windows: THREE.InstancedMesh | null = null;
+let glow: THREE.Points | null = null;
+let sidesMat: THREE.MeshBasicMaterial | null = null;
+const glowTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d')!, r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.25, 'rgba(255,255,255,0.45)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+})();
+
 function build(m: LocalMap) {
   scene.remove(world); dispose(world);
+  windows = null; glow = null; sidesMat = null;
   world = new THREE.Group();
   const st = style;
   const { res, size } = m, half = size / 2, step = size / (res - 1);
@@ -334,6 +352,7 @@ function build(m: LocalMap) {
   // turn grey, navy or black depending on the style's sun.
   const sides = new THREE.Mesh(sg, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, fog: false }));
   sides.name = 'sides';
+  sidesMat = sides.material;
   world.add(sides);
 
   // Water: coloured by depth, shallow to deep, with foam where it meets the land.
@@ -481,6 +500,35 @@ function build(m: LocalMap) {
       chims.setColorAt(n, hc.setHex(0x6a5a50));
     });
     for (const im of [walls, roofs, chims]) { im.castShadow = true; im.receiveShadow = true; world.add(im); }
+    // Windows: two square lights through each lit house, showing on both long walls. Three in four
+    // houses are lit. Unlit material, brightened at night (applyTime).
+    const lit = keep.filter((k) => (HS[k * HOUSE_STRIDE + 7] * 7.31) % 1 < 0.75);
+    const win = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xffb060 }), Math.max(1, lit.length * 2));
+    win.count = lit.length * 2;
+    win.name = 'windows';
+    const wOff = new THREE.Vector3();
+    lit.forEach((k, n) => {
+      const o = k * HOUSE_STRIDE, x = HS[o], y = HS[o + 1], gy = HS[o + 2], rot = HS[o + 3];
+      const wd = HS[o + 4] * K, dp = HS[o + 5] * K, wh = HS[o + 6] * K;
+      hq.setFromAxisAngle(up2, rot);
+      const sz = Math.min(0.9 * K, wh * 0.35);
+      for (const side of [0, 1]) {
+        wOff.set((side * 2 - 1) * wd * 0.24, 0, 0).applyQuaternion(hq);
+        win.setMatrixAt(n * 2 + side, hm.compose(hp.set(x + wOff.x, gy + wh * 0.45, -y + wOff.z), hq, hs.set(sz, sz, dp + 0.15)));
+      }
+    });
+    windows = win;
+    world.add(win);
+    const gp = new Float32Array(lit.length * 3);
+    lit.forEach((k, n) => {
+      const o = k * HOUSE_STRIDE;
+      gp[n * 3] = HS[o]; gp[n * 3 + 1] = HS[o + 2] + HS[o + 6] * K * 0.6; gp[n * 3 + 2] = -HS[o + 1];
+    });
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute('position', new THREE.BufferAttribute(gp, 3));
+    glow = new THREE.Points(gg, new THREE.PointsMaterial({ map: glowTex, size: 45 * K, color: 0xff9440, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    glow.name = 'glow';
+    world.add(glow);
   }
 
   // A person (1.8 m) beside the centre, for scale.
@@ -508,7 +556,7 @@ function build(m: LocalMap) {
   // The atmosphere on everything (a no-op outside the Earth style).
   world.traverse((o) => {
     const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh || o.name === 'plants' || o.name === 'sides') return;
+    if (!mesh.isMesh || o.name === 'plants' || o.name === 'sides' || o.name === 'windows') return;
     for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) applyAerial(mat, true);
   });
   // Where the map sits on the planet: x east, y up, z south (three.js), metres to radii.
@@ -535,37 +583,14 @@ function build(m: LocalMap) {
  * off by this much so most of the width still fits, and the fog thins to match. */
 const narrowness = () => Math.max(1, (1.6 / camera.aspect) ** 0.75);
 
-/** Light, sky, fog and grade for the current style. */
+/** Light, shadows, camera and grade for the current style: the parts the hour doesn't change. */
 function applyLook(m: LocalMap) {
   const st = style, size = m.size;
-  // Sky: a painted gradient, top to bottom of the screen.
-  const cv = document.createElement('canvas'); cv.width = 2; cv.height = 256;
-  const g = cv.getContext('2d')!, gr = g.createLinearGradient(0, 0, 0, 256);
-  gr.addColorStop(0, '#' + col(st.sky[0]).getHexString(THREE.SRGBColorSpace));
-  gr.addColorStop(1, '#' + col(st.sky[1]).getHexString(THREE.SRGBColorSpace));
-  g.fillStyle = gr; g.fillRect(0, 0, 2, 256);
-  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
-  (scene.background as THREE.Texture | null)?.dispose?.();
-  scene.background = tex;
+  lat = Math.asin(Math.max(-1, Math.min(1, m.frame[1])));
   const fog = scene.fog as THREE.FogExp2;
-  fog.color.setHex(st.fogColor); fog.density = st.fog / size / narrowness();
-  hemi.color.setHex(st.hemi.sky); hemi.groundColor.setHex(st.hemi.ground); hemi.intensity = st.hemi.intensity;
-  const el = st.sun.elev * Math.PI / 180, az = st.sun.azim * Math.PI / 180, d = size * 1.2;
-  sun.color.setHex(st.sun.color); sun.intensity = st.sun.intensity;
-  sun.position.set(Math.sin(az) * Math.cos(el) * d, Math.sin(el) * d, Math.cos(az) * Math.cos(el) * d);
-  rim.intensity = st.rim;
-  rim.position.set(-sun.position.x, size * 0.3, -sun.position.z);
-  renderer.toneMappingExposure = st.exposure;
-  sun.target.position.set(0, 0, 0);
+  fog.density = st.atmosphere ? 0 : st.fog / size / narrowness();
   // In the Earth style everything is in planet radii: the lights move with the map.
   const k = st.atmosphere ? planetScale : 1;
-  if (st.atmosphere) {
-    sun.position.applyMatrix4(toPlanet); rim.position.applyMatrix4(toPlanet);
-    sun.target.position.set(0, 0, 0).applyMatrix4(toPlanet); rim.target.position.copy(sun.target.position);
-    fog.density = 0;
-    scene.background = new THREE.Color(0x0a1424);
-  } else rim.target.position.set(0, 0, 0);
-  sun.target.updateMatrixWorld(); rim.target.updateMatrixWorld();
   const sc = sun.shadow.camera;
   sc.left = -size * 0.75 * k; sc.right = size * 0.75 * k; sc.top = size * 0.75 * k; sc.bottom = -size * 0.75 * k;
   sc.near = 1 * k; sc.far = size * 4 * k; sc.updateProjectionMatrix();
@@ -574,11 +599,78 @@ function applyLook(m: LocalMap) {
   photoPass.enabled = st.photoGrade;
   gradePass.enabled = !st.photoGrade;
   const G = gradePass.uniforms;
-  G.uSat.value = st.grade.sat; G.uContrast.value = st.grade.contrast; G.uTint.value = st.grade.tint;
+  G.uSat.value = st.grade.sat; G.uContrast.value = st.grade.contrast;
   G.uVig.value = st.grade.vignette; G.uLift.value = st.grade.lift;
   tiltH.enabled = tiltV.enabled = tiltOn;
   groundTex.uTexAmt.value = st.texture.amount; groundTex.uTexScale.value = st.texture.scale;
+  // Point size is in scene units: in the Earth style those are planet radii, not metres.
+  if (glow) (glow.material as THREE.PointsMaterial).size = 45 * st.town.scale * k;
+  applyTime();
 }
+
+// --- Time of day (daylight.ts) ---
+let lat = 0;
+/** The hour shown: Bill's, or the style's own (when its designed sun stands, in the afternoon). */
+const hourNow = () => userHour ?? hourForElevation(lat, style.sun.elev);
+/** The real sun's direction in the map's frame, for the atmosphere (the key light may be the moon). */
+const realSun = new THREE.Vector3(0, 1, 0);
+const skyCv = document.createElement('canvas'); skyCv.width = 2; skyCv.height = 256;
+const skyTex = new THREE.CanvasTexture(skyCv); skyTex.colorSpace = THREE.SRGBColorSpace;
+const tmpCol = new THREE.Color();
+const cssOf = (c: RGB) => '#' + tmpCol.setRGB(c[0], c[1], c[2]).getHexString(THREE.SRGBColorSpace);
+
+/** Everything the hour changes: sun or moon, sky, fog colour, ambient light, exposure, grade tint
+ * and lit windows. Cheap enough to run every frame while the day plays. */
+function applyTime() {
+  if (!map) return;
+  const st = style, size = map.size, L = daylight(st, lat, hourNow());
+  realSun.set(L.sun[0], L.sun[1], L.sun[2]);
+  const g = skyCv.getContext('2d')!, gr = g.createLinearGradient(0, 0, 0, 256);
+  gr.addColorStop(0, cssOf(L.sky[0])); gr.addColorStop(1, cssOf(L.sky[1]));
+  g.fillStyle = gr; g.fillRect(0, 0, 2, 256); skyTex.needsUpdate = true;
+  (scene.fog as THREE.FogExp2).color.setRGB(L.fog[0], L.fog[1], L.fog[2]);
+  hemi.color.setRGB(L.hemiSky[0], L.hemiSky[1], L.hemiSky[2]);
+  hemi.groundColor.setRGB(L.hemiGround[0], L.hemiGround[1], L.hemiGround[2]);
+  hemi.intensity = L.hemiI;
+  const d = size * 1.2, [kx, ky, kz] = L.key.dir;
+  sun.color.setRGB(L.key.color[0], L.key.color[1], L.key.color[2]); sun.intensity = L.key.intensity;
+  sun.position.set(kx * d, ky * d, kz * d); sun.target.position.set(0, 0, 0);
+  rim.intensity = L.rim;
+  rim.position.set(-sun.position.x, size * 0.3, -sun.position.z);
+  // The planet's atmosphere already brightens low-sun skies; adapting fully washes them out.
+  renderer.toneMappingExposure = st.atmosphere ? Math.min(L.exposure, st.exposure * 1.5) : L.exposure;
+  gradePass.uniforms.uTint.value = L.tint;
+  if (style.atmosphere) {
+    sun.position.applyMatrix4(toPlanet); rim.position.applyMatrix4(toPlanet);
+    sun.target.position.set(0, 0, 0).applyMatrix4(toPlanet); rim.target.position.copy(sun.target.position);
+    scene.background = new THREE.Color(0x0a1424);
+  } else {
+    scene.background = skyTex;
+    rim.target.position.set(0, 0, 0);
+  }
+  sun.target.updateMatrixWorld(); rim.target.updateMatrixWorld();
+  if (sidesMat) sidesMat.color.setRGB(L.sideLight * L.tint[0], L.sideLight * L.tint[1], L.sideLight * L.tint[2]);
+  if (glow) {
+    glow.visible = L.windows > 0.01;
+    (glow.material as THREE.PointsMaterial).opacity = 0.5 * L.windows;
+  }
+  if (windows) {
+    windows.visible = L.windows > 0.01;
+    (windows.material as THREE.MeshBasicMaterial).color.setRGB(1.7 * L.windows, 0.85 * L.windows, 0.28 * L.windows);
+  }
+  syncTime(L.elev);
+}
+function syncTime(elev: number) {
+  const hr = hourNow(), hh = Math.floor(hr), mm = Math.floor((hr - hh) * 60);
+  $<HTMLInputElement>('time').value = String(hr);
+  $('time-out').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  $('time-sun').textContent = elev > 0 ? `sun ${Math.round(elev)}° up` : elev > -6 ? 'twilight' : 'night';
+  $('play').textContent = playing ? '❚❚' : '▶';
+}
+function setTime(hr: number | null) { userHour = hr === null ? null : ((hr % 24) + 24) % 24; applyTime(); writeHash(); }
+$<HTMLInputElement>('time').oninput = (e) => { playing = false; setTime(Number((e.target as HTMLInputElement).value)); };
+$('play').onclick = () => { playing = !playing; if (!playing) writeHash(); if (map) applyTime(); else $('play').textContent = playing ? '❚❚' : '▶'; };
+$('time-reset').onclick = () => { playing = false; setTime(null); };
 
 // --- The inset: the planet's own picture of this ground. ---
 function drawInset(m: LocalMap) {
@@ -659,6 +751,7 @@ function writeHash() {
   if (opts.riverMode !== D.riverMode) o.set('river', opts.riverMode);
   if (opts.crags !== D.crags) o.set('crags', opts.crags ? '1' : '0');
   if (opts.res !== D.res) o.set('res', String(opts.res));
+  if (userHour !== null) o.set('time', userHour.toFixed(2));
   history.replaceState(null, '', location.pathname + '#' + o.toString());
 }
 
@@ -747,6 +840,9 @@ addEventListener('keydown', (e) => {
   if (walker.isLocked || (e.target as HTMLElement)?.tagName === 'INPUT') return;
   const n = Number(e.key);
   if (n >= 1 && n <= STYLES.length) pickStyle(STYLES[n - 1].id);
+  if (e.code === 'BracketLeft') { playing = false; setTime(hourNow() - 0.5); }
+  if (e.code === 'BracketRight') { playing = false; setTime(hourNow() + 0.5); }
+  if (e.code === 'KeyP') $('play').click();
   if (e.code === 'KeyT') setTilt(!tiltOn);
   if (e.code === 'KeyH' && outline) outline.visible = !outline.visible;
 });
@@ -760,6 +856,8 @@ renderer.setAnimationLoop(() => {
   const dt = Math.min(0.1, timer.getDelta());
   frames++; fpsT += dt;
   waterTime.value += dt;
+  // Playing: a day in 48 seconds.
+  if (playing && map) { userHour = (hourNow() + dt * 0.5) % 24; applyTime(); }
   if (fpsT > 1) { $('fps').textContent = `${Math.round(frames / fpsT)} fps`; frames = 0; fpsT = 0; }
   if (walker.isLocked && map) {
     const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 14 : 1.6;
@@ -776,7 +874,10 @@ renderer.setAnimationLoop(() => {
     camera.position.z = Math.max(-lim, Math.min(lim, camera.position.z));
     camera.position.y = waterAt(camera.position.x, -camera.position.z) + 1.7;
   } else controls.update();
-  sunDir.copy(sun.position).sub(sun.target.position).normalize();
+  // The real sun (not the moon) for the atmosphere; in the Earth style through the same map-to-planet
+  // matrix as the lights (it may mirror, so not just its rotation).
+  if (style.atmosphere) sunDir.copy(realSun).multiplyScalar(1000).applyMatrix4(toPlanet).sub(sunOrigin.set(0, 0, 0).applyMatrix4(toPlanet)).normalize();
+  else sunDir.copy(realSun);
   if (style.atmosphere && map) {
     camera.updateMatrixWorld();
     planetCam.position.copy(camera.position).applyMatrix4(toPlanet);
@@ -800,7 +901,7 @@ void LAYERS; void L_DEPTH;
   get map() { return map; },
   get busy() { return busy; },
   get style() { return style.id; },
-  resetView, scene, pickStyle, setTilt,
+  resetView, scene, pickStyle, setTilt, setTime,
   /** Hide the panels for clean screenshots. */
   capture: (on: boolean) => document.body.classList.toggle('capture', on),
   /**

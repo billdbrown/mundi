@@ -32,7 +32,8 @@
     <h1>Mundi hex drill-down: five styles</h1>
     <p>Each planet hex opened as a walkable local map (seed 1, content-aware 10×). Rows are hexes,
       cards are styles: from above, then at eye level. <b>Tap a card to open it live</b>, then drag to
-      orbit, pinch to zoom, and switch styles from the panel.</p>
+      orbit, pinch to zoom, and switch styles from the panel. The time slider (▶ plays a whole day)
+      moves the sun along its real path for that spot on the planet.</p>
     <p><a href="/">The planet</a> (double-click a hex there to open any other)</p>
   </header>
   <main id="rows"></main>
@@ -54,6 +55,22 @@
       ['homestead', 'Homestead', 'Muted, lived-in, seen from above'],
     ];
     const el = document.getElementById('rows');
+    // A day on the river town, in Golden hour.
+    const day = [
+      [5.6, '05:36', 'first light'], [6.3, '06:18', 'sunrise'], [9, '09:00', 'morning'], [12, '12:00', 'noon'],
+      [16, '16:00', "the style's own light"], [17.8, '17:48', 'golden hour'], [18.4, '18:24', 'dusk'], [23, '23:00', 'night, town lit'],
+    ];
+    const ds = document.createElement('section');
+    ds.innerHTML = '<h2>A day<small>river hex 12010 in Golden hour · tap to open at that hour</small></h2><div class="row"></div>';
+    for (const [hr, clock, note] of day) {
+      const a = document.createElement('a');
+      a.className = 'card';
+      a.href = `hex.html#seed=1&cell=12010&style=golden&time=${hr}`;
+      a.innerHTML = `<img src="hexes/day-12010-golden-${String(hr).replace('.', '_')}.jpg" loading="lazy" alt="River hex at ${clock}">`
+        + `<div><b>${clock}</b><span>${note}</span></div>`;
+      ds.querySelector('.row').appendChild(a);
+    }
+    el.appendChild(ds);
     for (const [cell, name, note] of hexes) {
       const s = document.createElement('section');
       s.innerHTML = `<h2>${name}<small>hex ${cell} · ${note}</small></h2><div class="row"></div>`;
