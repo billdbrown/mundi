@@ -10,13 +10,14 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { GRADE_SHADER } from './grade.ts';
 import { Atmosphere, applyAerial } from './atmosphere.ts';
 import { treeGeometry, treeMaterial, TUFT } from './flora.ts';
 import { FIRST, FAMILIES, VARIANTS } from './species.ts';
 import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
 import { parseSeed } from './seedname.ts';
-import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, HOUSE_STRIDE, type LocalMap, type LocalOptions } from './hexlocal.ts';
+import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, L_FOREST, HOUSE_STRIDE, type LocalMap, type LocalOptions } from './hexlocal.ts';
 import { STYLES, paintGround, STYLE_GRADE, TILT_SHIFT, type HexStyle } from './hexstyle.ts';
 import { daylight, hourForElevation, type RGB } from './daylight.ts';
 import type { Spot } from './debug.ts';
@@ -38,13 +39,16 @@ let opts: LocalOptions = { ...LOCAL_DEFAULTS, radiusKm: Number(h.get('radius')) 
 for (const k of ['mag', 'vScale', 'vSoft', 'res'] as const) if (h.get(k)) opts[k] = Number(h.get(k));
 if (h.get('river') === 'scaled' || h.get('river') === 'flow') opts.riverMode = h.get('river') as LocalOptions['riverMode'];
 if (h.get('crags')) opts.crags = h.get('crags') === '1';
-let style: HexStyle = STYLES.find((x) => x.id === h.get('style')) ?? STYLES[0];
+// Golden Earth is Bill's pick (2026-11-04), so a hex opened from the planet starts in it.
+let style: HexStyle = STYLES.find((x) => x.id === h.get('style')) ?? STYLES.find((x) => x.id === 'golden-earth')!;
 let tiltOn = h.get('tilt') === null ? style.tiltShift : h.get('tilt') === '1';
 /** The hour of local solar time, once Bill has set one; until then each style's own hour. */
 let userHour: number | null = h.get('time') !== null && h.get('time') !== '' ? ((Number(h.get('time')) % 24) + 24) % 24 : null;
 let playing = false;
+/** The neighbouring hexes, drawn blurred behind the tile (N, or the panel). */
+let showCtx = h.get('around') !== '0';
 const back = new URLSearchParams(h);
-for (const k of ['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time']) back.delete(k);
+for (const k of ['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around']) back.delete(k);
 $<HTMLAnchorElement>('back').href = '/#' + back.toString();
 
 // --- Scene ---
@@ -69,12 +73,15 @@ sun.shadow.mapSize.set(4096, 4096);
 sun.shadow.bias = -0.0004;
 const rim = new THREE.DirectionalLight(0xdfe8ff, 0);
 scene.add(hemi, sun, sun.target, rim, rim.target);
+// Lights reach layer 1 too, where the backdrop of neighbouring hexes is drawn.
+for (const l of [hemi, sun, rim]) l.layers.enableAll();
 
 // The planet's atmosphere, for the Earth style: the map is put back on the planet (planet radii,
 // true size) and drawn through a camera that mirrors the orbit camera, so the planet's own sky,
 // haze and reddened sunlight apply. Every material carries it; it is off in the other styles.
 const atmo = new Atmosphere();
 scene.add(atmo.sky);
+atmo.sky.layers.enableAll();
 applyAerial(treeMaterial, true);
 const planetCam = new THREE.PerspectiveCamera(50, 1, 1e-6, 1);
 /** Map metres to planet radii, for the current map (identity until a map is in). */
@@ -92,10 +99,29 @@ const tiltH = new ShaderPass(TILT_SHIFT), tiltV = new ShaderPass(TILT_SHIFT);
 tiltV.uniforms.uDir.value = [0, 1];
 composer.addPass(photoPass); composer.addPass(gradePass); composer.addPass(tiltH); composer.addPass(tiltV);
 composer.addPass(new OutputPass());
+// The backdrop: the neighbouring ground drawn alone (layer 1) at half size, blurred, and set
+// behind the tile as the background, so the tile stays sharp in a soft world.
+const ctxRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+const blurRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+const blurMat = new THREE.ShaderMaterial({
+  uniforms: { tSrc: { value: null }, uDir: { value: new THREE.Vector2() } },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: /* glsl */`
+    uniform sampler2D tSrc; uniform vec2 uDir; varying vec2 vUv;
+    void main() {
+      vec4 s = vec4(0.0); float ws = 0.0;
+      for (int k = -8; k <= 8; k++) { float w = exp(-float(k * k) / 32.0); s += texture2D(tSrc, vUv + uDir * float(k)) * w; ws += w; }
+      gl_FragColor = s / ws;
+    }`,
+  depthTest: false, depthWrite: false,
+});
+const blurQuad = new FullScreenQuad(blurMat);
 function resize() {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
+  const half = (v: number) => Math.max(1, Math.round(v * renderer.getPixelRatio() / 2));
+  ctxRT.setSize(half(innerWidth), half(innerHeight)); blurRT.setSize(half(innerWidth), half(innerHeight));
   const pr = renderer.getPixelRatio();
   tiltH.uniforms.uRes.value = tiltV.uniforms.uRes.value = [innerWidth * pr, innerHeight * pr];
 }
@@ -245,6 +271,56 @@ function hexShape(m: LocalMap) {
 /** Lit windows in the towns, shown from dusk, and a soft glow over each lit house so a town reads
  * from afar; the tile's sides (unlit, dimmed by the hour). */
 let windows: THREE.InstancedMesh | null = null;
+/** The backdrop map from the worker, and its mesh in the current build. */
+let ctxMap: LocalMap | null = null;
+let ctxMesh: THREE.Mesh | null = null;
+
+/** The ground around the hex as one coarse mesh on layer 1, in the style's colours, water flat,
+ * fading out toward its edge. */
+function addContext(aerial: boolean) {
+  if (!ctxMap || !map || ctxMap.cell !== map.cell) return;
+  if (ctxMesh) { world.remove(ctxMesh); ctxMesh.geometry.dispose(); (ctxMesh.material as THREE.Material).dispose(); ctxMesh = null; }
+  const c = ctxMap, st = style, R = c.res, half = c.size / 2, step = c.size / (R - 1), N = R * R;
+  const paint = paintGround(c, st);
+  const pos = new Float32Array(N * 3), rgba = new Float32Array(N * 4);
+  const sh = col(st.water.shallow), dp = col(st.water.deep);
+  // No tree models out here, so woods are painted as canopy, or blurred forest reads as bare ground.
+  const canopy = col(st.ground === 'palette' ? st.palette.forest : 0x2e4424).multiplyScalar(0.8);
+  const edge = half * 0.98;
+  for (let j = 0; j < R; j++) for (let i = 0; i < R; i++) {
+    const v = j * R + i, x = -half + i * step, y = -half + j * step;
+    let hv = c.heights[v], r = paint[v * 3], g = paint[v * 3 + 1], b = paint[v * 3 + 2];
+    const f = Math.min(1, c.layers[v * LAYERS + L_FOREST] * 1.3) * 0.8;
+    r += (canopy.r - r) * f; g += (canopy.g - g) * f; b += (canopy.b - b) * f;
+    let lvl = c.sea ? 0 : -Infinity;
+    if (!Number.isNaN(c.lakeLevel) && c.lakeMask[v] > 0.5) lvl = Math.max(lvl, c.lakeLevel);
+    if (hv < lvl) {
+      const t = Math.min(1, (lvl - hv) / 30);
+      r = sh.r + (dp.r - sh.r) * t; g = sh.g + (dp.g - sh.g) * t; b = sh.b + (dp.b - sh.b) * t;
+      hv = lvl;
+    }
+    pos[v * 3] = x; pos[v * 3 + 1] = hv; pos[v * 3 + 2] = -y;
+    rgba[v * 4] = r; rgba[v * 4 + 1] = g; rgba[v * 4 + 2] = b;
+    rgba[v * 4 + 3] = 1 - THREE.MathUtils.smoothstep(Math.hypot(x, y), edge * 0.6, edge);
+  }
+  const idx: number[] = [];
+  for (let j = 0; j < R - 1; j++) for (let i = 0; i < R - 1; i++) {
+    const a = j * R + i, b2 = a + 1, cc = a + R, d = cc + 1;
+    idx.push(a, b2, cc, b2, d, cc);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(rgba, 4));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, roughness: 1 });
+  if (aerial) applyAerial(mat, true);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = 'context';
+  mesh.layers.set(1);
+  world.add(mesh);
+  ctxMesh = mesh;
+}
 let glow: THREE.Points | null = null;
 let sidesMat: THREE.MeshBasicMaterial | null = null;
 const glowTex = (() => {
@@ -257,7 +333,7 @@ const glowTex = (() => {
 
 function build(m: LocalMap) {
   scene.remove(world); dispose(world);
-  windows = null; glow = null; sidesMat = null;
+  windows = null; glow = null; sidesMat = null; ctxMesh = null;
   world = new THREE.Group();
   const st = style;
   const { res, size } = m, half = size / 2, step = size / (res - 1);
@@ -553,6 +629,9 @@ function build(m: LocalMap) {
   outline.visible = showOutline && !cut;
   world.add(outline);
 
+  // The backdrop of neighbouring hexes, if the worker has sent it (it follows the hex).
+  addContext(false);
+
   // The atmosphere on everything (a no-op outside the Earth style).
   world.traverse((o) => {
     const mesh = o as THREE.Mesh;
@@ -716,10 +795,13 @@ function pickStyle(id: string, keepTilt = false) {
   syncPanel(); writeHash();
   if (map) { build(map); if (frameChanged || true) resetView(); }
 }
+function setAround(on: boolean) { showCtx = on; $<HTMLInputElement>('around').checked = on; writeHash(); }
+$<HTMLInputElement>('around').onchange = (e) => setAround((e.target as HTMLInputElement).checked);
 function setTilt(on: boolean) { tiltOn = on; tiltH.enabled = tiltV.enabled = on; syncPanel(); writeHash(); }
 function syncPanel() {
   for (const b of stylesEl.querySelectorAll('button')) b.classList.toggle('on', b.dataset.id === style.id);
   $<HTMLInputElement>('tilt').checked = tiltOn;
+  $<HTMLInputElement>('around').checked = showCtx;
   $<HTMLInputElement>('mag').value = String(opts.mag); $('mag-out').textContent = `${opts.mag}×`;
   $<HTMLInputElement>('vscale').value = String(opts.vScale); $('vscale-out').textContent = String(opts.vScale);
   $<HTMLSelectElement>('river').value = opts.riverMode;
@@ -752,6 +834,7 @@ function writeHash() {
   if (opts.crags !== D.crags) o.set('crags', opts.crags ? '1' : '0');
   if (opts.res !== D.res) o.set('res', String(opts.res));
   if (userHour !== null) o.set('time', userHour.toFixed(2));
+  if (!showCtx) o.set('around', '0');
   history.replaceState(null, '', location.pathname + '#' + o.toString());
 }
 
@@ -785,7 +868,12 @@ function request() {
   busy = true; $('busy').hidden = false;
   worker.postMessage({ params, cell, spot: cell < 0 ? (spot ?? 'river') : undefined, opts });
 }
-worker.onmessage = (e: MessageEvent<{ map: LocalMap; ms: { world: number; local: number } }>) => {
+worker.onmessage = (e: MessageEvent<{ map: LocalMap; ms: { world: number; local: number }; context?: LocalMap }>) => {
+  if (e.data.context) {
+    ctxMap = e.data.context;
+    if (map) addContext(true);
+    return;
+  }
   busy = false;
   const m = e.data.map;
   // Keep the camera's place relative to the map size, so changes compare from the same angle.
@@ -844,6 +932,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'BracketRight') { playing = false; setTime(hourNow() + 0.5); }
   if (e.code === 'KeyP') $('play').click();
   if (e.code === 'KeyT') setTilt(!tiltOn);
+  if (e.code === 'KeyN') setAround(!showCtx);
   if (e.code === 'KeyH' && outline) outline.visible = !outline.visible;
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -891,8 +980,33 @@ renderer.setAnimationLoop(() => {
     atmo.update(renderer, camera, sunDir, false);
     renderPass.camera = camera;
   }
-  composer.render();
+  renderFrame();
 });
+
+function renderFrame() {
+  if (!ctxMesh || !showCtx) { composer.render(); return; }
+  const cam = renderPass.camera as THREE.PerspectiveCamera;
+  // 1. The neighbouring ground alone, with the sky, at half size.
+  cam.layers.set(1);
+  renderer.shadowMap.autoUpdate = false;
+  renderer.setRenderTarget(ctxRT); renderer.clear(); renderer.render(scene, cam);
+  renderer.shadowMap.autoUpdate = true;
+  cam.layers.set(0);
+  // 2. Blurred, twice each way.
+  const sp = 1.5 * Math.max(1, ctxRT.height / 400);
+  for (let it = 0; it < 2; it++) {
+    blurMat.uniforms.tSrc.value = ctxRT.texture; blurMat.uniforms.uDir.value.set(sp / ctxRT.width, 0);
+    renderer.setRenderTarget(blurRT); blurQuad.render(renderer);
+    blurMat.uniforms.tSrc.value = blurRT.texture; blurMat.uniforms.uDir.value.set(0, sp / ctxRT.height);
+    renderer.setRenderTarget(ctxRT); blurQuad.render(renderer);
+  }
+  renderer.setRenderTarget(null);
+  // 3. The tile, sharp, in front of it (the sky is already in the backdrop).
+  const bg = scene.background, sky = atmo.sky.visible;
+  scene.background = ctxRT.texture; atmo.sky.visible = false;
+  composer.render();
+  scene.background = bg; atmo.sky.visible = sky;
+}
 
 syncPanel();
 request();
@@ -901,7 +1015,7 @@ void LAYERS; void L_DEPTH;
   get map() { return map; },
   get busy() { return busy; },
   get style() { return style.id; },
-  resetView, scene, pickStyle, setTilt, setTime,
+  resetView, scene, pickStyle, setTilt, setTime, setAround,
   /** Hide the panels for clean screenshots. */
   capture: (on: boolean) => document.body.classList.toggle('capture', on),
   /**

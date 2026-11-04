@@ -52,9 +52,14 @@ export interface LocalOptions {
   res: number;
   /** What the planet's radius means in km (main.ts radiusKm). */
   radiusKm: number;
+  /** How much ground around the hex, as a multiple of the usual square (1). The backdrop of
+   * neighbouring hexes uses about 3. */
+  extent: number;
+  /** Plants (trees, shrubs, tufts). Off for the backdrop, which is drawn blurred. */
+  plants: boolean;
 }
 
-export const LOCAL_DEFAULTS: LocalOptions = { mag: 10, vScale: 2, vSoft: 600, riverMode: 'flow', crags: true, res: 513, radiusKm: 640 };
+export const LOCAL_DEFAULTS: LocalOptions = { mag: 10, vScale: 2, vSoft: 600, riverMode: 'flow', crags: true, res: 513, radiusKm: 640, extent: 1, plants: true };
 
 export interface LocalRiver {
   /** Per point: x, y, water level, width (local metres). */
@@ -248,11 +253,11 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     const bx = hex[((k + 1) % cc.length) * 2], by = hex[((k + 1) % cc.length) * 2 + 1];
     apothem = Math.min(apothem, Math.abs(ax * by - ay * bx) / Math.hypot(bx - ax, by - ay));
   }
-  const size = reach * 2 * 1.3;
+  const size = reach * 2 * 1.3 * o.extent;
   const res = o.res, step = size / (res - 1), half = size / 2;
 
   // Cells in reach.
-  const cellList = ringsOf(w, cell, 3);
+  const cellList = ringsOf(w, cell, 3 + Math.ceil((o.extent - 1) * 2.5));
   const M = cellList.length;
   const cellXY = new Float32Array(M * 2);
   for (let i = 0; i < M; i++) {
@@ -680,7 +685,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   // --- Plants: the planet's own models in its per-biome mix (flora.ts), life-size, on a jittered
   // grid, trees clumped into groves (the same pattern as the canopy colour).
   const treeOut: number[] = [];
-  const TS = 7, cnt = Math.floor(size / TS);
+  const TS = 7, cnt = o.plants ? Math.floor(size / TS) : 0;
   for (let b = 0; b < cnt; b++) {
     for (let a = 0; a < cnt; a++) {
       const x = -half + (a + rng()) * TS, y = -half + (b + rng()) * TS;

@@ -15,6 +15,8 @@ page.on('pageerror', (e) => errors.push(e.message));
 page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('favicon')) errors.push(m.text()); });
 const settle = async () => {
   await page.waitForFunction(() => window.hex?.map && !window.hex.busy, null, { timeout: 180000 });
+  // The backdrop of neighbouring hexes follows the hex.
+  await page.waitForFunction(() => window.hex.scene.getObjectByName('context'), null, { timeout: 60000 }).catch(() => {});
   await page.waitForTimeout(600);
 };
 const styles = process.env.STYLES ? process.env.STYLES.split(',') : null;

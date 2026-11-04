@@ -12,6 +12,7 @@ const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 await page.goto(`${base}hex.html#seed=1&cell=${cell}&style=${style}`);
 await page.waitForFunction(() => window.hex?.map && !window.hex.busy, null, { timeout: 180000 });
+await page.waitForFunction(() => window.hex.scene.getObjectByName('context'), null, { timeout: 60000 }).catch(() => {});
 await page.evaluate(() => window.hex.capture(true));
 for (const hr of hours) {
   await page.evaluate((t) => window.hex.setTime(t), hr);

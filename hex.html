@@ -60,6 +60,7 @@
     <div id="timerow"><button id="play" type="button" title="Play the day (P)">▶</button><input id="time" type="range" min="0" max="23.99" step="0.05" /><output id="time-out"></output></div>
     <div id="timeinfo"><span id="time-sun"></span> · <a href="#" id="time-reset" onclick="return false">style's own hour</a></div>
     <label class="row">Tilt-shift <input id="tilt" type="checkbox" style="justify-self:start" /><span></span></label>
+    <label class="row">Neighbours <input id="around" type="checkbox" style="justify-self:start" /><span></span></label>
     <details id="tuning"><summary>Tuning</summary>
     <label class="row">Smaller by <input id="mag" type="range" min="4" max="40" step="1" /><output id="mag-out"></output></label>
     <label class="row">Heights ÷ <input id="vscale" type="range" min="1" max="40" step="0.5" /><output id="vscale-out"></output></label>
@@ -73,7 +74,7 @@
   </div>
   <div id="inset" class="card"><canvas id="map" width="480" height="480"></canvas><div>The planet's view of this ground · white = this hex</div></div>
   <div id="busy" class="card">Building the hex…</div>
-  <div id="hint" class="card">Drag to orbit · 1–6 style · [ ] hour · P play the day · T tilt-shift · right-drag to pan · scroll to zoom · H hex outline · the red figure is 1.8 m</div>
+  <div id="hint" class="card">Drag to orbit · 1–6 style · [ ] hour · P play the day · N neighbours · T tilt-shift · right-drag to pan · scroll to zoom · H hex outline · the red figure is 1.8 m</div>
   <script>document.getElementById('more').onclick = () => document.getElementById('panel').classList.toggle('open');</script>
   <script type="module" src="/src/hex.ts"></script>
 </body>
