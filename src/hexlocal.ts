@@ -378,6 +378,16 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       let d = 0, a = 1, f = 1 / rollL, nn = 0;
       for (let k = 0; k < 5; k++) { d += a * noise(x * f, y * f, 21 + k); nn += a; a *= 0.5; f *= 2.1; }
       heights[v] += rollA * d / nn;
+      // Sand seas: dunes, long crests across the wind with a steep slip face (a sawtooth across
+      // the crest line, wandering along it), only on sand desert.
+      const ob = w.biome[cellList[owner[v]]];
+      if (ob === B.DESERT) {
+        const wob = noise(x / 300, y / 300, 131) * 60;
+        const u = (x * 0.8 + y * 0.6 + wob) / 150, ph = u - Math.floor(u);
+        const saw = ph < 0.75 ? ph / 0.75 : (1 - ph) / 0.25;
+        const amp = 16 * smooth(-0.3, 0.3, noise(x / 260, y / 260, 133) + 0.25);
+        heights[v] += amp * (saw * saw - 0.4);
+      }
       if (o.crags) {
         const mtn = smooth(1200, 4500, baseTrue[v]);
         if (mtn > 0) {

@@ -126,6 +126,35 @@ function dispose(o: THREE.Object3D) {
 
 const col = (hex: number) => new THREE.Color(hex);
 
+/** Water that moves: small ripples in the normal (so the light glints) and foam that shimmers. */
+const waterTime = { value: 0 };
+function animateWater(mat: THREE.MeshStandardMaterial) {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uWTime = waterTime;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWP;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWP; uniform float uWTime;')
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        {
+          vec2 p = vWP.xz;
+          float t = uWTime;
+          vec2 g = vec2(
+            sin(p.x * 0.31 + t * 1.1) * 0.5 + sin(p.x * 0.73 - p.y * 0.41 + t * 1.7) * 0.3 + sin((p.x + p.y) * 1.9 + t * 2.6) * 0.12,
+            sin(p.y * 0.29 - t * 0.9) * 0.5 + sin(p.y * 0.67 + p.x * 0.37 - t * 1.5) * 0.3 + sin((p.y - p.x) * 2.1 - t * 2.3) * 0.12);
+          normal = normalize(normal + (viewMatrix * vec4(g.x * 0.09, 0.0, g.y * 0.09, 0.0)).xyz);
+        }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        {
+          // Foam (the palest vertex colours) breathes in and out.
+          float foam = smoothstep(0.55, 0.85, dot(vColor.rgb, vec3(0.33)));
+          diffuseColor.rgb *= 1.0 + foam * 0.12 * sin(uWTime * 1.3 + vWP.x * 0.21 + vWP.z * 0.17);
+        }`);
+  };
+  mat.customProgramCacheKey = () => 'hexwater';
+}
+
 // Ground textures (CC0, public/assets/hex/CREDITS.md), and each one's mean brightness, so the
 // shader can use their grain without shifting the style's colours.
 const texMean = { grass: 0.2, ground: 0.2, rock: 0.2 };
@@ -296,7 +325,11 @@ function build(m: LocalMap) {
 
   // Water: coloured by depth, shallow to deep, with foam where it meets the land.
   const W = st.water, shallow = col(W.shallow), deep = col(W.deep), foam = col(W.foam);
-  const waterMat = () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: W.roughness, metalness: 0.05, transparent: true, opacity: W.opacity });
+  const waterMat = () => {
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: W.roughness, metalness: 0.05, transparent: true, opacity: W.opacity });
+    animateWater(mat);
+    return mat;
+  };
   const tint = (depth: number, out3: THREE.Color) => {
     out3.copy(shallow).lerp(deep, Math.min(1, depth / 10));
     if (depth < W.foamDepth) out3.lerp(foam, 1 - depth / W.foamDepth);
@@ -420,7 +453,20 @@ function build(m: LocalMap) {
       roofs.setMatrixAt(n, hm.compose(hp.set(x, gy + wh, -y), hq, hs.set(dp * 1.0, Math.min(wd, dp) * 0.55, wd * 1.0)));
       roofs.setColorAt(n, hc.setHex(st.town.roofs[Math.floor(ch * st.town.roofs.length) % st.town.roofs.length]));
     });
-    for (const im of [walls, roofs]) { im.castShadow = true; im.receiveShadow = true; world.add(im); }
+    // Chimneys on most houses, at one end of the ridge.
+    const withChim = keep.filter((k) => HS[k * HOUSE_STRIDE + 7] < 0.7);
+    const chims = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ roughness: 0.9 }), Math.max(1, withChim.length));
+    chims.count = withChim.length;
+    const cOff = new THREE.Vector3();
+    withChim.forEach((k, n) => {
+      const o = k * HOUSE_STRIDE, x = HS[o], y = HS[o + 1], gy = HS[o + 2], rot = HS[o + 3];
+      const wd = HS[o + 4] * K, dp = HS[o + 5] * K, wh = HS[o + 6] * K;
+      hq.setFromAxisAngle(up2, rot);
+      cOff.set(wd * 0.3, 0, dp * 0.15).applyQuaternion(hq);
+      chims.setMatrixAt(n, hm.compose(hp.set(x + cOff.x, gy + wh, -y + cOff.z), hq, hs.set(0.9 * K, Math.min(wd, dp) * 0.55 + 1.2 * K, 0.9 * K)));
+      chims.setColorAt(n, hc.setHex(0x6a5a50));
+    });
+    for (const im of [walls, roofs, chims]) { im.castShadow = true; im.receiveShadow = true; world.add(im); }
   }
 
   // A person (1.8 m) beside the centre, for scale.
@@ -694,6 +740,7 @@ renderer.setAnimationLoop(() => {
   timer.update();
   const dt = Math.min(0.1, timer.getDelta());
   frames++; fpsT += dt;
+  waterTime.value += dt;
   if (fpsT > 1) { $('fps').textContent = `${Math.round(frames / fpsT)} fps`; frames = 0; fpsT = 0; }
   if (walker.isLocked && map) {
     const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 14 : 1.6;
