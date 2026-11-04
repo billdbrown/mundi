@@ -172,7 +172,7 @@ const CLIMATE_PALETTE = [
   [0xc4a582, 0xab9e72, 0x7b8a49, 0x4a642c, 0x34542b],   // temperate
   [0xd99b6a, 0xbf9862, 0x8f8a4a, 0x52682b, 0x2a5222],   // tropical
 ].map((row) => row.map((hex) => new THREE.Color(hex)));
-function climateColour(m: number, t: number, out: THREE.Color) {
+export function climateColour(m: number, t: number, out: THREE.Color) {
   const idx = (v: number, xs: number[]) => {
     if (v <= xs[0]) return [0, 0];
     for (let i = 0; i < xs.length - 1; i++) if (v <= xs[i + 1]) return [i, (v - xs[i]) / (xs[i + 1] - xs[i])];
@@ -193,7 +193,7 @@ function climateColour(m: number, t: number, out: THREE.Color) {
  * x standing water and reeds, y salt crust, z banded rock, w coral. Blended across cells like
  * the colours, so a swamp fades into the forest round it. Sea ones tint the sea bed.
  */
-const ECO: Partial<Record<number, [number, number, [number, number, number, number]?]>> = {
+export const ECO: Partial<Record<number, [number, number, [number, number, number, number]?]>> = {
   [B.SWAMP]: [0x2e4626, 0.45, [0.9, 0, 0, 0]], [B.MARSH]: [0x5a6638, 0.4, [0.8, 0, 0, 0]],
   [B.BOG]: [0x6b6040, 0.5, [0.6, 0, 0, 0]], [B.FLOODPLAIN]: [0x4f7432, 0.35, [0.3, 0, 0, 0]],
   [B.MANGROVE]: [0x23402a, 0.55, [0.7, 0, 0, 0]], [B.SALT_MARSH]: [0x6f7a48, 0.45, [0.6, 0, 0, 0]],
@@ -214,7 +214,7 @@ const SHOAL = new Set<number>([B.REEF, B.LAGOON]);
 const ECO_COL = new Map<number, THREE.Color>(Object.entries(ECO).map(([b, v]) => [Number(b), new THREE.Color(v![0])]));
 
 /** Cells whose own colour stands rather than the climate palette: ice and bare high rock. */
-const OWN_COLOUR = new Set<number>([B.ICE]);   // mountains take the climate's colour; rock is per pixel
+export const OWN_COLOUR = new Set<number>([B.ICE]);   // mountains take the climate's colour; rock is per pixel
 
 function cornerCellsOf(world: World): number[][] {
   const g = world.grid;

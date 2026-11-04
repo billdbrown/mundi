@@ -6,10 +6,15 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { GRADE_SHADER } from './grade.ts';
+import { treeGeometry, treeMaterial } from './flora.ts';
 import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
 import { parseSeed } from './seedname.ts';
-import { LOCAL_DEFAULTS, VARIANTS, localHeights, TREE_BROAD, TREE_CONIFER, TREE_PALM, TREE_SHRUB, type LocalMap, type LocalOptions } from './hexlocal.ts';
+import { LOCAL_DEFAULTS, localHeights, type LocalMap, type LocalOptions } from './hexlocal.ts';
 import type { Spot } from './debug.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -26,9 +31,6 @@ for (const k of Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[]) {
 let cell = Number(h.get('cell') ?? -1);
 const spot = (h.get('spot') ?? undefined) as Spot | undefined;
 let opts: LocalOptions = { ...LOCAL_DEFAULTS, radiusKm: Number(h.get('radius')) || LOCAL_DEFAULTS.radiusKm };
-let variant = h.get('v') ?? 'aware10';
-const chosen = VARIANTS.find((v) => v.id === variant);
-if (chosen) opts = { ...opts, ...chosen.o };
 for (const k of ['mag', 'vScale', 'vSoft', 'res'] as const) if (h.get(k)) opts[k] = Number(h.get(k));
 if (h.get('river') === 'scaled' || h.get('river') === 'flow') opts.riverMode = h.get('river') as LocalOptions['riverMode'];
 if (h.get('crags')) opts.crags = h.get('crags') === '1';
@@ -45,9 +47,19 @@ renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 $('view').appendChild(renderer.domElement);
 const scene = new THREE.Scene();
-const SKY = new THREE.Color(0xa9c3d6);
-scene.background = SKY;
-scene.fog = new THREE.FogExp2(SKY, 0.0005);
+// Sky: deep blue overhead to a pale haze at the horizon, as from low on the planet; the fog is the
+// horizon colour, so far ground fades into it.
+const HAZE = new THREE.Color(0x9fb4c8), ZENITH = new THREE.Color(0x2f5490);
+scene.fog = new THREE.FogExp2(HAZE, 0.0005);
+// (A painted gradient: a sky dome drew a hard band where it met the plain background.)
+{
+  const cv = document.createElement('canvas'); cv.width = 2; cv.height = 256;
+  const g = cv.getContext('2d')!, gr = g.createLinearGradient(0, 0, 0, 256);
+  gr.addColorStop(0, '#' + ZENITH.getHexString()); gr.addColorStop(0.55, '#' + HAZE.getHexString()); gr.addColorStop(1, '#' + HAZE.getHexString());
+  g.fillStyle = gr; g.fillRect(0, 0, 2, 256);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  scene.background = tex;
+}
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.3, 50000);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -59,9 +71,15 @@ sun.castShadow = true;
 sun.shadow.mapSize.set(4096, 4096);
 sun.shadow.bias = -0.0004;
 scene.add(sun, sun.target);
+// The planet's photo look: render, grade in linear light, then tone map and encode.
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new ShaderPass(GRADE_SHADER));
+composer.addPass(new OutputPass());
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
 });
 
 let map: LocalMap | null = null;
@@ -82,6 +100,7 @@ const waterAt = (x: number, y: number) => Math.max(map?.sea ? 0 : -Infinity, gro
 
 function dispose(o: THREE.Object3D) {
   o.traverse((n) => {
+    if (n.name === 'plants') return;           // shared with flora.ts: geometry and material are cached there
     const m = n as THREE.Mesh;
     m.geometry?.dispose();
     const mat = m.material as THREE.Material | THREE.Material[] | undefined;
@@ -90,25 +109,6 @@ function dispose(o: THREE.Object3D) {
 }
 
 const waterMat = () => new THREE.MeshStandardMaterial({ color: 0x24505e, roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.9 });
-
-function treeGeometries(): THREE.BufferGeometry[] {
-  const paint = (geo: THREE.BufferGeometry, hex: number) => {
-    const g = geo.index ? geo.toNonIndexed() : geo;
-    const c = new THREE.Color(hex), n = g.attributes.position.count, a = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; }
-    g.setAttribute('color', new THREE.BufferAttribute(a, 3));
-    g.deleteAttribute('uv');
-    return g;
-  };
-  const at = (geo: THREE.BufferGeometry, y: number, sy = 1) => { geo.scale(1, sy, 1); geo.translate(0, y, 0); return geo; };
-  const trunk = (r: number, hgt: number) => paint(at(new THREE.CylinderGeometry(r * 0.7, r, hgt, 6), hgt / 2), 0x4a3a2a);
-  return [
-    mergeGeometries([trunk(0.016, 0.3), paint(at(new THREE.ConeGeometry(0.2, 0.8, 8), 0.6), 0x2c4a2e)])!,
-    mergeGeometries([trunk(0.018, 0.45), paint(at(new THREE.IcosahedronGeometry(0.3, 1), 0.66, 0.85), 0x46682f)])!,
-    mergeGeometries([trunk(0.016, 0.9), paint(at(new THREE.IcosahedronGeometry(0.22, 1), 0.92, 0.35), 0x56783a)])!,
-    paint(at(new THREE.IcosahedronGeometry(0.5, 1), 0.42, 0.8), 0x5d6639),
-  ];
-}
 
 function build(m: LocalMap) {
   scene.remove(world); dispose(world);
@@ -197,31 +197,30 @@ function build(m: LocalMap) {
     world.add(mesh);
   }
 
-  // Trees, one instanced mesh per kind.
-  const geos = treeGeometries(), T = m.trees, count = T.length / 5;
-  const kinds = [TREE_CONIFER, TREE_BROAD, TREE_PALM, TREE_SHRUB];
+  // Plants: the planet's own models (flora.ts), one instanced mesh per kind, life-size.
+  const T = m.trees, STRIDE = 6, count = T.length / STRIDE;
+  const byKind = new Map<number, number[]>();
+  for (let i = 0; i < count; i++) {
+    const k = T[i * STRIDE + 4];
+    if (!byKind.has(k)) byKind.set(k, []);
+    byKind.get(k)!.push(i);
+  }
   const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3(), col = new THREE.Color();
   const up = new THREE.Vector3(0, 1, 0);
-  for (const kind of kinds) {
-    let c = 0;
-    for (let i = 0; i < count; i++) if (T[i * 5 + 4] === kind) c++;
-    if (!c) continue;
-    const mesh = new THREE.InstancedMesh(geos[kind], new THREE.MeshLambertMaterial({ vertexColors: true }), c);
-    let k = 0;
-    for (let i = 0; i < count; i++) {
-      if (T[i * 5 + 4] !== kind) continue;
-      const hgt = T[i * 5 + 3], jit = ((i * 2654435761) >>> 0) / 4294967296;
+  for (const [kind, list] of byKind) {
+    const mesh = new THREE.InstancedMesh(treeGeometry(kind), treeMaterial, list.length);
+    list.forEach((i, k) => {
+      const s = T[i * STRIDE + 3], jit = ((i * 2654435761) >>> 0) / 4294967296;
       q.setFromAxisAngle(up, jit * Math.PI * 2);
-      sc.set(hgt * (0.85 + 0.3 * jit), hgt, hgt * (0.85 + 0.3 * jit));
-      ps.set(T[i * 5], T[i * 5 + 2] - 0.2, -T[i * 5 + 1]);
+      sc.setScalar(s);
+      ps.set(T[i * STRIDE], T[i * STRIDE + 2] - 0.04 * s, -T[i * STRIDE + 1]);
       mesh.setMatrixAt(k, mtx.compose(ps, q, sc));
-      mesh.setColorAt(k, col.setScalar(0.8 + 0.4 * jit));
-      k++;
-    }
+      mesh.setColorAt(k, col.setHex(T[i * STRIDE + 5]));
+    });
     mesh.castShadow = true; mesh.receiveShadow = true;
+    mesh.name = 'plants';
     world.add(mesh);
   }
-  for (const g of geos) g.dispose();
 
   // A person (1.8 m) and a cottage at the centre, for scale.
   const gy = groundAtMap(m, 6, 0);
@@ -294,22 +293,7 @@ function drawInset(m: LocalMap) {
 }
 
 // --- Panel ---
-const variantsEl = $('variants');
-VARIANTS.forEach((v, i) => {
-  const b = document.createElement('button');
-  b.dataset.id = v.id;
-  b.innerHTML = `<kbd>${i + 1}</kbd>${v.label}<small>${v.blurb}</small>`;
-  b.onclick = () => pickVariant(v.id);
-  variantsEl.appendChild(b);
-});
-function pickVariant(id: string) {
-  const v = VARIANTS.find((x) => x.id === id);
-  if (!v) return;
-  variant = id; opts = { ...opts, ...v.o };
-  syncPanel(); request();
-}
 function syncPanel() {
-  for (const b of variantsEl.querySelectorAll('button')) b.classList.toggle('on', b.dataset.id === variant);
   $<HTMLInputElement>('mag').value = String(opts.mag); $('mag-out').textContent = `${opts.mag}×`;
   $<HTMLInputElement>('vscale').value = String(opts.vScale); $('vscale-out').textContent = String(opts.vScale);
   $<HTMLSelectElement>('river').value = opts.riverMode;
@@ -317,7 +301,7 @@ function syncPanel() {
   $<HTMLInputElement>('crags').checked = opts.crags;
   $<HTMLSelectElement>('res').value = String(opts.res);
 }
-const custom = () => { variant = 'custom'; syncPanel(); request(); };
+const custom = () => { syncPanel(); request(); };
 $<HTMLInputElement>('mag').oninput = (e) => { opts.mag = Number((e.target as HTMLInputElement).value); $('mag-out').textContent = `${opts.mag}×`; };
 $<HTMLInputElement>('mag').onchange = custom;
 $<HTMLInputElement>('vscale').oninput = (e) => { opts.vScale = Number((e.target as HTMLInputElement).value); $('vscale-out').textContent = String(opts.vScale); };
@@ -330,8 +314,13 @@ $<HTMLSelectElement>('res').onchange = (e) => { opts.res = Number((e.target as H
 function writeHash() {
   const out = new URLSearchParams(back);
   out.set('cell', String(cell));
-  if (variant !== 'custom') out.set('v', variant);
-  else { out.set('mag', String(opts.mag)); out.set('vScale', String(opts.vScale)); out.set('vSoft', String(opts.vSoft)); out.set('river', opts.riverMode); out.set('crags', opts.crags ? '1' : '0'); }
+  // Only what differs from the defaults (content-aware 10x).
+  const D = LOCAL_DEFAULTS;
+  if (opts.mag !== D.mag) out.set('mag', String(opts.mag));
+  if (opts.vScale !== D.vScale) out.set('vScale', String(opts.vScale));
+  if (opts.vSoft !== D.vSoft) out.set('vSoft', String(opts.vSoft));
+  if (opts.riverMode !== D.riverMode) out.set('river', opts.riverMode);
+  if (opts.crags !== D.crags) out.set('crags', opts.crags ? '1' : '0');
   if (opts.res !== LOCAL_DEFAULTS.res) out.set('res', String(opts.res));
   history.replaceState(null, '', location.pathname + '#' + out.toString());
 }
@@ -378,7 +367,7 @@ worker.onmessage = (e: MessageEvent<{ map: LocalMap; ms: { world: number; local:
   if (rel) { camera.position.copy(rel.p.multiplyScalar(m.size)); controls.target.copy(rel.t.multiplyScalar(m.size)); }
   else resetView();
   firstBuild = false;
-  $('timing').textContent = `world ${Math.round(e.data.ms.world)} ms · hex ${Math.round(e.data.ms.local)} ms · ${(m.trees.length / 5).toLocaleString()} trees`;
+  $('timing').textContent = `world ${Math.round(e.data.ms.world)} ms · hex ${Math.round(e.data.ms.local)} ms · ${(m.trees.length / 6).toLocaleString()} plants`;
   writeHash();
   if (again) { again = false; request(); } else $('busy').hidden = true;
 };
@@ -411,7 +400,6 @@ addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (walker.isLocked) return;
   const n = Number(e.key);
-  if (n >= 1 && n <= VARIANTS.length) pickVariant(VARIANTS[n - 1].id);
   if (e.code === 'KeyH' && outline) outline.visible = !outline.visible;
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -436,7 +424,7 @@ renderer.setAnimationLoop(() => {
     camera.position.z = Math.max(-lim, Math.min(lim, camera.position.z));
     camera.position.y = waterAt(camera.position.x, -camera.position.z) + 1.7;
   } else controls.update();
-  renderer.render(scene, camera);
+  composer.render();
 });
 
 syncPanel();
@@ -444,7 +432,7 @@ request();
 (window as unknown as Record<string, unknown>).hex = {
   get map() { return map; },
   get busy() { return busy; },
-  pickVariant, resetView, scene,
+  resetView, scene,
   /** Hide the panels for clean screenshots. */
   capture: (on: boolean) => document.body.classList.toggle('capture', on),
   /**

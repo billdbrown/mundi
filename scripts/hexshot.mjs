@@ -1,12 +1,12 @@
 /**
- * Screenshots of the hex view: every variant, for a few kinds of spot, from the same angle.
- * Usage: [SPOTS=river,mountain,coast] [VARIANTS=shrink10,aware10] [WALK=1] node scripts/hexshot.mjs <base url> <outdir>
+ * Screenshots of the hex view for a few kinds of spot, from above and (WALK=1) at eye level.
+ * Usage: [SPOTS=river,mountain,coast] [WALK=1] node scripts/hexshot.mjs <base url> <outdir>
  * base url is the dev server root, e.g. http://localhost:5173/
  */
 import { chromium } from 'playwright-core';
 const [base = 'http://localhost:5173/', out = '.'] = process.argv.slice(2);
 const spots = (process.env.SPOTS ?? 'river,mountain,coast').split(',');
-const variants = (process.env.VARIANTS ?? 'shrink10,shrink20,aware10,aware20').split(',');
+const variants = ['default'];
 const seed = process.env.SEED ?? '1';
 const browser = await chromium.launch({ channel: process.env.BROWSER ?? 'msedge', args: ['--use-angle=d3d11', '--enable-gpu'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -19,11 +19,9 @@ const settle = async () => {
 };
 for (const spot of spots) {
   await page.goto("about:blank");
-  await page.goto(`${base}hex.html#seed=${seed}&spot=${spot}&v=${variants[0]}`);
+  await page.goto(`${base}hex.html#seed=${seed}&spot=${spot}`);
   await settle();
   for (const v of variants) {
-    await page.evaluate((id) => window.hex.pickVariant(id), v);
-    await settle();
     await page.evaluate(() => window.hex.resetView());
     await page.waitForTimeout(400);
     await page.screenshot({ path: `${out}/${spot}-${v}.png` });

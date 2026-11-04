@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateWorld, DEFAULT_PARAMS } from '../src/world.ts';
-import { buildLocalMap, riverCrossings, VARIANTS } from '../src/hexlocal.ts';
+import { buildLocalMap, riverCrossings, type LocalOptions } from '../src/hexlocal.ts';
 import { findSpot } from '../src/debug.ts';
 
 const world = generateWorld({ ...DEFAULT_PARAMS, seed: 7, detail: 30 });
@@ -16,8 +16,10 @@ test('a hex map is the same every time', () => {
 });
 
 test('rivers cross each hex edge at the middle of the edge the planet says', () => {
-  for (const v of VARIANTS) {
-    const m = buildLocalMap(world, riverCell, { res: 65, ...v.o });
+  const settings: [string, Partial<LocalOptions>][] = [['default', {}], ['plain shrink 20x', { mag: 20, vScale: 20, vSoft: 0, riverMode: 'scaled', crags: false }]];
+  for (const [name, o] of settings) {
+    const v = { id: name };
+    const m = buildLocalMap(world, riverCell, { res: 65, ...o });
     assert.ok(m.rivers.length > 0, 'the river cell has river pieces');
     // Every crossing sits on the boundary between two cells: on this hex's outline when the
     // piece leaves or enters it, which is the case we can check from the hex's own corners.

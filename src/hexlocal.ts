@@ -4,14 +4,19 @@
  * The whole hex is fitted into a map `mag` times smaller than it really is (compressed scale):
  * a 13 km hex at mag 10 becomes a 1.3 km map, while people, trees and houses stay life-size.
  * The planet decides the layout: where the coast is, which way the land slopes, which edges a
- * river enters and leaves by. The options decide how big each feature is drawn, so the variants
- * can be compared side by side:
+ * river enters and leaves by. The options decide how big each feature is drawn. The defaults
+ * are "content-aware 10×", picked 2026-11-03 over a plain shrink at 10× and 20×:
  *
  * - `vScale` divides heights. Equal to `mag` is a plain shrink (a 1 km mountain becomes 100 m);
  *   smaller keeps more relief and makes slopes steeper.
  * - `riverMode` 'scaled' shrinks rivers with everything else; 'flow' sizes them from their flow,
  *   life-size, so a big river still needs a bridge.
  * - `crags` adds walking-scale mountain detail (ridges, cliffs) where the planet is mountainous.
+ *
+ * Colours and plants follow the planet's Earth look: its biome colours, then the same climate
+ * patterns its terrain shader draws (sky.ts: mottled grass, dark canopy with clearings, green
+ * river strips, an alpine band and snow from its temperature model), and its own plant models in
+ * the same per-biome mix (flora.ts FLORA_RICH), at life size.
  *
  * Pure and deterministic for a world, cell and options, so it runs in a worker and under Node.
  * Local coordinates are metres: x east, y north, h up, origin at the cell's centre.
@@ -20,7 +25,11 @@ import type { World } from './world.ts';
 import { WATER_LAKE, WATER_OCEAN } from './world.ts';
 import { B, BIOMES } from './biomes.ts';
 import { makeSimplex, type Noise3 } from './noise.ts';
-import { makeRng } from './rng.ts';
+import { makeRng, hash01 } from './rng.ts';
+import { FLORA_RICH, CONIFER, BROADLEAF, SCRUB, PALM, ROCK as ROCK_KIND, CACTUS, ACACIA, BIRCH, TUFT, type TreeKind } from './flora.ts';
+import { FIRST, VARIANTS as SPECIES_VARIANTS, FAMILIES } from './species.ts';
+import { climateColour, ECO, OWN_COLOUR } from './surface.ts';
+import { Color } from 'three';
 
 export type RiverMode = 'scaled' | 'flow';
 
@@ -43,16 +52,6 @@ export interface LocalOptions {
 }
 
 export const LOCAL_DEFAULTS: LocalOptions = { mag: 10, vScale: 2, vSoft: 600, riverMode: 'flow', crags: true, res: 513, radiusKm: 640 };
-
-/** The variants offered side by side in the hex view. */
-export const VARIANTS: { id: string; label: string; blurb: string; o: Partial<LocalOptions> }[] = [
-  { id: 'shrink10', label: 'Shrink 10×', blurb: 'Everything scaled down together', o: { mag: 10, vScale: 10, vSoft: 0, riverMode: 'scaled', crags: false } },
-  { id: 'shrink20', label: 'Shrink 20×', blurb: 'Everything scaled down together', o: { mag: 20, vScale: 20, vSoft: 0, riverMode: 'scaled', crags: false } },
-  { id: 'aware10', label: 'Content-aware 10×', blurb: 'Soft heights, rivers by flow, crags', o: { mag: 10, vScale: 2, vSoft: 600, riverMode: 'flow', crags: true } },
-  { id: 'aware20', label: 'Content-aware 20×', blurb: 'Soft heights, rivers by flow, crags', o: { mag: 20, vScale: 3, vSoft: 450, riverMode: 'flow', crags: true } },
-];
-
-export const TREE_CONIFER = 0, TREE_BROAD = 1, TREE_PALM = 2, TREE_SHRUB = 3;
 
 export interface LocalRiver {
   /** Per point: x, y, water level, width (local metres). */
@@ -78,7 +77,7 @@ export interface LocalMap {
   rivers: LocalRiver[];
   /** Hex corners, x y pairs. */
   hex: Float32Array;
-  /** Per tree: x, y, h, height (m), kind. */
+  /** Per plant: x, y, h, scale (metres per model unit), kind (flora.ts), colour (0xRRGGBB, shade applied). */
   trees: Float32Array;
   /** Cells within reach and their centres (local), for the inset map. */
   cells: Int32Array;
@@ -96,24 +95,37 @@ export interface LocalMap {
 const RELIEF_RADII = 0.013;          // surface.ts RELIEF: highest land, in planet radii
 const tempC = (t: number) => 50 * t - 17;  // biomes.ts: temperature 0..1 to mean annual °C
 
-/** How wooded each biome is (0..1 of the densest forest) and with what. */
-const WOOD: Partial<Record<number, [number, number]>> = {
-  [B.TAIGA]: [0.95, TREE_CONIFER], [B.LARCH]: [0.7, TREE_CONIFER], [B.MONTANE_FOREST]: [0.85, TREE_CONIFER],
-  [B.TEMPERATE_RAIN]: [1, TREE_CONIFER], [B.BOG]: [0.06, TREE_CONIFER], [B.ALPINE_MEADOW]: [0.03, TREE_CONIFER],
-  [B.FOREST]: [0.85, TREE_BROAD], [B.MIXED_FOREST]: [0.85, -1], [B.RAINFOREST]: [1, TREE_BROAD],
-  [B.CLOUD_FOREST]: [1, TREE_BROAD], [B.MONSOON]: [0.85, TREE_BROAD], [B.DRY_FOREST]: [0.45, TREE_BROAD],
-  [B.SWAMP]: [0.6, TREE_BROAD], [B.MANGROVE]: [0.75, TREE_BROAD], [B.FLOODPLAIN]: [0.3, TREE_BROAD],
-  [B.KARST]: [0.55, TREE_BROAD], [B.SAVANNA]: [0.06, TREE_BROAD], [B.GRASSLAND]: [0.04, TREE_BROAD],
-  [B.PRAIRIE]: [0.015, TREE_BROAD], [B.STEPPE]: [0.01, TREE_SHRUB], [B.PALM_SAVANNA]: [0.08, TREE_PALM],
-  [B.CHAPARRAL]: [0.18, TREE_SHRUB], [B.DESERT_SCRUB]: [0.05, TREE_SHRUB], [B.HEATH]: [0.08, TREE_SHRUB],
-  [B.TUNDRA]: [0.03, TREE_SHRUB], [B.MARSH]: [0.03, TREE_SHRUB], [B.CANYONS]: [0.02, TREE_SHRUB],
-  [B.BADLANDS]: [0.01, TREE_SHRUB], [B.SALT_MARSH]: [0.01, TREE_SHRUB],
-};
-
-/** Snow by biome, 0..1, for ice caps only: elsewhere snow follows temperature, as on the planet
- * (biome snow painted a 3 °C "snowy peak" white where the planet draws green alpine slopes). */
-const SNOWY: Partial<Record<number, number>> = {
-  [B.ICE]: 1, [B.POLAR_DESERT]: 0.4,
+/** Metres per model unit for each plant kind (models are about one unit tall), so plants are
+ * drawn life-size: a conifer ~18 m, a tussock under a metre. */
+function plantMetres(kind: TreeKind): number {
+  if (kind >= FIRST) {
+    const f = FAMILIES[Math.floor((kind - FIRST) / SPECIES_VARIANTS)];
+    return ({ spruce: 16, umbrellaPine: 13, cypress: 11, oak: 17, poplar: 17, willow: 12, eucalypt: 19, emergent: 26,
+      baobab: 16, joshua: 8, royalPalm: 15, roundShrub: 4, reeds: 2.6, pricklyPear: 3, mangrove: 9, treeFern: 6 } as Record<string, number>)[f] ?? 12;
+  }
+  return ({ [CONIFER]: 15, [BROADLEAF]: 15, [SCRUB]: 4, [PALM]: 12, [ROCK_KIND]: 3, [CACTUS]: 6, [ACACIA]: 9, [BIRCH]: 13, [TUFT]: 1.6 } as Record<number, number>)[kind] ?? 10;
+}
+/** Small things (grass tussocks, shrubs, rocks, reeds): they grow on open ground and steeper slopes. */
+function isSmall(kind: TreeKind): boolean {
+  if (kind >= FIRST) return plantMetres(kind) <= 4;
+  return kind === TUFT || kind === SCRUB || kind === ROCK_KIND || kind === CACTUS;
+}
+/** Per biome: the trees and the small things, each with weights summing to its density. */
+const PLANTING = new Map<number, { trees: [TreeKind, number, number, number][]; small: [TreeKind, number, number, number][]; treeD: number; smallD: number }>();
+function plantingOf(biome: number) {
+  let p = PLANTING.get(biome);
+  if (!p) {
+    const list = (FLORA_RICH[biome] ?? []).map(([k, c, d, sz]) => [k, c, d, sz ?? 1] as [TreeKind, number, number, number]);
+    const trees = list.filter((e) => !isSmall(e[0])), small = list.filter((e) => isSmall(e[0]));
+    p = { trees, small, treeD: trees.reduce((a, e) => a + e[2], 0), smallD: small.reduce((a, e) => a + e[2], 0) };
+    PLANTING.set(biome, p);
+  }
+  return p;
+}
+const pick = (list: [TreeKind, number, number, number][], total: number, r: number) => {
+  let acc = 0;
+  for (const e of list) { acc += e[2]; if (r * total < acc) return e; }
+  return list[list.length - 1];
 };
 
 /** Real metres to map metres. Sea level stays 0; see LocalOptions.vSoft. */
@@ -206,18 +218,21 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   const sigma2 = (0.5 * spacing) ** 2;
 
   const cellTrueH = new Float32Array(M), cellLocalH = new Float32Array(M), cellT = new Float32Array(M);
+  const cellMoist = new Float32Array(M), cellTemp = new Float32Array(M);
   const cellCol = new Float32Array(M * 3), cellWater = new Uint8Array(M);
   let lakeLevel = NaN;
-  for (let i = 0; i < M; i++) { cellTrueH[i] = trueHeight(w, cellList[i], reliefM); cellT[i] = tempC(w.temperature[cellList[i]]); }
+  for (let i = 0; i < M; i++) { cellTrueH[i] = trueHeight(w, cellList[i], reliefM); cellT[i] = tempC(w.temperature[cellList[i]]); cellMoist[i] = w.moisture[cellList[i]]; cellTemp[i] = w.temperature[cellList[i]]; }
   const toLocal = localHeights(o, cellTrueH[0]);
+  const climTmp = new Color(), ecoCol = new Float32Array(M * 3);
+  for (let i = 0; i < M; i++) {
+    const eco = ECO[w.biome[cellList[i]]];
+    if (eco) { const c = new Color(eco[0]); ecoCol[i * 3] = c.r; ecoCol[i * 3 + 1] = c.g; ecoCol[i * 3 + 2] = c.b; }
+  }
   for (let i = 0; i < M; i++) {
     const c = cellList[i];
     cellWater[i] = w.water[c] === WATER_OCEAN || w.water[c] === WATER_LAKE ? 1 : 0;
     cellLocalH[i] = toLocal(cellTrueH[i]);
-    // Mountain biomes are rock in the map palette, but the planet's photo look grows alpine
-    // meadow on them wherever it is warm enough: follow the planet.
-    const mtnBiome = w.biome[c] === B.PEAK || w.biome[c] === B.MOUNTAIN;
-    const hx = mtnBiome && cellT[i] > -4 ? BIOMES[B.ALPINE_MEADOW].color : BIOMES[w.biome[c]].color;
+    const hx = BIOMES[w.biome[c]].color;
     for (let k = 0; k < 3; k++) cellCol[i * 3 + k] = Math.pow(((hx >> (16 - 8 * k)) & 255) / 255, 2.2);
     if (w.water[c] === WATER_LAKE && Number.isNaN(lakeLevel)) lakeLevel = toLocal(cellTrueH[i] + 25 - 1);
   }
@@ -250,31 +265,34 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   };
 
   const N = res * res;
-  const heights = new Float32Array(N), baseTrue = new Float32Array(N), baseLocal = new Float32Array(N), tBase = new Float32Array(N);
-  const snowW = new Float32Array(N);
-  const colors = new Float32Array(N * 3), lakeMask = new Float32Array(N), wood = new Float32Array(N);
-  const woodKind = new Int8Array(N).fill(-2);
+  const heights = new Float32Array(N), baseTrue = new Float32Array(N), baseLocal = new Float32Array(N);
+  const moistV = new Float32Array(N), tempV = new Float32Array(N);
+  const colors = new Float32Array(N * 3), lakeMask = new Float32Array(N), grow = new Float32Array(N).fill(1);
+  const owner = new Int16Array(N);
   const oceanW = new Float32Array(N);
   let hiTrue = -Infinity, loTrue = Infinity;
   for (let j = 0; j < res; j++) {
     for (let i = 0; i < res; i++) {
       const x = -half + i * step, y = -half + j * step, v = j * res + i;
       blendAt(x, y);
-      let h = 0, ht = 0, t = 0, r = 0, gr = 0, b = 0, lake = 0, sea = 0, wd = 0, best = 0, bestW = 0, snow = 0;
-      let lr = 0, lg = 0, lb = 0, lw = 0, landH = 0, seaH = 0;
+      let h = 0, ht = 0, mo = 0, tp = 0, r = 0, gr = 0, b = 0, lake = 0, sea = 0, best = 0, bestW = 0;
+      let lr = 0, lg = 0, lb = 0, lw = 0, landH = 0, seaH = 0, lmo = 0, ltp = 0, own = 0, tr = 0, tg = 0, tb = 0, tk = 0;
       for (let m = 0; m < M; m++) {
         const wt = weights[m];
         if (wt === 0) continue;
         const c = cellList[m];
-        h += wt * cellLocalH[m]; ht += wt * cellTrueH[m]; t += wt * cellT[m];
+        h += wt * cellLocalH[m]; ht += wt * cellTrueH[m]; mo += wt * cellMoist[m]; tp += wt * cellTemp[m];
         r += wt * cellCol[m * 3]; gr += wt * cellCol[m * 3 + 1]; b += wt * cellCol[m * 3 + 2];
-        if (!cellWater[m]) { lr += wt * cellCol[m * 3]; lg += wt * cellCol[m * 3 + 1]; lb += wt * cellCol[m * 3 + 2]; lw += wt; }
-        snow += wt * (SNOWY[w.biome[c]] ?? 0);
+        if (!cellWater[m]) {
+          lr += wt * cellCol[m * 3]; lg += wt * cellCol[m * 3 + 1]; lb += wt * cellCol[m * 3 + 2]; lw += wt;
+          lmo += wt * cellMoist[m]; ltp += wt * cellTemp[m];
+          if (OWN_COLOUR.has(w.biome[c])) own += wt;
+          const eco = ECO[w.biome[c]];
+          if (eco) { const k = eco[1] * wt; tr += ecoCol[m * 3] * k; tg += ecoCol[m * 3 + 1] * k; tb += ecoCol[m * 3 + 2] * k; tk += k; }
+        }
         if (w.water[c] === WATER_LAKE) lake += wt;
         if (w.water[c] === WATER_OCEAN) { sea += wt; seaH += wt * cellLocalH[m]; } else landH += wt * cellLocalH[m];
-        const wo = WOOD[w.biome[c]];
-        if (wo) wd += wt * wo[0];
-        if (wt > bestW) { bestW = wt; best = m; }
+        if (wt > bestW && !cellWater[m]) { bestW = wt; best = m; }
       }
       // Sea cells are sea and land cells land, as on the planet: the coast follows the boundary
       // between them (where the sea's weight passes one half), not wherever a blend of the
@@ -286,11 +304,17 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
         const t = smooth(0.42, 0.58, sea);
         h = lh + (sh - lh) * t;
       }
-      heights[v] = h; baseLocal[v] = h; baseTrue[v] = ht; tBase[v] = t; lakeMask[v] = lake; oceanW[v] = sea; wood[v] = wd; snowW[v] = snow;
-      // Land takes its colour from land cells only, or a lagoon's turquoise tints the beach.
-      if (lw > 0.02) { r = lr / lw; gr = lg / lw; b = lb / lw; }
-      const wo = WOOD[w.biome[cellList[best]]];
-      if (wo) woodKind[v] = wo[1];
+      heights[v] = h; baseLocal[v] = h; baseTrue[v] = ht; moistV[v] = mo; tempV[v] = tp; lakeMask[v] = lake; oceanW[v] = sea; owner[v] = best;
+      // Land takes its colour from land cells only (or a lagoon's turquoise tints the beach), and
+      // in the planet's Earth look: the climate palette by moisture and temperature, ice keeping
+      // its own colour, then the finer biomes' tints (surface.ts colourAt).
+      if (lw > 0.02) {
+        climateColour(lmo / lw, ltp / lw, climTmp);
+        const k = 1 - own / lw;
+        r = lr / lw + (climTmp.r - lr / lw) * k; gr = lg / lw + (climTmp.g - lg / lw) * k; b = lb / lw + (climTmp.b - lb / lw) * k;
+        const t = tk / lw;
+        if (t > 0) { r += (tr / tk - r) * t; gr += (tg / tk - gr) * t; b += (tb / tk - b) * t; }
+      }
       colors[v * 3] = r; colors[v * 3 + 1] = gr; colors[v * 3 + 2] = b;
       if (Math.hypot(x, y) < reach) { hiTrue = Math.max(hiTrue, ht); loTrue = Math.min(loTrue, ht); }
     }
@@ -404,6 +428,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
 
   // Carve each river: a channel under the water and a valley floor easing out to the land.
   const riverNear = new Float32Array(N).fill(Infinity);   // distance to water, in widths
+  const treeLine = new Float32Array(N).fill(1);
   for (const rv of rivers) {
     const p = rv.pts, n = p.length / 4;
     for (let s = 0; s < n - 1; s++) {
@@ -436,62 +461,121 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   }
   const sea = cellList.some((c) => w.water[c] === WATER_OCEAN);
 
-  // --- Colour: the planet's biome blend, then rock on steep ground, snow where it is cold enough
-  // at this height, sand by the sea, mud and wet grass along rivers.
-  let loH = Infinity, hiH = -Infinity;
-  for (let v = 0; v < N; v++) { loH = Math.min(loH, heights[v]); hiH = Math.max(hiH, heights[v]); }
-  const ROCK = [0.17, 0.15, 0.13], SNOW = [0.85, 0.87, 0.9], SAND = [0.62, 0.54, 0.38], MUD = [0.12, 0.1, 0.07];
+  // --- Colour: the planet's Earth look, ported from its terrain shader (sky.ts) and per-vertex
+  // shading (surface.ts naturalShading). Its noise scales are in planet radii; here they are
+  // converted to map metres, so patterns keep their real size divided by mag like the ground.
+  const lin = (hx: number) => [0, 1, 2].map((k) => Math.pow(((hx >> (16 - 8 * k)) & 255) / 255, 2.2));
+  const ROCK = lin(0x776b5f), ALPINE = lin(0x6e6858), SAND = lin(0xc8b48a), BED = lin(0x3a3226);
+  const SEABED_SAND = lin(0x8a8064), SEABED_DEEP = lin(0x26323a), LAKEBED = lin(0x2c3a30);
+  const SNOW = [0.93, 0.95, 0.98], LUSH = [0.075, 0.14, 0.035];
   const mix = (v: number, c: number[], t: number) => {
+    if (t <= 0) return;
     for (let k = 0; k < 3; k++) colors[v * 3 + k] += (c[k] - colors[v * 3 + k]) * t;
   };
-  const colourNoise = (x: number, y: number) => noise(x / 23, y / 23, 77) * 0.6 + noise(x / 7, y / 7, 79) * 0.4;
+  const mul = (v: number, a: number, b2 = a, c = a) => { colors[v * 3] *= a; colors[v * 3 + 1] *= b2; colors[v * 3 + 2] *= c; };
+  /** A planet noise frequency (per radius) as a wavelength in map metres: R / f real metres, / mag. */
+  const L = (f: number) => Math.max(2, R / f / o.mag);
+  const n01 = (x: number, y: number, l: number, z: number) => 0.5 + 0.5 * noise(x / l, y / l, z);
+  const lat = Math.abs(Math.asin(Math.max(-1, Math.min(1, cy)))) / (Math.PI / 2);
+  const latT = 1 - 1.1 * Math.pow(lat, 1.25) + w.params.heat;
+  /** Grove pattern, shared by the canopy colour and the trees so the two agree. */
+  const groveAt = (x: number, y: number) => smooth(-0.35, 0.45, noise(x / 60, y / 60, 91) + 0.4 * noise(x / 17, y / 17, 93));
   for (let j = 0; j < res; j++) {
     for (let i = 0; i < res; i++) {
       const v = j * res + i, x = -half + i * step, y = -half + j * step;
-      const hL = heights[(j) * res + Math.max(0, i - 1)], hR = heights[j * res + Math.min(res - 1, i + 1)];
+      const hL = heights[j * res + Math.max(0, i - 1)], hR = heights[j * res + Math.min(res - 1, i + 1)];
       const hD = heights[Math.max(0, j - 1) * res + i], hU = heights[Math.min(res - 1, j + 1) * res + i];
-      const slope = Math.hypot(hR - hL, hU - hD) / (2 * step);
-      const h = heights[v];
-      const cn = colourNoise(x, y);
-      // Real altitude here, for temperature: local height back to true metres.
-      const T = tBase[v] - 0.0065 * (h - baseLocal[v]) * o.vScale;
-      const jit = 1 + 0.08 * cn;
-      for (let k = 0; k < 3; k++) colors[v * 3 + k] *= jit;
-      if (sea && h < 2.5 && oceanW[v] > 0.05 && T > -2) mix(v, SAND, smooth(2.5, 0.8, h));
-      if (riverNear[v] < 1) mix(v, MUD, 0.8);
-      else if (riverNear[v] < 4) for (let k = 0; k < 3; k++) colors[v * 3 + k] *= 0.88;
-      mix(v, ROCK, smooth(0.8, 1.5, slope + 0.2 * cn));
-      // Snow: cold enough here, or a snowy biome's upper ground (Mundi's temperatures run warm on
-      // peaks; its own renderer also snows by biome and height).
-      const above = (h - loH) / Math.max(1, hiH - loH);
-      const snow = Math.max(smooth(-1, -6, T + 2 * cn), smooth(1 - snowW[v], 1.2 - snowW[v], above + 0.05 * cn)) * (1 - smooth(0.9, 1.4, slope));
-      mix(v, SNOW, snow);
-      if (h < 0) for (let k = 0; k < 3; k++) colors[v * 3 + k] *= 0.6;
-      // Warmth-limited trees: the tree line follows temperature, so it climbs with the variant's heights.
-      wood[v] *= smooth(-3, 1, T) * (1 - smooth(0.6, 0.9, slope)) * (riverNear[v] < 1.6 ? 0 : 1);
-      if (h < 0.3 || (lakeMask[v] > 0.5 && h < lakeLevel + 0.2)) wood[v] = 0;
+      const slope = Math.hypot(hR - hL, hU - hD) / (2 * step);         // rise over run
+      const slopeP = 1 - 1 / Math.sqrt(1 + slope * slope);            // the shader's 1 - cos
+      const h = heights[v], moist = moistV[v], temp = tempV[v];
+      // Height above the sea as a share of the planet's relief, as the shader's hAbove / uRelief.
+      const e = Math.max(0, baseTrue[v] + (h - baseLocal[v]) * o.vScale) / reliefM + 0.09;
+      const lowland = 1 - smooth(0.35, 0.6, e);
+      if (h < 0 && oceanW[v] > 0.3) {                                  // sea floor
+        mix(v, SEABED_SAND.map((a, k) => a + (SEABED_DEEP[k] - a) * smooth(0, 25, -h)), 1);
+        grow[v] = 0;
+        continue;
+      }
+      if (!Number.isNaN(lakeLevel) && lakeMask[v] > 0.5 && h < lakeLevel) { mix(v, LAKEBED, 0.8); grow[v] = 0; continue; }
+      // Grass and steppe: mottled, sun-bleached patches.
+      const grassW = smooth(0.12, 0.25, moist) * smooth(0.62, 0.42, moist) * smooth(0.25, 0.4, temp) * lowland;
+      if (grassW > 0) {
+        const m = n01(x, y, L(900), 101) * 0.55 + n01(x, y, L(2600), 103) * 0.3 + n01(x, y, L(7000), 105) * 0.15;
+        mul(v, 1 + (0.76 + 0.48 * m - 1) * grassW);
+        const bl = smooth(0.55, 0.8, m) * grassW * 0.6;
+        mul(v, 1 + 0.12 * bl, 1 + 0.04 * bl, 1 - 0.2 * bl);
+      }
+      // Forest: dark canopy in the groves (the trees' own colours, bluer in the north), paler
+      // clearings between.
+      const forestW = smooth(0.3, 0.45, moist) * smooth(0.17, 0.24, temp) * lowland;
+      if (forestW > 0) {
+        const closed = smooth(0.6, 0.72, moist) * (0.35 + 0.15 * smooth(0.65, 0.75, temp));
+        const inGrove = Math.min(1, groveAt(x, y) + closed);
+        const tw = smooth(0.3, 0.7, temp);
+        mix(v, [0.026 + 0.014 * tw, 0.066 + 0.054 * tw, 0.03 - 0.005 * tw], forestW * inGrove * 0.6);
+        mul(v, 1 - 0.15 * forestW * inGrove);
+        const gt = smooth(0.35, 0.55, temp), k = forestW * (1 - inGrove) * 0.55;
+        mul(v, 1 + (0.82 + 0.36 * gt - 1) * k, 1 + (0.98 + 0.14 * gt - 1) * k, 1 + (0.8 + 0.02 * gt - 1) * k);
+      }
+      // Rivers green the land along them, most in dry country: a lush strip and a valley floor.
+      if (riverNear[v] < 6) {
+        const dryR = smooth(0.5, 0.18, moist) * smooth(0.15, 0.3, temp);
+        const a = 0.3 + 0.7 * dryR;
+        const rag = noise(x / 9, y / 9, 107) * 0.5;
+        if (riverNear[v] < 1) mix(v, BED, 0.85);
+        else {
+          const valley = [0, 1, 2].map((k) => colors[v * 3 + k] + ([0.2, 0.22, 0.1][k] - colors[v * 3 + k]) * 0.5);
+          mix(v, valley, smooth(6, 3, riverNear[v]) * 0.5 * a);
+          mix(v, LUSH, smooth(3.2, 2.2, riverNear[v] + rag) * 0.92 * a);
+        }
+      }
+      // Rock on steep ground (steeper than on the planet: this map's slopes are steeper too).
+      const cn = noise(x / 23, y / 23, 77) * 0.6 + noise(x / 7, y / 7, 79) * 0.4;
+      const rock = smooth(0.8, 1.5, slope + 0.2 * cn);
+      mix(v, ROCK, rock * 0.85);
+      // Above the tree line, alpine scrub; the line follows temperature (high in the tropics).
+      const tv = latT - 0.55 * e;
+      const an = noise(x / L(90), y / L(90), 109) * 0.5 + noise(x / L(260), y / L(260), 111) * 0.25;
+      mix(v, ALPINE, smooth(0.3, 0.18, tv + an * 0.05) * 0.7);
+      // Beach: sand right at the sea's edge, in all but cold climates.
+      if (sea && h < 2.5 && oceanW[v] > 0.05 && temp > 0.25) mix(v, SAND, smooth(2.5, 0.6, h + cn));
+      // Snow, by the shader's model: a line from latitude and height, peaks colder still, shed
+      // off steep faces and lying in streaks.
+      const edge = noise(x / L(25), y / L(25), 113) * 0.06 + noise(x / L(110), y / L(110), 115) * 0.03 + noise(x / L(420), y / L(420), 117) * 0.015;
+      let snow = smooth(0.19, 0.09, latT - 0.5 * e + edge);
+      snow = Math.max(snow, smooth(0.6, 0.75, e) * smooth(0.21, -0.05, latT - 0.62 * e + edge));
+      const streak = 0.5 + 0.5 * (noise(x / 40, y / 40, 119) * 0.6 + noise(x / 13, y / 13, 121) * 0.4);
+      const lie = (1 - 0.9 * smooth(0.08, 0.3, slopeP)) * smooth(0.25, 0.65, streak + snow * 0.35);
+      mix(v, SNOW, Math.min(1, snow * lie) * 0.95);
+      // Where plants grow: not on rock, snow, the water's edge, or (trees) above the tree line.
+      grow[v] = (1 - rock) * (1 - Math.min(1, snow * lie * 1.5)) * (riverNear[v] < 1.3 ? 0 : 1) * (h < 0.3 ? 0 : 1);
+      treeLine[v] = smooth(0.2, 0.3, tv + an * 0.05);
     }
   }
 
-  // --- Trees, life-size, on a jittered 7 m grid, clumped into groves by noise.
+  // --- Plants: the planet's own models in its per-biome mix (flora.ts), life-size, on a jittered
+  // grid, trees clumped into groves (the same pattern as the canopy colour).
   const treeOut: number[] = [];
   const TS = 7, cnt = Math.floor(size / TS);
+  // The planet's densities are expected plants per cell; its densest forest (~12) fills a grove.
+  const FULL = 15;
   for (let b = 0; b < cnt; b++) {
     for (let a = 0; a < cnt; a++) {
       const x = -half + (a + rng()) * TS, y = -half + (b + rng()) * TS;
-      const r1 = rng(), r2 = rng(), r3 = rng();
-      const i = Math.round((x + half) / step), j = Math.round((y + half) / step);
-      const v = j * res + i;
-      const clump = smooth(-0.35, 0.45, noise(x / 60, y / 60, 91) + 0.4 * noise(x / 17, y / 17, 93));
-      const p = wood[v] * (0.25 + 1.1 * clump);
-      if (r1 >= p) continue;
-      let kind = woodKind[v];
-      if (kind === -2) continue;
-      if (kind === -1) kind = r2 < 0.5 ? TREE_CONIFER : TREE_BROAD;
-      const T = tBase[v];
-      if (kind === TREE_BROAD && T < 2 && r2 < 0.7) kind = TREE_CONIFER;
-      const tall = kind === TREE_CONIFER ? 14 + 12 * r3 : kind === TREE_BROAD ? 11 + 10 * r3 : kind === TREE_PALM ? 9 + 7 * r3 : 1.2 + 2 * r3;
-      treeOut.push(x, y, sampleH(x, y), tall * (0.6 + 0.4 * wood[v] / 1), kind);
+      const r1 = rng(), r2 = rng(), r3 = rng(), r4 = rng();
+      const i = Math.round((x + half) / step), j = Math.round((y + half) / step), v = j * res + i;
+      if (grow[v] <= 0) continue;
+      const pl = plantingOf(w.biome[cellList[owner[v]]]);
+      const pTree = Math.min(1, pl.treeD / FULL) * (0.2 + 1.1 * groveAt(x, y)) * grow[v] * treeLine[v];
+      let e: [TreeKind, number, number, number] | null = null;
+      if (pl.trees.length && r1 < pTree) e = pick(pl.trees, pl.treeD, r2);
+      else if (pl.small.length && r1 > 1 - Math.min(0.6, pl.smallD / (FULL * 1.6)) * grow[v]) e = pick(pl.small, pl.smallD, r2);
+      if (!e) continue;
+      const [kind, colour, , sz] = e;
+      const scale = plantMetres(kind) * sz * (0.75 + 0.5 * r3);
+      const shade = 0.85 + 0.3 * r4;
+      const rr = Math.min(255, ((colour >> 16) & 255) * shade), gg = Math.min(255, ((colour >> 8) & 255) * shade), bb = Math.min(255, (colour & 255) * shade);
+      treeOut.push(x, y, sampleH(x, y), scale, kind, (Math.round(rr) << 16) | (Math.round(gg) << 8) | Math.round(bb));
     }
   }
 

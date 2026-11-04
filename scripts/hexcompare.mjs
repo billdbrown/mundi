@@ -1,13 +1,13 @@
 /**
  * The planet's own render of a hex beside the hex view's map of it, from the same camera angle
  * (the planet's automatic low-altitude tilt, looking north). Writes <cell>.png per cell.
- * Usage: [SEED=1] [V=aware10] [DIST=0.035] node scripts/hexcompare.mjs <base url> <outdir> <cell|spot>...
+ * Usage: [SEED=1] [DIST=0.035] node scripts/hexcompare.mjs <base url> <outdir> <cell|spot>...
  */
 import { chromium } from 'playwright-core';
 import { PNG } from 'pngjs';
 import fs from 'node:fs';
 const [base, out, ...targets] = process.argv.slice(2);
-const seed = process.env.SEED ?? '1', v = process.env.V ?? 'aware10', dist = Number(process.env.DIST ?? 0.035);
+const seed = process.env.SEED ?? '1', dist = Number(process.env.DIST ?? 0.035);
 const browser = await chromium.launch({ channel: process.env.BROWSER ?? 'msedge', args: ['--use-angle=d3d11', '--enable-gpu'] });
 const W = 960, H = 640;
 const planet = await browser.newPage({ viewport: { width: W, height: H } });
@@ -52,7 +52,7 @@ for (const t of targets) {
   }, [cell, dist]);
   await planet.screenshot({ path: `${out}/_planet.png` });
   await hex.goto('about:blank');
-  await hex.goto(`${base}hex.html#seed=${seed}&cell=${cell}&v=${v}`);
+  await hex.goto(`${base}hex.html#seed=${seed}&cell=${cell}`);
   await hex.waitForFunction(() => window.hex?.map && !window.hex.busy, null, { timeout: 120000 });
   await hex.evaluate(([p]) => { window.hex.capture(true); window.hex.pose(p.dist, p.tilt, p.fov, p.e, p.n); }, [pose]);
   await hex.waitForTimeout(1200);
