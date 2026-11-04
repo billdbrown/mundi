@@ -143,8 +143,10 @@ function animateWater(mat: THREE.MeshStandardMaterial) {
           vec2 g = vec2(
             sin(p.x * 0.11 + p.y * 0.05 + t * 0.9) * 0.6 + sin(p.x * 0.23 - p.y * 0.17 + t * 1.4) * 0.4,
             sin(p.y * 0.1 - p.x * 0.04 - t * 0.8) * 0.6 + sin(p.y * 0.21 + p.x * 0.13 - t * 1.2) * 0.4);
-          // Long, gentle swells only: finer, regular waves tiled into a waffle of glints.
-          normal = normalize(normal + (viewMatrix * vec4(g.x * 0.035, 0.0, g.y * 0.035, 0.0)).xyz);
+          // Long, gentle swells only: finer, regular waves tiled into a waffle of glints. Faded out
+          // when a pixel covers more than about a metre, or from high up even the swells form a grid.
+          float near = 1.0 - smoothstep(0.5, 1.5, length(fwidth(p)));
+          normal = normalize(normal + (viewMatrix * vec4(g.x, 0.0, g.y, 0.0)).xyz * 0.035 * near);
         }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         {
@@ -275,8 +277,11 @@ function build(m: LocalMap) {
   world.add(terrain);
 
   // Sides: earth in bands, so the map reads as a tile cut from the ground; water shows as water.
-  let lo = 0;
-  for (const hv of m.heights) lo = Math.min(lo, hv);
+  // The floor sits a little below the lowest ground inside the frame (not the whole square map,
+  // or a hex near a deep valley stands on a tall block).
+  let lo = Infinity;
+  for (let v = 0; v < N; v++) if (!out[v]) lo = Math.min(lo, ph[v]);
+  if (m.sea) lo = Math.min(lo, 0);
   const floor = lo - Math.max(20, size * (cut ? 0.035 : 0.02));
   const ring: [number, number][] = [];
   if (cut) {
@@ -310,19 +315,26 @@ function build(m: LocalMap) {
       }
       return r;
     };
+    // Shading baked in by which way the face points, the same in every style's light.
+    const nx = by - ay, ny = -(bx - ax), nl = Math.hypot(nx, ny) || 1;
+    const shade = 0.78 + 0.22 * ((nx * -0.45 + ny * -0.9) / nl);
     const ra = rows(ta, ga), rb = rows(tb, gb);
     const L = Math.min(ra.length, rb.length);
     for (let r = 0; r < L - 1; r++) {
       const [ya0, ca0] = ra[r], [ya1, ca1] = ra[r + 1], [yb0, cb0] = rb[r], [yb1, cb1] = rb[r + 1];
       sp.push(ax, ya0, -ay, ax, ya1, -ay, bx, yb0, -by, bx, yb0, -by, ax, ya1, -ay, bx, yb1, -by);
-      for (const c of [ca0, ca1, cb0, cb0, ca1, cb1]) sc.push(c.r, c.g, c.b);
+      for (const c of [ca0, ca1, cb0, cb0, ca1, cb1]) sc.push(c.r * shade, c.g * shade, c.b * shade);
     }
   }
   const sg = new THREE.BufferGeometry();
   sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
   sg.setAttribute('color', new THREE.Float32BufferAttribute(sc, 3));
   sg.computeVertexNormals();
-  world.add(new THREE.Mesh(sg, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide })));
+  // Sides are the tile's edge, not landscape: unlit (shade baked above), no fog or haze, or they
+  // turn grey, navy or black depending on the style's sun.
+  const sides = new THREE.Mesh(sg, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, fog: false }));
+  sides.name = 'sides';
+  world.add(sides);
 
   // Water: coloured by depth, shallow to deep, with foam where it meets the land.
   const W = st.water, shallow = col(W.shallow), deep = col(W.deep), foam = col(W.foam);
@@ -496,7 +508,7 @@ function build(m: LocalMap) {
   // The atmosphere on everything (a no-op outside the Earth style).
   world.traverse((o) => {
     const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh || o.name === 'plants') return;
+    if (!mesh.isMesh || o.name === 'plants' || o.name === 'sides') return;
     for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) applyAerial(mat, true);
   });
   // Where the map sits on the planet: x east, y up, z south (three.js), metres to radii.

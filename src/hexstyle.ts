@@ -86,7 +86,7 @@ export const STYLES: HexStyle[] = [
   },
   {
     id: 'storybook', label: 'Storybook', blurb: 'Bold, saturated, sculpted',
-    frame: 'square', sky: [0x5b8fd0, 0xbcd8ee], fog: 0.25, fogColor: 0xbcd8ee,
+    frame: 'hex', sky: [0x5b8fd0, 0xbcd8ee], fog: 0.25, fogColor: 0xbcd8ee,
     sun: { color: 0xfff4e0, intensity: 3.0, elev: 50, azim: 150 }, rim: 1.2,
     hemi: { sky: 0xcfe4ff, ground: 0x5a5a3a, intensity: 1.3 }, exposure: 1.0,
     ground: 'palette',
@@ -105,7 +105,7 @@ export const STYLES: HexStyle[] = [
   },
   {
     id: 'golden', label: 'Golden hour', blurb: 'Natural materials, low warm sun',
-    frame: 'square', sky: [0x6f8fb8, 0xf2c79a], fog: 0.15, fogColor: 0xe8c4a0,
+    frame: 'hex', sky: [0x6f8fb8, 0xf2c79a], fog: 0.15, fogColor: 0xe8c4a0,
     sun: { color: 0xffc48a, intensity: 3.0, elev: 30, azim: 235 }, rim: 0,
     hemi: { sky: 0xb0c4e0, ground: 0x7a6048, intensity: 1.5 }, exposure: 1.15,
     ground: 'palette',
@@ -124,7 +124,7 @@ export const STYLES: HexStyle[] = [
   },
   {
     id: 'earth', label: 'Earth', blurb: "The planet's own colours, haze and grade",
-    frame: 'square', sky: [0x2f5490, 0x9fb4c8], fog: 0.55, fogColor: 0x9fb4c8,
+    frame: 'hex', sky: [0x2f5490, 0x9fb4c8], fog: 0.55, fogColor: 0x9fb4c8,
     sun: { color: 0xfff1dc, intensity: 2.6, elev: 50, azim: 150 }, rim: 0,
     hemi: { sky: 0xd6e6f2, ground: 0x5b5242, intensity: 1.3 }, exposure: 1.0,
     ground: 'planet',
@@ -133,7 +133,7 @@ export const STYLES: HexStyle[] = [
       seaShallow: 0, seaDeep: 0, sat: 1, mottle: 0, ao: 0.35, grain: 0, peaks: 0,
     },
     water: { shallow: 0x3a7a86, deep: 0x1c3e52, foam: 0xdfe8ec, opacity: 0.92, foamDepth: 0.5, roughness: 0.1 },
-    sides: [0x4a3c2e],
+    sides: [0x4e5a34, 0x5a4634, 0x665040, 0x4a3c2e],
     plants: { sat: 1, bright: 1, scale: 1, keep: 1, tufts: true },
     town: { path: 0x8a7458, hedge: 0x34502a, crops: [0xc9a654, 0x8a9a46, 0x7a6248, 0xa8b060], walls: [0xc8bca8, 0xb0a490], roofs: [0x8a4a34, 0x6a5444, 0x7a6a5a], scale: 1.3 },
     grade: { sat: 1, contrast: 1, tint: [1, 1, 1], vignette: 0, lift: 0 },
@@ -142,7 +142,7 @@ export const STYLES: HexStyle[] = [
   },
   {
     id: 'homestead', label: 'Homestead', blurb: 'Muted, lived-in, seen from above',
-    frame: 'square', sky: [0x8ea6b8, 0xc8d0c8], fog: 0.2, fogColor: 0xc4ccc4,
+    frame: 'hex', sky: [0x8ea6b8, 0xc8d0c8], fog: 0.2, fogColor: 0xc4ccc4,
     sun: { color: 0xfff6e6, intensity: 2.4, elev: 58, azim: 160 }, rim: 0,
     hemi: { sky: 0xdfe6e8, ground: 0x6a6048, intensity: 1.4 }, exposure: 1.0,
     ground: 'palette',
@@ -151,7 +151,7 @@ export const STYLES: HexStyle[] = [
       sand: 0xc8b48a, bed: 0x5a4c3a, lush: 0x5f8a3a, alpine: 0x7f7c60, seaShallow: 0x5a8a86, seaDeep: 0x2e4a52,
       sat: 0.88, mottle: 0.8, ao: 0.45, grain: 0.1, peaks: 0.4,
     },
-    water: { shallow: 0x5a7f7c, deep: 0x2c4248, foam: 0xd8dccc, opacity: 0.92, foamDepth: 0.4, roughness: 0.2 },
+    water: { shallow: 0x5a7f7c, deep: 0x2c4248, foam: 0xd8dccc, opacity: 0.92, foamDepth: 0.4, roughness: 0.5 },
     sides: [0x4a5a30, 0x5a4a38, 0x4a3c2e],
     plants: { sat: 0.9, bright: 0.95, scale: 1.3, keep: 0.6, tufts: true },
     town: { path: 0x8a7a60, hedge: 0x3e5030, crops: [0xa89860, 0x7a8a48, 0x6a5a44, 0x9a9a5a], walls: [0x8a7a64, 0x9a8a70, 0x7a6a56], roofs: [0x7a6a50, 0x6a5a44, 0x8a7458], scale: 1.5 },
