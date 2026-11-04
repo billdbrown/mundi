@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { sunDirection, sunElevation, hourForElevation, transmittance, daylight } from '../src/daylight.ts';
-import { STYLES } from '../src/hexstyle.ts';
+import { STYLE } from '../src/hexstyle.ts';
 
 const D = Math.PI / 180;
 const near = (a: number, b: number, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} vs ${b}`);
@@ -33,9 +33,9 @@ test('sunlight reddens and dims toward the horizon', () => {
   assert.ok(lo[2] / lo[0] < hi[2] / hi[0], 'blue lost first');
 });
 
-test("every style looks exactly as designed at its own hour", () => {
+test("the style looks exactly as designed at its own hour", () => {
   const lat = 25 * D;
-  for (const st of STYLES) {
+  for (const st of [STYLE]) {
     const L = daylight(st, lat, hourForElevation(lat, st.sun.elev));
     near(L.elev, st.sun.elev, 1e-6);
     near(L.key.intensity, st.sun.intensity, 1e-3);
@@ -47,7 +47,7 @@ test("every style looks exactly as designed at its own hour", () => {
 });
 
 test('at night the moon takes over, faint, and windows light up', () => {
-  const st = STYLES.find((s) => s.id === 'golden')!;
+  const st = STYLE;
   const L = daylight(st, 20 * D, 0);
   assert.equal(L.key.moon, true);
   assert.ok(L.key.dir[1] > 0.5, 'moon above the horizon');

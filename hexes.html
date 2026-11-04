@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Mundi · hex styles</title>
+  <title>Mundi · hexes</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Cpath d=%22M16 2l12 7v14l-12 7-12-7V9z%22 fill=%22%236f8a45%22/%3E%3C/svg%3E" />
   <style>
     body { margin: 0; background: #14191e; color: #e3e8ec; font: 15px/1.5 system-ui, sans-serif; }
@@ -29,11 +29,11 @@
 </head>
 <body>
   <header>
-    <h1>Mundi hex drill-down: six styles</h1>
-    <p>Each planet hex opened as a walkable local map (seed 1, content-aware 10×). Rows are hexes,
-      cards are styles: from above, then at eye level. The blurred ground around each tile is its neighbouring hexes. <b>Tap a card to open it live</b>, then drag to
-      orbit, pinch to zoom, and switch styles from the panel. The time slider (▶ plays a whole day)
-      moves the sun along its real path for that spot on the planet.</p>
+    <h1>Mundi hex drill-down</h1>
+    <p>Each planet hex opened as a walkable local map (seed 1, content-aware 10×), in Golden Earth.
+      The blurred ground around each hex is its neighbours, with their outlines. <b>Tap a card to open
+      it live</b>, then drag to orbit and pinch to zoom. The time slider (▶ plays a whole day) moves
+      the sun along its real path for that spot on the planet; "More" has the rest.</p>
     <p><a href="/">The planet</a> (double-click a hex there to open any other)</p>
   </header>
   <main id="rows"></main>
@@ -47,14 +47,6 @@
       [5602, 'Mountain', 'high ground, snow by temperature'],
       [35274, 'Desert', 'dunes'],
     ];
-    const styles = [
-      ['golden-earth', 'Golden Earth', "Golden hour under the planet's sky (the pick)"],
-      ['tabletop', 'Tabletop', 'A painted tile on a warm table'],
-      ['storybook', 'Storybook', 'Bold, saturated, sculpted'],
-      ['golden', 'Golden hour', 'Natural materials, low warm sun'],
-      ['earth', 'Earth', "The planet's own colours, haze and grade"],
-      ['homestead', 'Homestead', 'Muted, lived-in, seen from above'],
-    ];
     const el = document.getElementById('rows');
     // A day on the river town, in Golden Earth.
     const day = [
@@ -62,30 +54,28 @@
       [16, '16:00', 'afternoon'], [17.8, '17:48', 'golden hour'], [18.4, '18:24', 'dusk'], [23, '23:00', 'night, town lit'],
     ];
     const ds = document.createElement('section');
-    ds.innerHTML = '<h2>A day<small>river hex 12010 in Golden Earth · tap to open at that hour</small></h2><div class="row"></div>';
+    ds.innerHTML = '<h2>A day<small>the river hex · tap to open at that hour</small></h2><div class="row"></div>';
     for (const [hr, clock, note] of day) {
       const a = document.createElement('a');
       a.className = 'card';
-      a.href = `hex.html#seed=1&cell=12010&style=golden-earth&time=${hr}`;
+      a.href = `hex.html#seed=1&cell=12010&time=${hr}`;
       a.innerHTML = `<img src="hexes/day-12010-golden-earth-${String(hr).replace('.', '_')}.jpg" loading="lazy" alt="River hex at ${clock}">`
         + `<div><b>${clock}</b><span>${note}</span></div>`;
       ds.querySelector('.row').appendChild(a);
     }
     el.appendChild(ds);
+    const hs = document.createElement('section');
+    hs.innerHTML = '<h2>Hexes<small>from above, then at eye level</small></h2><div class="row"></div>';
     for (const [cell, name, note] of hexes) {
-      const s = document.createElement('section');
-      s.innerHTML = `<h2>${name}<small>hex ${cell} · ${note}</small></h2><div class="row"></div>`;
-      for (const [id, label, blurb] of styles) {
-        const a = document.createElement('a');
-        a.className = 'card';
-        a.href = `hex.html#seed=1&cell=${cell}&style=${id}`;
-        a.innerHTML = `<img src="hexes/${cell}-${id}.jpg" loading="lazy" alt="${name} in ${label}, from above">`
-          + `<img class="eye" src="hexes/${cell}-${id}-eye.jpg" loading="lazy" alt="${name} in ${label}, eye level">`
-          + `<div><b>${label}</b><span>${blurb}</span></div>`;
-        s.querySelector('.row').appendChild(a);
-      }
-      el.appendChild(s);
+      const a = document.createElement('a');
+      a.className = 'card';
+      a.href = `hex.html#seed=1&cell=${cell}`;
+      a.innerHTML = `<img src="hexes/${cell}-golden-earth.jpg" loading="lazy" alt="${name}, from above">`
+        + `<img class="eye" src="hexes/${cell}-golden-earth-eye.jpg" loading="lazy" alt="${name}, eye level">`
+        + `<div><b>${name}</b><span>hex ${cell} · ${note}</span></div>`;
+      hs.querySelector('.row').appendChild(a);
     }
+    el.prepend(hs);
   </script>
 </body>
 </html>

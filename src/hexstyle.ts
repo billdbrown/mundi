@@ -2,8 +2,9 @@
  * Looks for the hex view (2026-11-04: Bill chose to stop imitating the planet and give the hex its
  * own look). The planet still decides the layout, biome, rivers and climate; a style decides only
  * how they are drawn: ground palette, light, sky, water, the map's sides, camera and grade.
- * Five are offered side by side (keys 1–5) to choose from. Moodboard: vault
- * raw/2026-11-04-hex-moodboard (Dorfromantik, Civilization VI and VII, Banished), for ideas only.
+ * Six were tried side by side; Bill picked Golden Earth (STYLE) and the rest were retired (git has
+ * them). Moodboard: vault raw/2026-11-04-hex-moodboard (Dorfromantik, Civilization VI and VII,
+ * Banished), for ideas only.
  */
 import { LAYERS, L_GRASS, L_MOTTLE, L_FOREST, L_ROCK, L_SNOW, L_SAND, L_BED, L_LUSH, L_ALPINE, L_DEPTH, L_AO, L_CLEARING, L_PATH, L_FIELD, L_FIELDKIND, L_HEDGE, L_ELEV, type LocalMap } from './hexlocal.ts';
 
@@ -68,111 +69,29 @@ export interface HexStyle {
   tiltShift: boolean;
 }
 
-export const STYLES: HexStyle[] = [
-  {
-    id: 'tabletop', label: 'Tabletop', blurb: 'A painted tile on a warm table',
-    frame: 'hex', sky: [0xf3d6b6, 0xe8c39c], fog: 0, fogColor: 0xeccaa6,
-    sun: { color: 0xffe4c4, intensity: 2.7, elev: 42, azim: 140 }, rim: 0,
-    hemi: { sky: 0xfff0dc, ground: 0x8a6a50, intensity: 1.5 }, exposure: 1.0,
-    ground: 'palette',
-    palette: {
-      keepBase: 0.35, grass: 0x789a44, grassDry: 0xb8a05a, forest: 0x46703a, clearing: 0x98ad55, rock: 0xa39282, snow: 0xf6f2ea,
-      sand: 0xebd29c, bed: 0x7a6a50, lush: 0x6fae4a, alpine: 0x9c9a6a, seaShallow: 0x8ad8c4, seaDeep: 0x3fa3a6,
-      sat: 1.0, mottle: 0.55, ao: 0.55, grain: 0.05, peaks: 0.8,
-    },
-    water: { shallow: 0x86dccd, deep: 0x46b0b2, foam: 0xf7f2e4, opacity: 0.94, foamDepth: 0.8, roughness: 0.35 },
-    sides: [0x5c7a3a, 0x6b4f36, 0x7f5f40, 0x6a4b33, 0x8c6b48, 0x5e432e],
-    plants: { sat: 1.15, bright: 1.1, scale: 1.6, keep: 0.4, tufts: false },
-    town: { path: 0xc9a77a, hedge: 0x4a6a34, crops: [0xe8a83a, 0xd88a2e, 0xc6c050, 0xb07a44, 0x9ab84e], walls: [0xe8dcc4, 0xd9c9a8, 0xc8a882, 0xb8a090], roofs: [0xd2563a, 0xc0462e, 0x3f8f9a, 0x8a5a3a, 0xe0703e], scale: 1.6 },
-    grade: { sat: 1.08, contrast: 1.04, tint: [1.04, 1.0, 0.94], vignette: 0.22, lift: 0.01 },
-    texture: { amount: 0, scale: 8 },
-    photoGrade: false, atmosphere: false, camera: { tilt: 50, fov: 30, dist: 0.85 }, tiltShift: true,
-  },
-  {
-    id: 'storybook', label: 'Storybook', blurb: 'Bold, saturated, sculpted',
-    frame: 'hex', sky: [0x5b8fd0, 0xbcd8ee], fog: 0.25, fogColor: 0xbcd8ee,
-    sun: { color: 0xfff4e0, intensity: 3.0, elev: 50, azim: 150 }, rim: 1.2,
-    hemi: { sky: 0xcfe4ff, ground: 0x5a5a3a, intensity: 1.3 }, exposure: 1.0,
-    ground: 'palette',
-    palette: {
-      keepBase: 0.25, grass: 0x5a9634, grassDry: 0xb0a84a, forest: 0x2f6a26, clearing: 0x7ab43c, rock: 0x8c8aa0, snow: 0xffffff,
-      sand: 0xf2dc8c, bed: 0x5a5040, lush: 0x4fae30, alpine: 0x8a9a6a, seaShallow: 0x3cc0d8, seaDeep: 0x1a4f9c,
-      sat: 1.12, mottle: 0.4, ao: 0.6, grain: 0.03, peaks: 1,
-    },
-    water: { shallow: 0x2fb4d4, deep: 0x163f8a, foam: 0xffffff, opacity: 0.93, foamDepth: 1.0, roughness: 0.15 },
-    sides: [0x4a7a2a, 0x6a5a48, 0x7a6a56, 0x5a4a3a],
-    plants: { sat: 1.35, bright: 1.1, scale: 1.7, keep: 0.4, tufts: false },
-    town: { path: 0xd8b878, hedge: 0x2f6a26, crops: [0xf0c040, 0x9acd40, 0xd8a050, 0xc8d860], walls: [0xf4ecdc, 0xe8d8b8, 0xdcc8a0], roofs: [0x3a6ad0, 0xd84a3a, 0xe8b040, 0x8a4a2a], scale: 1.3 },
-    grade: { sat: 1.18, contrast: 1.1, tint: [1.0, 1.0, 1.02], vignette: 0.15, lift: 0.0 },
-    texture: { amount: 0.3, scale: 10 },
-    photoGrade: false, atmosphere: false, camera: { tilt: 55, fov: 40, dist: 1.0 }, tiltShift: false,
-  },
-  {
-    id: 'golden', label: 'Golden hour', blurb: 'Natural materials, low warm sun',
-    frame: 'hex', sky: [0x6f8fb8, 0xf2c79a], fog: 0.15, fogColor: 0xe8c4a0,
-    sun: { color: 0xffc48a, intensity: 3.0, elev: 30, azim: 235 }, rim: 0,
-    hemi: { sky: 0xb0c4e0, ground: 0x7a6048, intensity: 1.5 }, exposure: 1.15,
-    ground: 'palette',
-    palette: {
-      keepBase: 0.75, grass: 0x7a8a42, grassDry: 0xb09a58, forest: 0x34502a, clearing: 0x8a8f4a, rock: 0x8a7c6c, snow: 0xf0ece4,
-      sand: 0xd8c08c, bed: 0x5a4a38, lush: 0x5e8a36, alpine: 0x8a8462, seaShallow: 0x5aa0a0, seaDeep: 0x24506a,
-      sat: 1.0, mottle: 0.7, ao: 0.6, grain: 0.12, peaks: 0.5,
-    },
-    water: { shallow: 0x5aa6a8, deep: 0x23506c, foam: 0xf4eadc, opacity: 0.9, foamDepth: 0.6, roughness: 0.08 },
-    sides: [0x4a5a2e, 0x5a4634, 0x6a5440, 0x4e3c2c],
-    plants: { sat: 1.0, bright: 1.0, scale: 1.2, keep: 0.75, tufts: true },
-    town: { path: 0x9a8060, hedge: 0x3a4a28, crops: [0xc8a050, 0x8a8a40, 0x7a5e44, 0xb09850], walls: [0xc8b8a0, 0xa89880, 0x8a7a68], roofs: [0x9a5a3a, 0x7a4a32, 0x8a7a5a, 0x6a5040], scale: 1.35 },
-    grade: { sat: 1.05, contrast: 1.12, tint: [1.05, 1.0, 0.92], vignette: 0.3, lift: 0.0 },
-    texture: { amount: 0.9, scale: 7 },
-    photoGrade: false, atmosphere: false, camera: { tilt: 62, fov: 35, dist: 0.95 }, tiltShift: true,
-  },
-  {
-    id: 'earth', label: 'Earth', blurb: "The planet's own colours, haze and grade",
-    frame: 'hex', sky: [0x2f5490, 0x9fb4c8], fog: 0.55, fogColor: 0x9fb4c8,
-    sun: { color: 0xfff1dc, intensity: 2.6, elev: 50, azim: 150 }, rim: 0,
-    hemi: { sky: 0xd6e6f2, ground: 0x5b5242, intensity: 1.3 }, exposure: 1.0,
-    ground: 'planet',
-    palette: {
-      keepBase: 1, grass: 0, grassDry: 0, forest: 0, clearing: 0, rock: 0, snow: 0, sand: 0, bed: 0, lush: 0, alpine: 0,
-      seaShallow: 0, seaDeep: 0, sat: 1, mottle: 0, ao: 0.35, grain: 0, peaks: 0,
-    },
-    water: { shallow: 0x3a7a86, deep: 0x1c3e52, foam: 0xdfe8ec, opacity: 0.92, foamDepth: 0.5, roughness: 0.1 },
-    sides: [0x4e5a34, 0x5a4634, 0x665040, 0x4a3c2e],
-    plants: { sat: 1, bright: 1, scale: 1, keep: 1, tufts: true },
-    town: { path: 0x8a7458, hedge: 0x34502a, crops: [0xc9a654, 0x8a9a46, 0x7a6248, 0xa8b060], walls: [0xc8bca8, 0xb0a490], roofs: [0x8a4a34, 0x6a5444, 0x7a6a5a], scale: 1.3 },
-    grade: { sat: 1, contrast: 1, tint: [1, 1, 1], vignette: 0, lift: 0 },
-    texture: { amount: 0.35, scale: 9 },
-    photoGrade: true, atmosphere: true, camera: { tilt: 65, fov: 50, dist: 1.0 }, tiltShift: false,
-  },
-  {
-    id: 'homestead', label: 'Homestead', blurb: 'Muted, lived-in, seen from above',
-    frame: 'hex', sky: [0x8ea6b8, 0xc8d0c8], fog: 0.2, fogColor: 0xc4ccc4,
-    sun: { color: 0xfff6e6, intensity: 2.4, elev: 58, azim: 160 }, rim: 0,
-    hemi: { sky: 0xdfe6e8, ground: 0x6a6048, intensity: 1.4 }, exposure: 1.0,
-    ground: 'palette',
-    palette: {
-      keepBase: 0.6, grass: 0x6f8a3e, grassDry: 0x9a9258, forest: 0x3e5a2e, clearing: 0x7a8a46, rock: 0x7f776c, snow: 0xeceae4,
-      sand: 0xc8b48a, bed: 0x5a4c3a, lush: 0x5f8a3a, alpine: 0x7f7c60, seaShallow: 0x5a8a86, seaDeep: 0x2e4a52,
-      sat: 0.88, mottle: 0.8, ao: 0.45, grain: 0.1, peaks: 0.4,
-    },
-    water: { shallow: 0x5a7f7c, deep: 0x2c4248, foam: 0xd8dccc, opacity: 0.92, foamDepth: 0.4, roughness: 0.5 },
-    sides: [0x4a5a30, 0x5a4a38, 0x4a3c2e],
-    plants: { sat: 0.9, bright: 0.95, scale: 1.3, keep: 0.6, tufts: true },
-    town: { path: 0x8a7a60, hedge: 0x3e5030, crops: [0xa89860, 0x7a8a48, 0x6a5a44, 0x9a9a5a], walls: [0x8a7a64, 0x9a8a70, 0x7a6a56], roofs: [0x7a6a50, 0x6a5a44, 0x8a7458], scale: 1.5 },
-    grade: { sat: 0.9, contrast: 1.0, tint: [1.0, 1.01, 0.96], vignette: 0.12, lift: 0.01 },
-    texture: { amount: 1, scale: 6 },
-    photoGrade: false, atmosphere: false, camera: { tilt: 35, fov: 40, dist: 1.0 }, tiltShift: false,
-  },
-];
-
-/** 6, a hybrid (Bill, 2026-11-04): Golden hour's look (palette, textures, trees, tile, warm grade,
- * tilt-shift, camera) under the planet's own atmosphere, as in Earth: real sky, haze and sunlight. */
-const golden = STYLES.find((s) => s.id === 'golden')!;
-STYLES.push({
-  ...golden,
+/** Golden Earth, the hex view's look (Bill's pick, 2026-11-04, from six tried side by side:
+ * Tabletop, Storybook, Golden hour, Earth, Homestead and this hybrid). Golden hour's palette,
+ * textures, trees, tile and warm grade, under the planet's own atmosphere at a third of true
+ * size so the haze stays light, with the painted sky behind it. */
+export const STYLE: HexStyle = {
   id: 'golden-earth', label: 'Golden Earth', blurb: "Golden hour under the planet's sky",
-  atmosphere: true, haze: 0.35, paintedSky: true,
-});
+  frame: 'hex', sky: [0x6f8fb8, 0xf2c79a], fog: 0.15, fogColor: 0xe8c4a0,
+  sun: { color: 0xffc48a, intensity: 3.0, elev: 30, azim: 235 }, rim: 0,
+  hemi: { sky: 0xb0c4e0, ground: 0x7a6048, intensity: 1.5 }, exposure: 1.15,
+  ground: 'palette',
+  palette: {
+    keepBase: 0.75, grass: 0x7a8a42, grassDry: 0xb09a58, forest: 0x34502a, clearing: 0x8a8f4a, rock: 0x8a7c6c, snow: 0xf0ece4,
+    sand: 0xd8c08c, bed: 0x5a4a38, lush: 0x5e8a36, alpine: 0x8a8462, seaShallow: 0x5aa0a0, seaDeep: 0x24506a,
+    sat: 1.0, mottle: 0.7, ao: 0.6, grain: 0.12, peaks: 0.5,
+  },
+  water: { shallow: 0x5aa6a8, deep: 0x23506c, foam: 0xf4eadc, opacity: 0.9, foamDepth: 0.6, roughness: 0.08 },
+  sides: [0x4a5a2e, 0x5a4634, 0x6a5440, 0x4e3c2c],
+  plants: { sat: 1.0, bright: 1.0, scale: 1.2, keep: 0.75, tufts: true },
+  town: { path: 0x9a8060, hedge: 0x3a4a28, crops: [0xc8a050, 0x8a8a40, 0x7a5e44, 0xb09850], walls: [0xc8b8a0, 0xa89880, 0x8a7a68], roofs: [0x9a5a3a, 0x7a4a32, 0x8a7a5a, 0x6a5040], scale: 1.35 },
+  grade: { sat: 1.05, contrast: 1.12, tint: [1.05, 1.0, 0.92], vignette: 0.3, lift: 0.0 },
+  texture: { amount: 0.9, scale: 7 },
+  photoGrade: false, atmosphere: true, haze: 0.35, paintedSky: true, camera: { tilt: 62, fov: 35, dist: 0.95 }, tiltShift: true
+};
 
 const smooth01 = (a: number, b: number, x: number) => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));

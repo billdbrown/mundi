@@ -20,6 +20,6 @@ self.onmessage = (e: MessageEvent<{ params: WorldParams; cell: number; spot?: Sp
   (self as unknown as Worker).postMessage({ map: m, ms: { world: t1 - t0, local: t2 - t1 } }, transfer as ArrayBuffer[]);
   // Then the backdrop: the ground around the hex, five times as wide (enough for a phone held upright, where the camera stands back), coarse, without plants or
   // towns (it is drawn blurred). Sent separately so the hex shows first.
-  const c = buildLocalMap(world, cell, { ...opts, extent: 5, res: 257, plants: false, crags: false });
+  const c = buildLocalMap(world, cell, { ...opts, extent: 5, res: 385, plants: false });
   (self as unknown as Worker).postMessage({ context: c, cell }, [c.heights.buffer, c.colors.buffer, c.base.buffer, c.layers.buffer, c.lakeMask.buffer] as ArrayBuffer[]);
 };

@@ -18,7 +18,7 @@ import { FIRST, FAMILIES, VARIANTS } from './species.ts';
 import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
 import { parseSeed } from './seedname.ts';
 import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, L_FOREST, HOUSE_STRIDE, type LocalMap, type LocalOptions } from './hexlocal.ts';
-import { STYLES, paintGround, STYLE_GRADE, TILT_SHIFT, type HexStyle } from './hexstyle.ts';
+import { STYLE, paintGround, STYLE_GRADE, TILT_SHIFT, type HexStyle } from './hexstyle.ts';
 import { daylight, hourForElevation, type RGB } from './daylight.ts';
 import type { Spot } from './debug.ts';
 
@@ -39,8 +39,8 @@ let opts: LocalOptions = { ...LOCAL_DEFAULTS, radiusKm: Number(h.get('radius')) 
 for (const k of ['mag', 'vScale', 'vSoft', 'res'] as const) if (h.get(k)) opts[k] = Number(h.get(k));
 if (h.get('river') === 'scaled' || h.get('river') === 'flow') opts.riverMode = h.get('river') as LocalOptions['riverMode'];
 if (h.get('crags')) opts.crags = h.get('crags') === '1';
-// Golden Earth is Bill's pick (2026-11-04), so a hex opened from the planet starts in it.
-let style: HexStyle = STYLES.find((x) => x.id === h.get('style')) ?? STYLES.find((x) => x.id === 'golden-earth')!;
+// One look: Golden Earth (hexstyle.ts), Bill's pick of six on 2026-11-04.
+const style: HexStyle = STYLE;
 let tiltOn = h.get('tilt') === null ? style.tiltShift : h.get('tilt') === '1';
 /** The hour of local solar time, once Bill has set one; until then each style's own hour. */
 let userHour: number | null = h.get('time') !== null && h.get('time') !== '' ? ((Number(h.get('time')) % 24) + 24) % 24 : null;
@@ -320,9 +320,73 @@ function addContext(aerial: boolean) {
   mesh.layers.set(1);
   world.add(mesh);
   ctxMesh = mesh;
+
+  // The occluder: every triangle outside the hex (inside, it would fight the tile's own ground).
+  if (ctxOccluder) { world.remove(ctxOccluder); ctxOccluder.geometry.dispose(); (ctxOccluder.material as THREE.Material).dispose(); }
+  const shape = hexShape(map), oidx: number[] = [];
+  for (let t = 0; t < idx.length; t += 3) {
+    let cx = 0, cy = 0;
+    for (let k = 0; k < 3; k++) { cx += pos[idx[t + k] * 3]; cy -= pos[idx[t + k] * 3 + 2]; }
+    if (!shape.inside(cx / 3, cy / 3)) oidx.push(idx[t], idx[t + 1], idx[t + 2]);
+  }
+  const og = new THREE.BufferGeometry();
+  og.setAttribute('position', geo.getAttribute('position'));
+  og.setIndex(oidx);
+  ctxOccluder = new THREE.Mesh(og, new THREE.MeshBasicMaterial({ colorWrite: false }));
+  ctxOccluder.name = 'occluder';
+  ctxOccluder.renderOrder = -1;
+  world.add(ctxOccluder);
+
+  // The neighbours' outlines, draped on the ground, fading with distance. The hex's own edge is
+  // its neighbours' edge too, so it shows as a faint rim.
+  if (ctxLines) { world.remove(ctxLines); ctxLines.geometry.dispose(); (ctxLines.material as THREE.Material).dispose(); }
+  const lp: number[] = [], la: number[] = [];
+  const at = (x: number, y: number) => Math.max(c.sea ? 0 : -Infinity, groundAtMap(c, x, y)) + 1;
+  const fade = (x: number, y: number) => 1 - THREE.MathUtils.smoothstep(Math.hypot(x, y), edge * 0.35, edge * 0.75);
+  for (let i = 0; i < c.cells.length; i++) {
+    if (c.cells[i] === map.cell) continue;
+    const p0 = c.polyStart[i], p1 = c.polyStart[i + 1];
+    for (let p = p0; p < p1; p++) {
+      const q = p + 1 < p1 ? p + 1 : p0;
+      const ax = c.polyXY[p * 2], ay = c.polyXY[p * 2 + 1], bx = c.polyXY[q * 2], by = c.polyXY[q * 2 + 1];
+      if (fade(ax, ay) <= 0 && fade(bx, by) <= 0) continue;
+      const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / (step * 2)));
+      for (let k = 0; k < n; k++) {
+        const x0 = ax + (bx - ax) * k / n, y0 = ay + (by - ay) * k / n;
+        const x1 = ax + (bx - ax) * (k + 1) / n, y1 = ay + (by - ay) * (k + 1) / n;
+        lp.push(x0, at(x0, y0), -y0, x1, at(x1, y1), -y1);
+        la.push(fade(x0, y0), fade(x1, y1));
+      }
+    }
+  }
+  const lg = new THREE.BufferGeometry();
+  lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
+  const lc = new Float32Array(la.length * 4);
+  la.forEach((a, k) => { lc[k * 4] = lc[k * 4 + 1] = lc[k * 4 + 2] = 1; lc[k * 4 + 3] = a * 0.2; });
+  lg.setAttribute('color', new THREE.BufferAttribute(lc, 4));
+  ctxLines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, color: 0xfff2dc }));
+  ctxLines.name = 'ctxlines';
+  world.add(ctxLines);
+  syncAround();
+  if (map) applyTime();
+}
+
+/** With the neighbours shown the tile drops its earth sides, so its edge meets the ground around
+ * it at the same height; alone, it is a tile again. */
+function syncAround() {
+  const on = showCtx && !!ctxMesh;
+  if (sidesMesh) sidesMesh.visible = !on;
+  if (ctxLines) ctxLines.visible = on;
+  if (ctxOccluder) ctxOccluder.visible = on;
 }
 let glow: THREE.Points | null = null;
 let sidesMat: THREE.MeshBasicMaterial | null = null;
+let sidesMesh: THREE.Mesh | null = null;
+/** Faint outlines of the neighbouring hexes, drawn sharp over the blurred backdrop. */
+let ctxLines: THREE.LineSegments | null = null;
+/** The same ground, invisible, in the main pass: it only fills the depth buffer, so a nearer ridge
+ * hides the tile behind it (the backdrop alone can't: a background is behind everything). */
+let ctxOccluder: THREE.Mesh | null = null;
 const glowTex = (() => {
   const c = document.createElement('canvas'); c.width = c.height = 64;
   const g = c.getContext('2d')!, r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
@@ -333,7 +397,7 @@ const glowTex = (() => {
 
 function build(m: LocalMap) {
   scene.remove(world); dispose(world);
-  windows = null; glow = null; sidesMat = null; ctxMesh = null;
+  windows = null; glow = null; sidesMat = null; sidesMesh = null; ctxMesh = null; ctxLines = null; ctxOccluder = null;
   world = new THREE.Group();
   const st = style;
   const { res, size } = m, half = size / 2, step = size / (res - 1);
@@ -429,6 +493,7 @@ function build(m: LocalMap) {
   const sides = new THREE.Mesh(sg, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, fog: false }));
   sides.name = 'sides';
   sidesMat = sides.material;
+  sidesMesh = sides;
   world.add(sides);
 
   // Water: coloured by depth, shallow to deep, with foam where it meets the land.
@@ -635,7 +700,7 @@ function build(m: LocalMap) {
   // The atmosphere on everything (a no-op outside the Earth style).
   world.traverse((o) => {
     const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh || o.name === 'plants' || o.name === 'sides' || o.name === 'windows') return;
+    if (!mesh.isMesh || o.name === 'plants' || o.name === 'sides' || o.name === 'windows' || o.name === 'occluder') return;
     for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) applyAerial(mat, true);
   });
   // Where the map sits on the planet: x east, y up, z south (three.js), metres to radii.
@@ -729,6 +794,7 @@ function applyTime() {
   }
   sun.target.updateMatrixWorld(); rim.target.updateMatrixWorld();
   if (sidesMat) sidesMat.color.setRGB(L.sideLight * L.tint[0], L.sideLight * L.tint[1], L.sideLight * L.tint[2]);
+  if (ctxLines) (ctxLines.material as THREE.LineBasicMaterial).color.setRGB(L.sideLight, L.sideLight * 0.95, L.sideLight * 0.86);
   if (glow) {
     glow.visible = L.windows > 0.01;
     (glow.material as THREE.PointsMaterial).opacity = 0.5 * L.windows;
@@ -778,28 +844,10 @@ function drawInset(m: LocalMap) {
 }
 
 // --- Panel ---
-const stylesEl = $('styles');
-STYLES.forEach((st, i) => {
-  const b = document.createElement('button');
-  b.dataset.id = st.id;
-  b.innerHTML = `<kbd>${i + 1}</kbd>${st.label}<small>${st.blurb}</small>`;
-  b.onclick = () => pickStyle(st.id);
-  stylesEl.appendChild(b);
-});
-function pickStyle(id: string, keepTilt = false) {
-  const st = STYLES.find((x) => x.id === id);
-  if (!st) return;
-  const frameChanged = st.frame !== style.frame;
-  style = st;
-  if (!keepTilt) tiltOn = st.tiltShift;
-  syncPanel(); writeHash();
-  if (map) { build(map); if (frameChanged || true) resetView(); }
-}
-function setAround(on: boolean) { showCtx = on; $<HTMLInputElement>('around').checked = on; writeHash(); }
+function setAround(on: boolean) { showCtx = on; $<HTMLInputElement>('around').checked = on; syncAround(); writeHash(); }
 $<HTMLInputElement>('around').onchange = (e) => setAround((e.target as HTMLInputElement).checked);
 function setTilt(on: boolean) { tiltOn = on; tiltH.enabled = tiltV.enabled = on; syncPanel(); writeHash(); }
 function syncPanel() {
-  for (const b of stylesEl.querySelectorAll('button')) b.classList.toggle('on', b.dataset.id === style.id);
   $<HTMLInputElement>('tilt').checked = tiltOn;
   $<HTMLInputElement>('around').checked = showCtx;
   $<HTMLInputElement>('mag').value = String(opts.mag); $('mag-out').textContent = `${opts.mag}×`;
@@ -823,7 +871,6 @@ $<HTMLSelectElement>('res').onchange = (e) => { opts.res = Number((e.target as H
 function writeHash() {
   const o = new URLSearchParams(back);
   o.set('cell', String(cell));
-  o.set('style', style.id);
   if (tiltOn !== style.tiltShift) o.set('tilt', tiltOn ? '1' : '0');
   // Only what differs from the defaults (content-aware 10x).
   const D = LOCAL_DEFAULTS;
@@ -927,7 +974,6 @@ addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (walker.isLocked || (e.target as HTMLElement)?.tagName === 'INPUT') return;
   const n = Number(e.key);
-  if (n >= 1 && n <= STYLES.length) pickStyle(STYLES[n - 1].id);
   if (e.code === 'BracketLeft') { playing = false; setTime(hourNow() - 0.5); }
   if (e.code === 'BracketRight') { playing = false; setTime(hourNow() + 0.5); }
   if (e.code === 'KeyP') $('play').click();
@@ -992,9 +1038,9 @@ function renderFrame() {
   renderer.setRenderTarget(ctxRT); renderer.clear(); renderer.render(scene, cam);
   renderer.shadowMap.autoUpdate = true;
   cam.layers.set(0);
-  // 2. Blurred, twice each way.
-  const sp = 1.5 * Math.max(1, ctxRT.height / 400);
-  for (let it = 0; it < 2; it++) {
+  // 2. Blurred, once each way: soft, but the land still reads.
+  const sp = Math.max(1, ctxRT.height / 500);
+  for (let it = 0; it < 1; it++) {
     blurMat.uniforms.tSrc.value = ctxRT.texture; blurMat.uniforms.uDir.value.set(sp / ctxRT.width, 0);
     renderer.setRenderTarget(blurRT); blurQuad.render(renderer);
     blurMat.uniforms.tSrc.value = blurRT.texture; blurMat.uniforms.uDir.value.set(0, sp / ctxRT.height);
@@ -1015,7 +1061,7 @@ void LAYERS; void L_DEPTH;
   get map() { return map; },
   get busy() { return busy; },
   get style() { return style.id; },
-  resetView, scene, pickStyle, setTilt, setTime, setAround,
+  resetView, scene, setTilt, setTime, setAround,
   /** Hide the panels for clean screenshots. */
   capture: (on: boolean) => document.body.classList.toggle('capture', on),
   /**

@@ -15,11 +15,6 @@
     #facts { color: #b9c4cc; margin-bottom: 10px; }
     #facts b { color: #fff; font-weight: 600; }
     #tuning summary { cursor: pointer; color: #b9c4cc; margin-bottom: 4px; }
-    #styles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
-    #styles button { background: #2a3540; color: #dfe6eb; border: 1px solid #3c4955; border-radius: 7px; padding: 6px 6px; text-align: left; cursor: pointer; font: inherit; }
-    #styles button small { display: block; color: #93a2ad; font-size: 11px; }
-    #styles button.on { background: #35607f; border-color: #6aa4cf; }
-    #styles button kbd { float: right; color: #93a2ad; font: 11px monospace; }
     label.row { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 6px; margin: 3px 0; color: #b9c4cc; }
     label.row output { text-align: right; color: #fff; }
     select, input[type=range] { width: 100%; }
@@ -32,21 +27,18 @@
     #hint { left: 50%; bottom: 12px; transform: translateX(-50%); color: #c9d3da; font-size: 12px; padding: 6px 12px; }
     .capture .card { display: none; }
     #timing { color: #7d8b95; font-size: 11px; margin-top: 8px; }
-    #timerow { display: grid; grid-template-columns: 34px 1fr 46px; gap: 8px; align-items: center; }
+    #timerow { margin-top: 4px; display: grid; grid-template-columns: 34px 1fr 46px; gap: 8px; align-items: center; }
     #timerow output { text-align: right; color: #fff; font-variant-numeric: tabular-nums; }
     #play { background: #35607f; color: #fff; border: 0; border-radius: 7px; padding: 5px 0; cursor: pointer; font: inherit; }
     #timeinfo { color: #93a2ad; font-size: 11px; margin: 2px 0 10px; }
     #timeinfo a { color: #9cc3e6; text-decoration: none; }
     #more { display: none; float: right; background: #2a3540; color: #dfe6eb; border: 1px solid #3c4955; border-radius: 7px; font: inherit; font-size: 12px; padding: 2px 8px; }
-    /* Phones: a slim panel with just the styles; "More" opens the rest. No inset map or key hints. */
+    /* Phones: a slim panel with just the time; "More" opens the rest. No inset map or key hints. */
     @media (max-width: 700px) {
       #panel { left: 8px; right: 8px; top: 8px; width: auto; padding: 8px 10px; max-height: 60vh; overflow-y: auto; }
       #panel h1 { font-size: 14px; }
       #more { display: inline-block; }
-      #panel:not(.open) > :not(h1):not(#styles):not(#timerow) { display: none; }
-      #styles { grid-template-columns: repeat(6, 1fr); gap: 3px; margin-bottom: 4px; }
-      #styles button { padding: 6px 1px; text-align: center; font-size: 11px; }
-      #styles button small, #styles button kbd { display: none; }
+      #panel:not(.open) > :not(h1):not(#timerow) { display: none; }
       #inset, #hint { display: none; }
     }
   </style>
@@ -56,7 +48,6 @@
   <div id="panel" class="card">
     <h1><button id="more" type="button">More</button><span id="title">Hex</span><a id="back" href="/">← planet</a><a href="/hexes.html">gallery</a></h1>
     <div id="facts"></div>
-    <div id="styles"></div>
     <div id="timerow"><button id="play" type="button" title="Play the day (P)">▶</button><input id="time" type="range" min="0" max="23.99" step="0.05" /><output id="time-out"></output></div>
     <div id="timeinfo"><span id="time-sun"></span> · <a href="#" id="time-reset" onclick="return false">style's own hour</a></div>
     <label class="row">Tilt-shift <input id="tilt" type="checkbox" style="justify-self:start" /><span></span></label>
@@ -74,7 +65,7 @@
   </div>
   <div id="inset" class="card"><canvas id="map" width="480" height="480"></canvas><div>The planet's view of this ground · white = this hex</div></div>
   <div id="busy" class="card">Building the hex…</div>
-  <div id="hint" class="card">Drag to orbit · 1–6 style · [ ] hour · P play the day · N neighbours · T tilt-shift · right-drag to pan · scroll to zoom · H hex outline · the red figure is 1.8 m</div>
+  <div id="hint" class="card">Drag to orbit · [ ] hour · P play the day · N neighbours · T tilt-shift · right-drag to pan · scroll to zoom · H hex outline · the red figure is 1.8 m</div>
   <script>document.getElementById('more').onclick = () => document.getElementById('panel').classList.toggle('open');</script>
   <script type="module" src="/src/hex.ts"></script>
 </body>

@@ -1,7 +1,7 @@
 /**
- * Every hex style on every gallery hex, from each style's own camera, plus an HTML page laying
- * them out side by side (rows: hexes, columns: styles) with each style's frame rate.
- * Usage: [CELLS=12010,15979] [STYLES=tabletop,earth] [EYE=1] node scripts/hexgallery.mjs <base url> <outdir>
+ * Every gallery hex, from the view's own camera (and at eye level with EYE=1), plus an HTML page
+ * laying them out with the frame rate. AROUND=0 shoots without the neighbouring hexes.
+ * Usage: [CELLS=12010,15979] [EYE=1] [AROUND=0] node scripts/hexgallery.mjs <base url> <outdir>
  */
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
@@ -19,17 +19,15 @@ const settle = async () => {
   await page.waitForFunction(() => window.hex.scene.getObjectByName('context'), null, { timeout: 60000 }).catch(() => {});
   await page.waitForTimeout(600);
 };
-const styles = process.env.STYLES ? process.env.STYLES.split(',') : null;
 const rows = [];
-let allStyles = [];
+const allStyles = ['golden-earth'];
 for (const cell of cells) {
   await page.goto('about:blank');
-  await page.goto(`${base}hex.html#seed=1&cell=${cell}`);
+  await page.goto(`${base}hex.html#seed=1&cell=${cell}${process.env.AROUND === '0' ? '&around=0' : ''}`);
   await settle();
-  allStyles = styles ?? await page.evaluate(() => [...document.querySelectorAll('#styles button')].map((b) => b.dataset.id));
   const row = { cell, shots: [] };
   for (const st of allStyles) {
-    await page.evaluate((id) => { window.hex.pickStyle(id); window.hex.capture(true); }, st);
+    await page.evaluate(() => window.hex.capture(true));
     await page.waitForTimeout(1600);                 // let the fps meter settle
     const fps = await page.textContent('#fps');
     const file = `${cell}-${st}.png`;
@@ -46,11 +44,11 @@ for (const cell of cells) {
   }
   rows.push(row);
 }
-const html = `<!doctype html><meta charset="utf-8"><title>Hex styles</title>
+const html = `<!doctype html><meta charset="utf-8"><title>Hex gallery</title>
 <style>body{font:13px system-ui;background:#1b1f24;color:#ddd;margin:16px}table{border-collapse:collapse}
 td,th{padding:4px;vertical-align:top}img{width:420px;display:block;border-radius:4px}th{font-weight:600;text-align:left}
 small{color:#8a96a0}</style>
-<h1>Hex styles</h1><p>Rows: gallery hexes (seed 1). Columns: styles. Frame rates are this machine's, not the old laptop's.</p>
+<h1>Hex gallery</h1><p>Rows: gallery hexes (seed 1). Frame rates are this machine's, not the old laptop's.</p>
 <table><tr><th></th>${allStyles.map((s) => `<th>${s}</th>`).join('')}</tr>
 ${rows.map((r) => `<tr><th>${names[r.cell] ?? ''}<br><small>${r.cell}</small></th>${r.shots.map((s) => `<td><a href="${s.file}"><img src="${s.file}"></a>${s.eye ? `<a href="${s.eye}"><img src="${s.eye}"></a>` : ''}<small>${s.fps ?? ''}</small></td>`).join('')}</tr>`).join('\n')}
 </table>`;
