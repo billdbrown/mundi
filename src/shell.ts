@@ -14,6 +14,7 @@ import type { GameData } from './gamedata.ts';
 import { nameMaker } from './gamedata.ts';
 import { B, BIOMES } from './biomes.ts';
 import { mountClaims } from './claims.ts';
+import { DIALS, NAME_DECIDES, dialsOfParams } from './namedworld.ts';
 import { HISTORY_YEARS,popAt, realmAt, type History } from './civ.ts';
 
 export type Lens = 'earth' | 'map' | 'heat' | 'rain' | 'plates';
@@ -23,6 +24,8 @@ export interface App {
   setParams(p: Partial<WorldParams>): void;
   /** A new named world (fresh name and seed), optionally with other settings. */
   newWorld(p?: Partial<WorldParams>): void;
+  /** Create a world (name-decides trial): a name whose dials match these. */
+  create(dials: number[]): void;
   /** The planet's name. */
   name(): string;
   view(): ViewOptions;
@@ -65,8 +68,22 @@ export const PRESETS: Preset[] = [
   { id: 'water', label: 'Water world', blurb: 'Nine-tenths ocean', p: { ocean: 0.9, continents: 6, plates: 20, roughness: 0.7, heat: 0.05, wetness: 0.1 } },
 ];
 
-/** The kind of world these settings are, or undefined for a custom one. Every setting must match. */
-export function kindOf(p: WorldParams): Preset | undefined {
+/**
+ * The kind of world these settings are, or undefined for a custom one. Exact: every setting must
+ * match. Under the name-decides trial a name's settings never match exactly, so the nearest kind
+ * within 0.12 on every dial.
+ */
+export function kindOf(p: WorldParams, exact = !NAME_DECIDES): Preset | undefined {
+  if (!exact) {
+    const d = dialsOfParams(p);
+    let best: Preset | undefined, bestOff = 0.12;
+    for (const x of PRESETS) {
+      const t = dialsOfParams({ ...DEFAULT_PARAMS, ...x.p });
+      const off = Math.max(...t.map((v, i) => Math.abs(v - d[i])));
+      if (off <= bestOff) { bestOff = off; best = x; }
+    }
+    return best;
+  }
   const keys = (Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[]).filter((k) => k !== 'seed');
   return PRESETS.find((x) => keys.every((k) => Math.abs(p[k] - (x.p[k] ?? DEFAULT_PARAMS[k])) < 1e-6));
 }
@@ -74,32 +91,17 @@ export function kindOf(p: WorldParams): Preset | undefined {
 /** "Earthlike world", "Desert world", "Custom world"... */
 export function kindLabel(p: WorldParams): string {
   const k = kindOf(p);
-  return !k ? 'Custom world' : /world$/i.test(k.label) ? k.label : `${k.label} world`;
+  if (k) return /world$/i.test(k.label) ? k.label : `${k.label} world`;
+  if (!NAME_DECIDES) return 'Custom world';
+  // Under the name-decides trial every world is its name's own: say what it is like.
+  const [sea, land, heat, rain] = dialsOfParams(p), w: string[] = [];
+  if (heat < 0.25) w.push('cold'); else if (heat > 0.75) w.push('hot');
+  if (rain < 0.25) w.push('arid'); else if (rain > 0.75) w.push('lush');
+  if (sea < 0.25) w.push('dry'); else if (sea > 0.85) w.push('ocean');
+  if (land > 0.8 && sea > 0.5) w.push('island'); else if (land < 0.1) w.push('one-continent');
+  const s = w.length ? w.join(', ') + ' world' : 'temperate world';
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
-
-/** Four plain-language dials, each 0..1, mapped onto the raw parameters. */
-const DIALS = [
-  {
-    id: 'oceans', label: 'Oceans', lo: 'Dry', hi: 'Water world',
-    get: (p: WorldParams) => (p.ocean - 0.3) / 0.6,
-    set: (v: number): Partial<WorldParams> => ({ ocean: 0.3 + 0.6 * v }),
-  },
-  {
-    id: 'land', label: 'Land', lo: 'One continent', hi: 'Islands',
-    get: (p: WorldParams) => (p.continents - 1) / 7,
-    set: (v: number): Partial<WorldParams> => ({ continents: Math.round(1 + 7 * v), plates: Math.round(8 + 22 * v), roughness: 0.3 + 0.55 * v }),
-  },
-  {
-    id: 'climate', label: 'Climate', lo: 'Ice age', hi: 'Hothouse',
-    get: (p: WorldParams) => (p.heat + 0.3) / 0.6,
-    set: (v: number): Partial<WorldParams> => ({ heat: -0.3 + 0.6 * v }),
-  },
-  {
-    id: 'rain', label: 'Rain', lo: 'Arid', hi: 'Lush',
-    get: (p: WorldParams) => (p.wetness + 0.3) / 0.6,
-    set: (v: number): Partial<WorldParams> => ({ wetness: -0.3 + 0.6 * v }),
-  },
-];
 
 export function planetName(seed: number): string {
   return nameMaker(seed * 7 + 0x5151)();
@@ -131,7 +133,7 @@ export function mountShell(app: App) {
         <div class="menu" id="nw-menu" role="menu" hidden>
           ${PRESETS.map((p) => `<button role="menuitem" data-preset="${p.id}"><b>${p.label}</b><span>${p.blurb}</span></button>`).join('')}
           <hr />
-          <button role="menuitem" id="nw-custom"><b>✦ Custom world…</b><span>Set every dial yourself</span></button>
+          <button role="menuitem" id="nw-custom">${NAME_DECIDES ? '<b>✦ Create a world…</b><span>Choose its dials; get its name</span>' : '<b>✦ Custom world…</b><span>Set every dial yourself</span>'}</button>
         </div>
       </div>
       <button class="pill" id="share" title="Claim this planet, or copy a link to it">⤴ Share</button>
@@ -144,8 +146,8 @@ export function mountShell(app: App) {
     </nav>
     <div class="legend" id="legend" hidden><span id="legend-lo"></span><i id="legend-bar"></i><span id="legend-hi"></span></div>
     <aside class="drawer" id="drawer" hidden>
-      <div class="drawer-head"><h2>Custom world</h2><button class="x" id="drawer-close" title="Close">×</button></div>
-      <p class="drawer-note">Changes reshape this planet as you drag. ⟳ New world keeps these settings.</p>
+      <div class="drawer-head"><h2>${NAME_DECIDES ? 'Create a world' : 'Custom world'}</h2><button class="x" id="drawer-close" title="Close">×</button></div>
+      <p class="drawer-note">${NAME_DECIDES ? 'Set the dials, then Create: Mundi finds a planet whose name gives it these. The name is the whole planet; it can’t be changed after.' : 'Changes reshape this planet as you drag. ⟳ New world keeps these settings.'}</p>
       <div class="dials">
         ${DIALS.map((d) => `
           <label class="dial"><span class="dial-name">${d.label}</span>
@@ -153,7 +155,8 @@ export function mountShell(app: App) {
             <span class="dial-ends"><em>${d.lo}</em><em>${d.hi}</em></span>
           </label>`).join('')}
       </div>
-      <button class="link" id="advanced-toggle">All settings</button>
+      ${NAME_DECIDES ? '<button class="pill primary create-go" id="create-go">✦ Create</button>' : ''}
+      <button class="link" id="advanced-toggle"${NAME_DECIDES ? ' hidden' : ''}>All settings</button>
       <div id="advanced-slot"></div>
     </aside>
     <section class="almanac" id="almanac"></section>
@@ -298,7 +301,15 @@ export function mountShell(app: App) {
   };
   for (const d of DIALS) {
     const input = root.querySelector<HTMLInputElement>(`[data-dial="${d.id}"]`)!;
-    input.oninput = () => app.setParams(d.set(Number(input.value)));
+    // Under the name-decides trial the dials only choose; Create finds the planet.
+    input.oninput = () => { if (!NAME_DECIDES) app.setParams(d.set(Number(input.value))); };
+  }
+  if (NAME_DECIDES) {
+    $('create-go').onclick = () => {
+      app.create(DIALS.map((d) => Number(root.querySelector<HTMLInputElement>(`[data-dial="${d.id}"]`)!.value)));
+      openDrawer(false);
+      syncDials();
+    };
   }
   // --- Clock: speed time up. A day runs the sun round (day and night); a year sweeps the
   // seasons (snow, sea ice, autumn colour). Clicking the running one pauses it. ---

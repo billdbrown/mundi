@@ -298,3 +298,6 @@ body.capture .loader { display: none; }
 .ui .pclaim:hover { border-color: rgba(255, 200, 90, 0.8); }
 .ui .pclaim.unclaimed { background: rgba(255, 255, 255, 0.08); border: 1px dashed rgba(255, 255, 255, 0.4); color: #dfe6ef; }
 .ui .pclaim.unclaimed:hover { border-color: rgba(255, 200, 90, 0.8); color: #ffe3a6; }
+
+/* Create a world (the name-decides trial, namedworld.ts). */
+.create-go { display: block; width: 100%; margin: 4px 0 10px; }
