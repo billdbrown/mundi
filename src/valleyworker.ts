@@ -3,7 +3,8 @@
  * grid (cubeErosion in analyticerosion.ts), so water flows across the cube's face edges.
  *
  * Input: the six faces' captured heights (half floats, RGBA, height x50 in R), n x n each,
- * face-major. Output: carving and log2 drainage area, half floats, RG, same layout.
+ * face-major. Output: carving, log2 drainage area and the carving's local average (B), half
+ * floats, RGBA, same layout.
  */
 import { cubeErosion, cubeFace } from './analyticerosion.ts';
 import { makeSimplex } from './noise.ts';
@@ -76,7 +77,7 @@ self.onmessage = (ev: MessageEvent<ValleyRequest>) => {
   for (let i = 0; i < N; i++) jitter[i] -= BURN * burn[i];
   const { carve, area } = cubeErosion({ height, n, jitter, k: 1.4, m: 0.45, unit });
   // As the tiles had it: plains don't get canyons, and no cut deeper than half the land's height.
-  const packed = new Uint16Array(N * 2);
+  const cut = new Float32Array(N);
   for (let i = 0; i < N; i++) {
     // (Along rivers carving starts lower, so a river through a dry plateau cuts its valley.)
     const lo = 0.0025 - 0.0017 * burn[i];
@@ -85,9 +86,39 @@ self.onmessage = (ev: MessageEvent<ValleyRequest>) => {
     // valleys came out deep and only a texel or two wide, black trenches in shadow.
     const C = 0.003, raw = Math.min(carve[i], 0.5 * Math.max(0, height[i]));
     const cv = Math.max(C * Math.tanh(raw / C) * t * t * (3 - 2 * t), Math.min(TROUGH * trough[i], 0.5 * Math.max(0, height[i])));
-    packed[i * 2] = DataUtils.toHalfFloat(cv);
-    packed[i * 2 + 1] = DataUtils.toHalfFloat(Math.log2(Math.max(1, area[i])));
+    cut[i] = cv;
+  }
+  // The carving's local average, over about the plain terrain mesh's vertex spacing (~0.009 rad,
+  // 3-4 texels): the close-up patch carves the valleys relative to it, so the land keeps the
+  // height the plain terrain draws it at and only gains its valleys and ridges. Carved outright,
+  // high ranges sank by a third of their height as the patch reached them (2026-11-04, Bill:
+  // mountains "pushed down" as the camera comes in). Box blur of radius 2, twice, within a face.
+  const mean = blur(blur(cut, n, 2), n, 2);
+  const packed = new Uint16Array(N * 4);
+  for (let i = 0; i < N; i++) {
+    packed[i * 4] = DataUtils.toHalfFloat(cut[i]);
+    packed[i * 4 + 1] = DataUtils.toHalfFloat(Math.log2(Math.max(1, area[i])));
+    packed[i * 4 + 2] = DataUtils.toHalfFloat(mean[i]);
   }
   const res: ValleyResult = { packed, n, gen, ms: performance.now() - t0 };
   (self as unknown as Worker).postMessage(res, [packed.buffer]);
 };
+
+/** Box blur of radius r within each of the six n x n faces (separable; edges average what's there). */
+function blur(a: Float32Array, n: number, r: number): Float32Array {
+  const F = n * n, tmp = new Float32Array(a.length), out = new Float32Array(a.length);
+  for (let f = 0; f < 6; f++) {
+    const o = f * F;
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      let sum = 0, cnt = 0;
+      for (let d = -r; d <= r; d++) { const xx = x + d; if (xx >= 0 && xx < n) { sum += a[o + y * n + xx]; cnt++; } }
+      tmp[o + y * n + x] = sum / cnt;
+    }
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      let sum = 0, cnt = 0;
+      for (let d = -r; d <= r; d++) { const yy = y + d; if (yy >= 0 && yy < n) { sum += tmp[o + yy * n + x]; cnt++; } }
+      out[o + y * n + x] = sum / cnt;
+    }
+  }
+  return out;
+}

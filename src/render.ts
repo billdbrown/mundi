@@ -661,14 +661,20 @@ export class PlanetView {
     return (this.groundCell = c);
   }
 
+  /** The ground as the patch draws it in direction p: the plain terrain less the valleys' carving. */
+  private drawnGround(p: THREE.Vector3) {
+    const l = p.length(), x = p.x / l, y = p.y / l, z = p.z / l, h = this.probe!.heightAt(x, y, z, SEA);
+    return Math.max(SEA, h - this.terrainShadow.valleys.carveAt(x, y, z, h - SEA));
+  }
+
   private applyTilt(d: number) {
     const s = (a: number, b: number) => THREE.MathUtils.smoothstep(d, a, b);
     // Keep a little clearance over the ground below, so you can skim valleys but not enter hills.
     const c = this.cellBelow();
     if (c >= 0 && this.surface) {
       const cp = this.virtualPos;   // (the carved valleys lower the ground: you can go down into them)
-      const carve = this.terrainShadow.valleys.carveAt(cp.x, cp.y, cp.z);
-      this.controls.minDistance = Math.max(SEA + this.floor + 0.001, Math.max(this.surface.centerH(c) - carve, SEA) + this.floor);
+      const top = this.surface.centerH(c), carve = this.terrainShadow.valleys.carveAt(cp.x, cp.y, cp.z, top - SEA);
+      this.controls.minDistance = Math.max(SEA + this.floor + 0.001, Math.max(top - carve, SEA) + this.floor);
     }
     // Tilt grows smoothly all the way down from 1.5 radii, most of it near the ground, up to
     // ~66°. The view pivots about the ground point at the middle of the screen, which stays put:
@@ -680,7 +686,7 @@ export class PlanetView {
     if (this.tiltActive) {
       const up = this.camera.position.clone().normalize();
       // (The ground as drawn: less the valleys' carving, which the patch carries as relief.)
-      const ground = this.probe ? Math.max(SEA, this.probe.heightAt(up.x, up.y, up.z, SEA) - this.terrainShadow.valleys.carveAt(up.x, up.y, up.z)) : SEA;
+      const ground = this.probe ? this.drawnGround(up) : SEA;
       const target = up.clone().multiplyScalar(ground);
       let north = new THREE.Vector3(0, 1, 0).addScaledVector(up, -up.y);
       if (north.lengthSq() < 1e-6) north = new THREE.Vector3(0, 0, -1).addScaledVector(up, up.z);
@@ -691,7 +697,7 @@ export class PlanetView {
         .addScaledVector(north, -Math.sin(this.tilt) * dist);
       // Keep clear of hills between the camera and its target.
       const l = pos.length();
-      const under = this.probe ? Math.max(SEA, this.probe.heightAt(pos.x, pos.y, pos.z, SEA) - this.terrainShadow.valleys.carveAt(pos.x, pos.y, pos.z)) : SEA;
+      const under = this.probe ? this.drawnGround(pos) : SEA;
       const clear = Math.min(0.0025, this.floor * 0.35);
       if (l < under + clear) pos.multiplyScalar((under + clear) / l);
       this.camera.position.copy(pos);

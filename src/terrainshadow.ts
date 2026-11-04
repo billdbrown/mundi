@@ -83,6 +83,7 @@ const ERO_GLSL = !ERO_TILES ? VALLEY_GLSL : /* glsl */`
     if (a.z <= 1e-4) return vec3(0.0);
     return vec3(a.xy / a.z, min(a.z, 1.0) * uEroOn);
   }
+  float groundCut(vec3 p) { vec3 c = groundCarve(p); return c.x * c.z; }
 `;
 
 /** One set, shared by everything that receives terrain shadows. */
@@ -176,7 +177,9 @@ const shadowFragment = /* glsl */`
     float h = max(texture(uHeight, uv).r, 0.0) / 50.0;
     if (uEroOn > 0.0) {
       vec3 p = normalize(uC + uE * q.x + uN * q.y);
-      vec3 c = groundCarve(p);
+      // As the patch carves it (dunes.ts): relative to the carving's local average, so the
+      // shadows match the ground across the patch's edge.
+      float c = groundCut(p);
       // The high-detail patch is in the height map already carved (dunes.ts, faded at its edge
       // the same way): carving it again sank its valleys twice as deep in shadow.
       float cover = 0.0;
@@ -184,7 +187,7 @@ const shadowFragment = /* glsl */`
         float s = max(abs(dot(p, uPatchE)), abs(dot(p, uPatchN))) / ${PATCH_R};
         cover = 1.0 - smoothstep(0.8, 0.97, s);
       }
-      h -= c.x * c.z * (1.0 - cover);
+      h -= c * uEroOn * (1.0 - cover);
     }
     return h;
   }

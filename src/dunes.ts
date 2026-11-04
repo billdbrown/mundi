@@ -268,11 +268,14 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
     // their walls in the normal, and the gullies below steered down those walls, so they branch
     // off the valleys. Not faded with distance: it is the land's shape. (The terrain shader
     // shades the carving on the plain terrain; on the patch the geometry carries it.)
+    // Cut relative to the carving's local average (groundCut), so the land keeps the plain
+    // terrain's height on average: carved outright, high ranges sank by about a third as the
+    // patch reached them, and reshaped as it moved (2026-11-04).
     float liftC = 0.0;
     vec3 gC = vec3(0.0);
     if (uEroOn >= 0.999 && hAbove > 0.0) {
       float e = uEroR * 2.0 / 512.0;
-      float c0 = groundCarve(base).x, c1 = groundCarve(base + east * e).x, c2 = groundCarve(base + north * e).x;
+      float c0 = groundCut(base), c1 = groundCut(base + east * e), c2 = groundCut(base + north * e);
       // Deeper in the mountains (x MTN_CARVE at the top): the ridges between the valleys come out
       // sharp, where at plain depth ranges were rounded domes close up (2026-11-03).
       // Never below the sea: toward the coast the valley floors come down to sea level and meet
@@ -280,7 +283,7 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
       // stood as a wall across every river mouth: 2026-11-03.)
       float full = c0 * (1.0 + MTN_CARVE * highland), cut = min(full, 0.9 * hAbove);
       liftC = -cut * edge;
-      gC = -(east * (c1 - c0) + north * (c2 - c0)) / e * (cut / max(full, 1e-9));
+      gC = -(east * (c1 - c0) + north * (c2 - c0)) / e * (full > 0.0 ? cut / full : 1.0);
       gC *= min(1.0, 0.35 / max(length(gC), 1e-6)) * edge;   // walls no steeper than ~20 deg, as in sky.ts
     }
 
