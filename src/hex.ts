@@ -561,7 +561,7 @@ function build(m: LocalMap) {
   });
   // Where the map sits on the planet: x east, y up, z south (three.js), metres to radii.
   const F = m.frame;
-  planetScale = m.mag / (m.radiusKm * 1000);
+  planetScale = m.mag / (m.radiusKm * 1000) * (st.atmosphere ? st.haze ?? 1 : 1);
   const ps2 = planetScale;
   toPlanet.set(
     F[3] * ps2, F[0] * ps2, -F[6] * ps2, F[0],
@@ -638,12 +638,12 @@ function applyTime() {
   rim.intensity = L.rim;
   rim.position.set(-sun.position.x, size * 0.3, -sun.position.z);
   // The planet's atmosphere already brightens low-sun skies; adapting fully washes them out.
-  renderer.toneMappingExposure = st.atmosphere ? Math.min(L.exposure, st.exposure * 1.5) : L.exposure;
+  renderer.toneMappingExposure = st.atmosphere ? Math.min(L.exposure, st.exposure * (st.paintedSky ? 3 : 1.5)) : L.exposure;
   gradePass.uniforms.uTint.value = L.tint;
   if (style.atmosphere) {
     sun.position.applyMatrix4(toPlanet); rim.position.applyMatrix4(toPlanet);
     sun.target.position.set(0, 0, 0).applyMatrix4(toPlanet); rim.target.position.copy(sun.target.position);
-    scene.background = new THREE.Color(0x0a1424);
+    scene.background = st.paintedSky ? skyTex : new THREE.Color(0x0a1424);
   } else {
     scene.background = skyTex;
     rim.target.position.set(0, 0, 0);

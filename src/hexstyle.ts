@@ -60,6 +60,10 @@ export interface HexStyle {
   /** The planet's own atmosphere (atmosphere.ts): the map is drawn in place on the planet, at
    * true size, so the sky, haze and sunlight are the planet's. */
   atmosphere: boolean;
+  /** With the atmosphere: how much air is in the way, as a share of the map at true size (1, the
+   * default; less is clearer), and whether the style's painted sky shows behind it instead of space. */
+  haze?: number;
+  paintedSky?: boolean;
   camera: { tilt: number; fov: number; dist: number };
   tiltShift: boolean;
 }
@@ -160,6 +164,15 @@ export const STYLES: HexStyle[] = [
     photoGrade: false, atmosphere: false, camera: { tilt: 35, fov: 40, dist: 1.0 }, tiltShift: false,
   },
 ];
+
+/** 6, a hybrid (Bill, 2026-11-04): Golden hour's look (palette, textures, trees, tile, warm grade,
+ * tilt-shift, camera) under the planet's own atmosphere, as in Earth: real sky, haze and sunlight. */
+const golden = STYLES.find((s) => s.id === 'golden')!;
+STYLES.push({
+  ...golden,
+  id: 'golden-earth', label: 'Golden Earth', blurb: "Golden hour under the planet's sky",
+  atmosphere: true, haze: 0.35, paintedSky: true,
+});
 
 const smooth01 = (a: number, b: number, x: number) => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));

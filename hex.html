@@ -44,8 +44,8 @@
       #panel h1 { font-size: 14px; }
       #more { display: inline-block; }
       #panel:not(.open) > :not(h1):not(#styles):not(#timerow) { display: none; }
-      #styles { grid-template-columns: repeat(5, 1fr); gap: 4px; margin-bottom: 4px; }
-      #styles button { padding: 6px 2px; text-align: center; font-size: 12px; }
+      #styles { grid-template-columns: repeat(6, 1fr); gap: 3px; margin-bottom: 4px; }
+      #styles button { padding: 6px 1px; text-align: center; font-size: 11px; }
       #styles button small, #styles button kbd { display: none; }
       #inset, #hint { display: none; }
     }
@@ -73,7 +73,7 @@
   </div>
   <div id="inset" class="card"><canvas id="map" width="480" height="480"></canvas><div>The planet's view of this ground · white = this hex</div></div>
   <div id="busy" class="card">Building the hex…</div>
-  <div id="hint" class="card">Drag to orbit · 1–5 style · [ ] hour · P play the day · T tilt-shift · right-drag to pan · scroll to zoom · H hex outline · the red figure is 1.8 m</div>
+  <div id="hint" class="card">Drag to orbit · 1–6 style · [ ] hour · P play the day · T tilt-shift · right-drag to pan · scroll to zoom · H hex outline · the red figure is 1.8 m</div>
   <script>document.getElementById('more').onclick = () => document.getElementById('panel').classList.toggle('open');</script>
   <script type="module" src="/src/hex.ts"></script>
 </body>
