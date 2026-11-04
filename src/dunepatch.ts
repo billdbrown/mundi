@@ -186,9 +186,37 @@ export class DunePatch {
     this.bakeScene.add(bakePts);
   }
 
+  /** Sea and lakes in the river mask's b channel, added after the rivers so they don't erase it:
+   *  overwritten under a river's tail out over the sea, the ground there didn't sink with the
+   *  sea floor round it and stood as a ridge across every mouth (2026-11-04). */
+  private seaMat = new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
+    blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor, blendEquation: THREE.AddEquation,
+    vertexShader: 'void main() { gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'void main() { gl_FragColor = vec4(0.0, 0.0, 1.0, 0.0); }',
+  });
+  private sea: THREE.Mesh | null = null;
+
+  /** Where the water is drawn: the patch sinks out of the way only there (PATCH_GLSL). */
+  setSea(m: THREE.Mesh | undefined) {
+    if (this.sea) this.riverScene.remove(this.sea);
+    this.sea = null;
+    if (m) {
+      this.sea = new THREE.Mesh(m.geometry, this.seaMat);
+      this.sea.matrixAutoUpdate = false;
+      this.sea.frustumCulled = false;
+      this.sea.renderOrder = 1;
+      m.updateWorldMatrix(true, false);
+      this.sea.matrix.copy(m.matrixWorld);
+      this.riverScene.add(this.sea);
+    }
+    this.dirty = true;
+  }
+
   /** The rivers and streams, so the patch keeps flat floodplains along them. */
   setRivers(meshes: (THREE.Mesh | undefined)[]) {
     this.riverScene.clear();
+    if (this.sea) this.riverScene.add(this.sea);
     for (const m of meshes) {
       if (!m) continue;
       const copy = new THREE.Mesh(m.geometry, this.riverMat);
@@ -306,6 +334,7 @@ export class DunePatch {
     for (const t of this.bake) t.dispose();
     this.bakeMat.dispose();
     this.riverMat.dispose();
+    this.seaMat.dispose();
     this.matA.dispose(); this.matB.dispose();
     this.colour.geometry.dispose();
     (this.colour.material as THREE.Material).dispose();

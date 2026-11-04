@@ -53,6 +53,7 @@ async function aim(seed, target, alt, lens) {
         if (n >= 0 && w.water[n] === 1 && (P[n * 3 + 1] - cy) < -0.6 * Math.hypot(P[n * 3] - P[c * 3], P[n * 3 + 1] - cy, P[n * 3 + 2] - P[c * 3 + 2])) list.push(c);
       }
       list.sort((x, y) => w.flow[y] - w.flow[x]);
+      if (!list.length) return -1;   // (none faces south: nothing to aim at)
       const best = list[Math.min(rank, list.length) - 1], dn = w.downstream[best];
       // Aim just inland of the edge the river leaves by.
       const q = [0, 1, 2].map((i) => P[best * 3 + i] * 0.65 + P[dn * 3 + i] * 0.35), ql = Math.hypot(...q);

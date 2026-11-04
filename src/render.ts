@@ -1177,6 +1177,7 @@ export class PlanetView {
     for (const f of this.forest) { this.planet.remove(f); f.dispose(); }
     this.terrain = this.water = this.gridLines = this.rivers = this.streams = undefined;
     this.dunePatch?.setTerrain(null);
+    this.dunePatch?.setSea(undefined);
     this.terrainShadow?.setTerrain(null);
     this.dunePatch?.setRivers([]);
     this.forest = [];
@@ -1206,6 +1207,7 @@ export class PlanetView {
       this.water = new THREE.Mesh(toGeometry(data.water), this.waterMat);
       this.water.renderOrder = 1;
       this.planet.add(this.water);
+      this.dunePatch.setSea(this.water);
     }
 
     this.forest = buildForest(data.trees);
