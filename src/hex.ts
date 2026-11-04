@@ -1044,7 +1044,7 @@ worker.onmessage = (e: MessageEvent<{ map: LocalMap; ms: { world: number; local:
   if (rel) { camera.position.copy(rel.p.multiplyScalar(m.size)); controls.target.copy(rel.t.multiplyScalar(m.size)); }
   else resetView();
   firstBuild = false;
-  $('timing').textContent = `world ${Math.round(e.data.ms.world)} ms · hex ${Math.round(e.data.ms.local)} ms · ${(m.trees.length / 6).toLocaleString()} plants`;
+  $('timing').textContent = `world ${Math.round(e.data.ms.world)} ms · hex ${Math.round(e.data.ms.local)} ms${(e.data as { prebuilt?: boolean }).prebuilt ? ' (prebuilt)' : ''} · ${(m.trees.length / 6).toLocaleString()} plants`;
   writeHash();
   if (again) { again = false; request(); } else $('busy').hidden = true;
 };

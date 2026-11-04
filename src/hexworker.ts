@@ -41,6 +41,7 @@ self.onmessage = (e: MessageEvent<HexJob>) => {
   const cell = spot ? findSpot(world, spot) : job.cell;
   const jk = `${job.kind}|${cell}|${JSON.stringify(opts)}`;
   let got = kept.get(jk);
+  const prebuilt = !!got;
   if (!got) {
     const m = job.kind === 'hex'
       ? buildLocalMap(world, cell, opts, history ?? undefined)
@@ -53,6 +54,6 @@ self.onmessage = (e: MessageEvent<HexJob>) => {
     if (job.prefetch) return;
     kept.delete(jk);
   }
-  if (job.kind === 'hex') post({ map: got.m, ms: { world: t1 - t0, local: got.ms } }, buffers(got.m));
+  if (job.kind === 'hex') post({ map: got.m, ms: { world: t1 - t0, local: got.ms }, prebuilt }, buffers(got.m));
   else post({ context: got.m, cell }, buffers(got.m));
 };
