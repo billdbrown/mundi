@@ -187,9 +187,8 @@ export class PlanetView {
       Promise.all(low).catch(() => {}).finally(() => {
         if (run !== this.gateRun) return;
         this.lowReady = true;
-        this.mapGate ??= this.compileMap();
-        // Then the other look's shaders (photo or map), so the first switch of layer is quick.
-        this.mapGate.then(() => this.compileOtherLook(run));
+        // The map's and the other look's shaders only once wanted (compileOthers).
+        if (this.wantOthers) this.compileOthers();
       });
     });
   }
@@ -349,7 +348,22 @@ export class PlanetView {
   private movedAt = 0;
   private lastView = new THREE.Vector4();
   private hurry = false;
-  hurryCompiles() { this.hurry = true; }
+  /**
+   * The flat map's and the other look's shaders compile only once wanted: a pointer over the layer
+   * or projection buttons (shell.ts), or a switch. Compiled straight after loading, they kept the
+   * GPU busy ~70 s more, and closing the tab mid-compile froze all of Chrome for up to ~18 s (the
+   * driver can't abandon a compile; 2026-11-04, scripts/closefreeze2.mjs).
+   */
+  private wantOthers = false;
+  private othersRun = 0;
+  private compileOthers() {
+    this.wantOthers = true;
+    if (!this.lowReady || this.othersRun === this.gateRun) return;
+    const run = this.othersRun = this.gateRun;
+    this.mapGate ??= this.compileMap();
+    this.mapGate.then(() => this.compileOtherLook(run));
+  }
+  hurryCompiles() { this.hurry = true; this.compileOthers(); }
   private settled(): Promise<void> {
     return new Promise((res) => {
       const check = () => (this.hurry || this.pendingMap || performance.now() - this.movedAt > 1500 ? res() : setTimeout(check, 100));
