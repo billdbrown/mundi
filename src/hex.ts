@@ -126,6 +126,59 @@ function dispose(o: THREE.Object3D) {
 
 const col = (hex: number) => new THREE.Color(hex);
 
+// Ground textures (CC0, public/assets/hex/CREDITS.md), and each one's mean brightness, so the
+// shader can use their grain without shifting the style's colours.
+const texMean = { grass: 0.2, ground: 0.2, rock: 0.2 };
+const loadTex = (name: keyof typeof texMean) => new THREE.TextureLoader().load(`assets/hex/${name}.jpg`, (t) => {
+  const img = t.image as HTMLImageElement, cv = document.createElement('canvas');
+  cv.width = cv.height = 16;
+  const g = cv.getContext('2d')!;
+  g.drawImage(img, 0, 0, 16, 16);
+  const d = g.getImageData(0, 0, 16, 16).data;
+  let sum = 0;
+  for (let i = 0; i < d.length; i += 4) sum += 0.2126 * (d[i] / 255) ** 2.2 + 0.7152 * (d[i + 1] / 255) ** 2.2 + 0.0722 * (d[i + 2] / 255) ** 2.2;
+  texMean[name] = sum / 256;
+  groundTex.uMeans.value.set(texMean.grass, texMean.ground, texMean.rock);
+});
+const groundTex = {
+  tGrass: { value: loadTex('grass') }, tGround: { value: loadTex('ground') }, tRock: { value: loadTex('rock') },
+  uMeans: { value: new THREE.Vector3(0.2, 0.2, 0.2) }, uTexAmt: { value: 0 }, uTexScale: { value: 8 },
+};
+for (const k of ['tGrass', 'tGround', 'tRock'] as const) {
+  const t = groundTex[k].value;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+}
+/** The terrain material with the ground textures' grain: grass, soil in patches, rock on steep ground. */
+function texturedGround(mat: THREE.MeshStandardMaterial) {
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, groundTex);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vLPos; varying vec3 vLN;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLPos = position; vLN = normal;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vLPos; varying vec3 vLN;
+        uniform sampler2D tGrass, tGround, tRock;
+        uniform vec3 uMeans;
+        uniform float uTexAmt, uTexScale;
+        float texL(sampler2D t, vec2 uv) { return dot(texture2D(t, uv).rgb, vec3(0.2126, 0.7152, 0.0722)); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        if (uTexAmt > 0.0) {
+          vec2 uv = vLPos.xz / uTexScale;
+          // Two scales, the second turned, so the tiles don't repeat visibly.
+          vec2 uv2 = mat2(0.8, -0.6, 0.6, 0.8) * uv * 0.37;
+          float g = 0.5 * (texL(tGrass, uv) + texL(tGrass, uv2)) / uMeans.x;
+          float d = 0.5 * (texL(tGround, uv * 0.8) + texL(tGround, uv2 * 0.8)) / uMeans.y;
+          float r = 0.5 * (texL(tRock, uv * 0.5) + texL(tRock, uv2 * 0.5)) / uMeans.z;
+          float soil = smoothstep(0.35, 0.65, texL(tGround, uv * 0.03));
+          float steep = 1.0 - smoothstep(0.7, 0.88, normalize(vLN).y);
+          float det = mix(mix(g, d, soil * 0.5), r, steep);
+          diffuseColor.rgb *= mix(1.0, clamp(det, 0.4, 1.8), uTexAmt);
+        }`);
+  };
+  mat.customProgramCacheKey = () => 'hexground';
+}
+
 /** The hex as a convex polygon: inside test and nearest boundary point. */
 function hexShape(m: LocalMap) {
   const H = m.hex, n = H.length / 2;
@@ -185,7 +238,9 @@ function build(m: LocalMap) {
   tg.setAttribute('color', new THREE.BufferAttribute(paintGround(m, st), 3));
   tg.setIndex(idx);
   tg.computeVertexNormals();
-  const terrain = new THREE.Mesh(tg, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97 }));
+  const tmat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97 });
+  texturedGround(tmat);
+  const terrain = new THREE.Mesh(tg, tmat);
   terrain.receiveShadow = true; terrain.castShadow = true;
   world.add(terrain);
 
@@ -458,6 +513,7 @@ function applyLook(m: LocalMap) {
   G.uSat.value = st.grade.sat; G.uContrast.value = st.grade.contrast; G.uTint.value = st.grade.tint;
   G.uVig.value = st.grade.vignette; G.uLift.value = st.grade.lift;
   tiltH.enabled = tiltV.enabled = tiltOn;
+  groundTex.uTexAmt.value = st.texture.amount; groundTex.uTexScale.value = st.texture.scale;
 }
 
 // --- The inset: the planet's own picture of this ground. ---
