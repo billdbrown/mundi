@@ -14,6 +14,6 @@ self.onmessage = (e: MessageEvent<{ params: WorldParams; cell: number; spot?: Sp
   const cell = spot ? findSpot(world, spot) : e.data.cell;
   const m = buildLocalMap(world, cell, opts);
   const t2 = performance.now();
-  const transfer = [m.heights.buffer, m.colors.buffer, m.lakeMask.buffer, m.trees.buffer, ...m.rivers.map((r) => r.pts.buffer)];
+  const transfer = [m.heights.buffer, m.colors.buffer, m.base.buffer, m.layers.buffer, m.lakeMask.buffer, m.trees.buffer, ...m.rivers.map((r) => r.pts.buffer)];
   (self as unknown as Worker).postMessage({ map: m, ms: { world: t1 - t0, local: t2 - t1 } }, transfer as ArrayBuffer[]);
 };

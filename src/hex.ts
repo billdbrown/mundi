@@ -1,7 +1,7 @@
 /**
  * The hex view: one planet hex opened up as a walkable local map (hex.html). Opened from the
- * planet by double-clicking a hex. Variants of how the hex is scaled can be switched live
- * (keys 1–4) to compare; see hexlocal.ts for what each option does.
+ * planet by double-clicking a hex. The generator (hexlocal.ts) lays out the ground from the
+ * planet; a style (hexstyle.ts, keys 1–5) decides how it is drawn.
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -14,12 +14,13 @@ import { GRADE_SHADER } from './grade.ts';
 import { treeGeometry, treeMaterial } from './flora.ts';
 import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
 import { parseSeed } from './seedname.ts';
-import { LOCAL_DEFAULTS, localHeights, type LocalMap, type LocalOptions } from './hexlocal.ts';
+import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, type LocalMap, type LocalOptions } from './hexlocal.ts';
+import { STYLES, paintGround, STYLE_GRADE, TILT_SHIFT, type HexStyle } from './hexstyle.ts';
 import type { Spot } from './debug.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
-// --- What to build, from the link: the world's settings, the cell, and the variant. ---
+// --- What to build, from the link: the world's settings, the cell, the options and the style. ---
 const h = new URLSearchParams(location.hash.slice(1));
 const params: WorldParams = { ...DEFAULT_PARAMS };
 const s = parseSeed(h.get('seed') ?? '');
@@ -34,8 +35,10 @@ let opts: LocalOptions = { ...LOCAL_DEFAULTS, radiusKm: Number(h.get('radius')) 
 for (const k of ['mag', 'vScale', 'vSoft', 'res'] as const) if (h.get(k)) opts[k] = Number(h.get(k));
 if (h.get('river') === 'scaled' || h.get('river') === 'flow') opts.riverMode = h.get('river') as LocalOptions['riverMode'];
 if (h.get('crags')) opts.crags = h.get('crags') === '1';
+let style: HexStyle = STYLES.find((x) => x.id === h.get('style')) ?? STYLES[0];
+let tiltOn = h.get('tilt') === null ? style.tiltShift : h.get('tilt') === '1';
 const back = new URLSearchParams(h);
-for (const k of ['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags']) back.delete(k);
+for (const k of ['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt']) back.delete(k);
 $<HTMLAnchorElement>('back').href = '/#' + back.toString();
 
 // --- Scene ---
@@ -47,40 +50,38 @@ renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 $('view').appendChild(renderer.domElement);
 const scene = new THREE.Scene();
-// Sky: deep blue overhead to a pale haze at the horizon, as from low on the planet; the fog is the
-// horizon colour, so far ground fades into it.
-const HAZE = new THREE.Color(0x9fb4c8), ZENITH = new THREE.Color(0x2f5490);
-scene.fog = new THREE.FogExp2(HAZE, 0.0005);
-// (A painted gradient: a sky dome drew a hard band where it met the plain background.)
-{
-  const cv = document.createElement('canvas'); cv.width = 2; cv.height = 256;
-  const g = cv.getContext('2d')!, gr = g.createLinearGradient(0, 0, 0, 256);
-  gr.addColorStop(0, '#' + ZENITH.getHexString()); gr.addColorStop(0.55, '#' + HAZE.getHexString()); gr.addColorStop(1, '#' + HAZE.getHexString());
-  g.fillStyle = gr; g.fillRect(0, 0, 2, 256);
-  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
-  scene.background = tex;
-}
+scene.fog = new THREE.FogExp2(0xffffff, 0);
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.3, 50000);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.495;
 const walker = new PointerLockControls(camera, document.body);
-scene.add(new THREE.HemisphereLight(0xd6e6f2, 0x5b5242, 1.3));
-const sun = new THREE.DirectionalLight(0xfff1dc, 2.6);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
+const sun = new THREE.DirectionalLight(0xffffff, 1);
 sun.castShadow = true;
 sun.shadow.mapSize.set(4096, 4096);
 sun.shadow.bias = -0.0004;
-scene.add(sun, sun.target);
-// The planet's photo look: render, grade in linear light, then tone map and encode.
+const rim = new THREE.DirectionalLight(0xdfe8ff, 0);
+scene.add(hemi, sun, sun.target, rim, rim.target);
+
+// Post: render, grade (the style's, or the planet's photo grade), tilt-shift, tone map and encode.
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-composer.addPass(new ShaderPass(GRADE_SHADER));
+const photoPass = new ShaderPass(GRADE_SHADER);
+const gradePass = new ShaderPass(STYLE_GRADE);
+const tiltH = new ShaderPass(TILT_SHIFT), tiltV = new ShaderPass(TILT_SHIFT);
+tiltV.uniforms.uDir.value = [0, 1];
+composer.addPass(photoPass); composer.addPass(gradePass); composer.addPass(tiltH); composer.addPass(tiltV);
 composer.addPass(new OutputPass());
-addEventListener('resize', () => {
+function resize() {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
-});
+  const pr = renderer.getPixelRatio();
+  tiltH.uniforms.uRes.value = tiltV.uniforms.uRes.value = [innerWidth * pr, innerHeight * pr];
+}
+addEventListener('resize', resize);
+resize();
 
 let map: LocalMap | null = null;
 let world = new THREE.Group();
@@ -88,19 +89,19 @@ scene.add(world);
 let outline: THREE.Line | null = null;
 
 /** Ground height under (x, y) in map metres (y north). */
-function groundAt(x: number, y: number): number {
-  if (!map) return 0;
-  const { res, size, heights } = map, step = size / (res - 1), half = size / 2;
+function groundAtMap(m: LocalMap, x: number, y: number): number {
+  const { res, size, heights } = m, step = size / (res - 1), half = size / 2;
   const fi = Math.max(0, Math.min(res - 1.001, (x + half) / step)), fj = Math.max(0, Math.min(res - 1.001, (y + half) / step));
   const i0 = Math.floor(fi), j0 = Math.floor(fj), tx = fi - i0, ty = fj - j0;
   const a = heights[j0 * res + i0], b = heights[j0 * res + i0 + 1], c = heights[(j0 + 1) * res + i0], d = heights[(j0 + 1) * res + i0 + 1];
   return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
 }
+const groundAt = (x: number, y: number) => (map ? groundAtMap(map, x, y) : 0);
 const waterAt = (x: number, y: number) => Math.max(map?.sea ? 0 : -Infinity, groundAt(x, y));
 
 function dispose(o: THREE.Object3D) {
   o.traverse((n) => {
-    if (n.name === 'plants') return;           // shared with flora.ts: geometry and material are cached there
+    if (n.name === 'plants') { (n as THREE.InstancedMesh).dispose(); return; }   // geometry and material are shared (flora.ts)
     const m = n as THREE.Mesh;
     m.geometry?.dispose();
     const mat = m.material as THREE.Material | THREE.Material[] | undefined;
@@ -108,91 +109,177 @@ function dispose(o: THREE.Object3D) {
   });
 }
 
-const waterMat = () => new THREE.MeshStandardMaterial({ color: 0x24505e, roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.9 });
+const col = (hex: number) => new THREE.Color(hex);
+
+/** The hex as a convex polygon: inside test and nearest boundary point. */
+function hexShape(m: LocalMap) {
+  const H = m.hex, n = H.length / 2;
+  // Orientation, so "inside" is the same side of every edge as the centre.
+  let area = 0;
+  for (let k = 0; k < n; k++) area += H[k * 2] * H[((k + 1) % n) * 2 + 1] - H[((k + 1) % n) * 2] * H[k * 2 + 1];
+  const sgn = Math.sign(area);
+  const inside = (x: number, y: number) => {
+    for (let k = 0; k < n; k++) {
+      const ax = H[k * 2], ay = H[k * 2 + 1], bx = H[((k + 1) % n) * 2], by = H[((k + 1) % n) * 2 + 1];
+      if (sgn * ((bx - ax) * (y - ay) - (by - ay) * (x - ax)) < 0) return false;
+    }
+    return true;
+  };
+  const nearest = (x: number, y: number): [number, number] => {
+    let best: [number, number] = [x, y], bd = Infinity;
+    for (let k = 0; k < n; k++) {
+      const ax = H[k * 2], ay = H[k * 2 + 1], bx = H[((k + 1) % n) * 2], by = H[((k + 1) % n) * 2 + 1];
+      const dx = bx - ax, dy = by - ay, t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)));
+      const px = ax + dx * t, py = ay + dy * t, d = (px - x) ** 2 + (py - y) ** 2;
+      if (d < bd) { bd = d; best = [px, py]; }
+    }
+    return best;
+  };
+  return { inside, nearest, H, n };
+}
 
 function build(m: LocalMap) {
   scene.remove(world); dispose(world);
   world = new THREE.Group();
+  const st = style;
   const { res, size } = m, half = size / 2, step = size / (res - 1);
+  const shape = hexShape(m);
+  const cut = st.frame === 'hex';
+  const inFrame = (x: number, y: number) => (cut ? shape.inside(x, y) : Math.abs(x) <= half && Math.abs(y) <= half);
 
-  // Terrain.
-  const pos = new Float32Array(res * res * 3);
+  // Terrain. Cut to the hex: samples outside are pulled onto its edge, so the tile has a clean
+  // hexagonal outline, and quads wholly outside are dropped.
+  const N = res * res;
+  const px = new Float32Array(N), py = new Float32Array(N), ph = new Float32Array(N), out = new Uint8Array(N);
   for (let j = 0; j < res; j++) for (let i = 0; i < res; i++) {
     const v = j * res + i;
-    pos[v * 3] = -half + i * step; pos[v * 3 + 1] = m.heights[v]; pos[v * 3 + 2] = -(-half + j * step);
+    let x = -half + i * step, y = -half + j * step, hh = m.heights[v];
+    if (cut && !shape.inside(x, y)) { [x, y] = shape.nearest(x, y); hh = groundAtMap(m, x, y); out[v] = 1; }
+    px[v] = x; py[v] = y; ph[v] = hh;
   }
-  const idx = new Uint32Array((res - 1) * (res - 1) * 6);
-  let n = 0;
+  const pos = new Float32Array(N * 3);
+  for (let v = 0; v < N; v++) { pos[v * 3] = px[v]; pos[v * 3 + 1] = ph[v]; pos[v * 3 + 2] = -py[v]; }
+  const idx: number[] = [];
   for (let j = 0; j < res - 1; j++) for (let i = 0; i < res - 1; i++) {
     const a = j * res + i, b = a + 1, c = a + res, d = c + 1;
-    idx[n++] = a; idx[n++] = b; idx[n++] = c; idx[n++] = b; idx[n++] = d; idx[n++] = c;
+    if (out[a] && out[b] && out[c] && out[d]) continue;
+    idx.push(a, b, c, b, d, c);
   }
   const tg = new THREE.BufferGeometry();
   tg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  tg.setAttribute('color', new THREE.BufferAttribute(m.colors, 3));
-  tg.setIndex(new THREE.BufferAttribute(idx, 1));
+  tg.setAttribute('color', new THREE.BufferAttribute(paintGround(m, st), 3));
+  tg.setIndex(idx);
   tg.computeVertexNormals();
   const terrain = new THREE.Mesh(tg, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97 }));
   terrain.receiveShadow = true; terrain.castShadow = true;
   world.add(terrain);
 
-  // Earthen sides, so the map reads as a tile cut from the planet (and nothing shows under it).
+  // Sides: earth in bands, so the map reads as a tile cut from the ground; water shows as water.
   let lo = 0;
-  for (const h of m.heights) lo = Math.min(lo, h);
-  const floor = lo - Math.max(15, size * 0.02), sp: number[] = [];
-  const edge = (i: number, j: number) => [-half + i * step, m.heights[j * res + i], half - j * step];
-  const sideRun = (pts: number[][]) => {
-    for (let k = 0; k < pts.length - 1; k++) {
-      const [ax, ay, az] = pts[k], [bx, by, bz] = pts[k + 1];
-      sp.push(ax, ay, az, ax, floor, az, bx, by, bz, bx, by, bz, ax, floor, az, bx, floor, bz);
+  for (const hv of m.heights) lo = Math.min(lo, hv);
+  const floor = lo - Math.max(20, size * (cut ? 0.035 : 0.02));
+  const ring: [number, number][] = [];
+  if (cut) {
+    for (let k = 0; k < shape.n; k++) {
+      const ax = shape.H[k * 2], ay = shape.H[k * 2 + 1], bx = shape.H[((k + 1) % shape.n) * 2], by = shape.H[((k + 1) % shape.n) * 2 + 1];
+      const segs = Math.max(2, Math.ceil(Math.hypot(bx - ax, by - ay) / step));
+      for (let t = 0; t < segs; t++) ring.push([ax + (bx - ax) * t / segs, ay + (by - ay) * t / segs]);
     }
-  };
-  const S: number[][] = [], E: number[][] = [], Nn: number[][] = [], Wt: number[][] = [];
-  for (let i = 0; i < res; i++) { S.push(edge(i, 0)); Nn.push(edge(res - 1 - i, res - 1)); }
-  for (let j = 0; j < res; j++) { E.push(edge(res - 1, j)); Wt.push(edge(0, res - 1 - j)); }
-  sideRun(S); sideRun(E); sideRun(Nn); sideRun(Wt);
+  } else {
+    for (let i = 0; i < res - 1; i++) ring.push([-half + i * step, -half]);
+    for (let j = 0; j < res - 1; j++) ring.push([half, -half + j * step]);
+    for (let i = res - 1; i > 0; i--) ring.push([-half + i * step, half]);
+    for (let j = res - 1; j > 0; j--) ring.push([-half, -half + j * step]);
+  }
+  ring.push(ring[0]);
+  const bands = st.sides.map(col), sp: number[] = [], sc: number[] = [];
+  const waterTop = col(st.water.deep);
+  for (let k = 0; k < ring.length - 1; k++) {
+    const [ax, ay] = ring[k], [bx, by] = ring[k + 1];
+    const ga = groundAtMap(m, ax, ay), gb = groundAtMap(m, bx, by);
+    const ta = m.sea ? Math.max(0, ga) : ga, tb = m.sea ? Math.max(0, gb) : gb;
+    // Rows from the top down: water (if any) to the ground, then the bands of earth to the floor.
+    const rows = (top: number, g: number) => {
+      const r: [number, THREE.Color][] = [];
+      if (top > g + 0.01) r.push([top, waterTop], [g, waterTop]);
+      const nb = bands.length;
+      for (let b = 0; b <= nb; b++) {
+        const yb = g + (floor - g) * (b === 0 ? 0 : 0.05 + 0.95 * b / nb);
+        r.push([yb, bands[Math.min(nb - 1, b)]]);
+        if (b > 0 && b < nb) r.push([yb, bands[b]]);
+      }
+      return r;
+    };
+    const ra = rows(ta, ga), rb = rows(tb, gb);
+    const L = Math.min(ra.length, rb.length);
+    for (let r = 0; r < L - 1; r++) {
+      const [ya0, ca0] = ra[r], [ya1, ca1] = ra[r + 1], [yb0, cb0] = rb[r], [yb1, cb1] = rb[r + 1];
+      sp.push(ax, ya0, -ay, ax, ya1, -ay, bx, yb0, -by, bx, yb0, -by, ax, ya1, -ay, bx, yb1, -by);
+      for (const c of [ca0, ca1, cb0, cb0, ca1, cb1]) sc.push(c.r, c.g, c.b);
+    }
+  }
   const sg = new THREE.BufferGeometry();
   sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
+  sg.setAttribute('color', new THREE.Float32BufferAttribute(sc, 3));
   sg.computeVertexNormals();
-  world.add(new THREE.Mesh(sg, new THREE.MeshStandardMaterial({ color: 0x4a3c2e, roughness: 1, side: THREE.DoubleSide })));
+  world.add(new THREE.Mesh(sg, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide })));
 
-  // Sea and lake: water only over ground that is below it, so no sheet sticks out past the map.
+  // Water: coloured by depth, shallow to deep, with foam where it meets the land.
+  const W = st.water, shallow = col(W.shallow), deep = col(W.deep), foam = col(W.foam);
+  const waterMat = () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: W.roughness, metalness: 0.05, transparent: true, opacity: W.opacity });
+  const tint = (depth: number, out3: THREE.Color) => {
+    out3.copy(shallow).lerp(deep, Math.min(1, depth / 10));
+    if (depth < W.foamDepth) out3.lerp(foam, 1 - depth / W.foamDepth);
+    return out3;
+  };
+  const tmp = new THREE.Color();
   const waterOver = (level: number, mask: Float32Array | null) => {
-    const lp: number[] = [];
+    const lp: number[] = [], lc: number[] = [];
     for (let j = 0; j < res - 1; j++) for (let i = 0; i < res - 1; i++) {
-      const v = j * res + i;
-      if (mask && Math.max(mask[v], mask[v + 1], mask[v + res], mask[v + res + 1]) < 0.5) continue;
-      if (Math.min(m.heights[v], m.heights[v + 1], m.heights[v + res], m.heights[v + res + 1]) > level) continue;
-      const x0 = -half + i * step, x1 = x0 + step, z0 = half - j * step, z1 = z0 - step, y = level;
-      lp.push(x0, y, z0, x1, y, z0, x0, y, z1, x1, y, z0, x1, y, z1, x0, y, z1);
+      const v = j * res + i, q = [v, v + 1, v + res, v + res + 1];
+      if (mask && Math.max(...q.map((u) => mask[u])) < 0.5) continue;
+      if (Math.min(...q.map((u) => ph[u])) > level) continue;
+      if (q.every((u) => out[u])) continue;
+      for (const u of [q[0], q[1], q[2], q[1], q[3], q[2]]) {
+        lp.push(px[u], level, -py[u]);
+        tint(Math.max(0, level - ph[u]), tmp); lc.push(tmp.r, tmp.g, tmp.b);
+      }
     }
     if (!lp.length) return;
     const lg = new THREE.BufferGeometry();
-    lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lp), 3));
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
+    lg.setAttribute('color', new THREE.Float32BufferAttribute(lc, 3));
     lg.computeVertexNormals();
     const mesh = new THREE.Mesh(lg, waterMat()); mesh.receiveShadow = true;
     world.add(mesh);
   };
   if (m.sea) waterOver(0, null);
   if (!Number.isNaN(m.lakeLevel)) waterOver(m.lakeLevel, m.lakeMask);
-  const inside = (x: number, y: number) => Math.abs(x) <= half && Math.abs(y) <= half;
+  // Rivers: a ribbon of three rows, foam-pale at the banks and deeper down the middle.
   for (const r of m.rivers) {
-    const p = r.pts, k = p.length / 4, rp = new Float32Array(k * 6), ri: number[] = [];
-    for (let s = 0; s < k; s++) {
-      const a = Math.max(0, s - 1), b = Math.min(k - 1, s + 1);
+    const p = r.pts, k = p.length / 4, rp = new Float32Array(k * 9), rc = new Float32Array(k * 9), ri: number[] = [];
+    for (let s2 = 0; s2 < k; s2++) {
+      const a = Math.max(0, s2 - 1), b = Math.min(k - 1, s2 + 1);
       let tx = p[b * 4] - p[a * 4], ty = p[b * 4 + 1] - p[a * 4 + 1];
       const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
-      const hw = p[s * 4 + 3] * 0.55, x = p[s * 4], y = p[s * 4 + 1], lv = p[s * 4 + 2] + 0.05;
-      rp.set([x - ty * hw, lv, -(y + tx * hw), x + ty * hw, lv, -(y - tx * hw)], s * 6);
-      // Only the stretch on the map: pieces from cells further out ran past its edge.
-      if (s < k - 1 && inside(x, y) && inside(p[s * 4 + 4], p[s * 4 + 5])) ri.push(s * 2, s * 2 + 1, s * 2 + 2, s * 2 + 1, s * 2 + 3, s * 2 + 2);
+      const w = p[s2 * 4 + 3], hw = w * 0.55, x = p[s2 * 4], y = p[s2 * 4 + 1], lv = p[s2 * 4 + 2] + 0.05;
+      rp.set([x - ty * hw, lv, -(y + tx * hw), x, lv, -y, x + ty * hw, lv, -(y - tx * hw)], s2 * 9);
+      const mid = tint(Math.max(0.6, Math.min(6, 0.12 * w)) * 2, new THREE.Color());
+      const bank = tint(W.foamDepth * 0.85, new THREE.Color());
+      rc.set([bank.r, bank.g, bank.b, mid.r, mid.g, mid.b, bank.r, bank.g, bank.b], s2 * 9);
+      // Only the stretch on the map.
+      if (s2 < k - 1 && inFrame(x, y) && inFrame(p[s2 * 4 + 4], p[s2 * 4 + 5])) {
+        const o = s2 * 3;
+        ri.push(o, o + 1, o + 3, o + 1, o + 4, o + 3, o + 1, o + 2, o + 4, o + 2, o + 5, o + 4);
+      }
     }
     if (!ri.length) continue;
     const rg = new THREE.BufferGeometry();
     rg.setAttribute('position', new THREE.BufferAttribute(rp, 3));
+    rg.setAttribute('color', new THREE.BufferAttribute(rc, 3));
     rg.setIndex(ri);
     rg.computeVertexNormals();
-    const mat = waterMat(); mat.color.setHex(0x2f5853); mat.side = THREE.DoubleSide;
+    const mat = waterMat(); mat.side = THREE.DoubleSide; mat.roughness = Math.max(W.roughness, 0.45);   // narrow: sun glare turned it white
     const mesh = new THREE.Mesh(rg, mat); mesh.receiveShadow = true;
     world.add(mesh);
   }
@@ -201,21 +288,26 @@ function build(m: LocalMap) {
   const T = m.trees, STRIDE = 6, count = T.length / STRIDE;
   const byKind = new Map<number, number[]>();
   for (let i = 0; i < count; i++) {
+    if (!inFrame(T[i * STRIDE], T[i * STRIDE + 1])) continue;
+    if (st.plants.keep < 1 && ((i * 2246822519) >>> 0) / 4294967296 > st.plants.keep) continue;
     const k = T[i * STRIDE + 4];
     if (!byKind.has(k)) byKind.set(k, []);
     byKind.get(k)!.push(i);
   }
-  const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3(), col = new THREE.Color();
+  const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc3 = new THREE.Vector3(), ps = new THREE.Vector3(), pc = new THREE.Color();
   const up = new THREE.Vector3(0, 1, 0);
   for (const [kind, list] of byKind) {
     const mesh = new THREE.InstancedMesh(treeGeometry(kind), treeMaterial, list.length);
     list.forEach((i, k) => {
-      const s = T[i * STRIDE + 3], jit = ((i * 2654435761) >>> 0) / 4294967296;
+      const sz = T[i * STRIDE + 3], jit = ((i * 2654435761) >>> 0) / 4294967296;
       q.setFromAxisAngle(up, jit * Math.PI * 2);
-      sc.setScalar(s);
-      ps.set(T[i * STRIDE], T[i * STRIDE + 2] - 0.04 * s, -T[i * STRIDE + 1]);
-      mesh.setMatrixAt(k, mtx.compose(ps, q, sc));
-      mesh.setColorAt(k, col.setHex(T[i * STRIDE + 5]));
+      sc3.setScalar(sz * st.plants.scale);
+      ps.set(T[i * STRIDE], T[i * STRIDE + 2] - 0.04 * sz * st.plants.scale, -T[i * STRIDE + 1]);
+      mesh.setMatrixAt(k, mtx.compose(ps, q, sc3));
+      pc.setHex(T[i * STRIDE + 5]);
+      const l = 0.2126 * pc.r + 0.7152 * pc.g + 0.0722 * pc.b;
+      pc.setRGB((l + (pc.r - l) * st.plants.sat) * st.plants.bright, (l + (pc.g - l) * st.plants.sat) * st.plants.bright, (l + (pc.b - l) * st.plants.sat) * st.plants.bright);
+      mesh.setColorAt(k, pc);
     });
     mesh.castShadow = true; mesh.receiveShadow = true;
     mesh.name = 'plants';
@@ -223,26 +315,23 @@ function build(m: LocalMap) {
   }
 
   // A person (1.8 m) and a cottage at the centre, for scale.
-  const gy = groundAtMap(m, 6, 0);
   const person = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 1.3, 4, 8), new THREE.MeshStandardMaterial({ color: 0xc0392b }));
-  person.position.set(6, gy + 0.9, 0); person.castShadow = true;
-  person.name = 'person';
-  const cy = groundAtMap(m, 0, 0);
+  person.position.set(6, groundAtMap(m, 6, 0) + 0.9, 0); person.castShadow = true;
   const cottage = new THREE.Group();
   const walls = new THREE.Mesh(new THREE.BoxGeometry(9, 4, 6), new THREE.MeshStandardMaterial({ color: 0xd8cdb4 }));
   walls.position.y = 2;
   const roof = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 4.2, 9.6, 3, 1), new THREE.MeshStandardMaterial({ color: 0x7a3b2a }));
   roof.rotation.z = Math.PI / 2; roof.position.y = 4 + 1.05; roof.scale.set(1, 1, 0.82);
   cottage.add(walls, roof);
-  cottage.position.set(0, cy - 0.5, 0);
+  cottage.position.set(0, groundAtMap(m, 0, 0) - 0.5, 0);
   cottage.traverse((o) => { o.castShadow = true; o.receiveShadow = true; });
   world.add(person, cottage);
 
-  // The hex outline, draped over the ground.
+  // The hex outline, draped over the ground (on the cut tile, its edge is the outline already).
   const ol: number[] = [], H = m.hex, nc = H.length / 2;
-  for (let k = 0; k <= nc; k++) {
-    const a = k % nc, b = (k + 1) % nc;
-    for (let t = 0; t < 160 && k < nc; t++) {
+  for (let k = 0; k < nc; k++) {
+    const a = k, b = (k + 1) % nc;
+    for (let t = 0; t < 160; t++) {
       const x = H[a * 2] + (H[b * 2] - H[a * 2]) * t / 160, y = H[a * 2 + 1] + (H[b * 2 + 1] - H[a * 2 + 1]) * t / 160;
       ol.push(x, Math.max(groundAtMap(m, x, y), m.sea ? 0 : -1e9) + size * 0.002, -y);
     }
@@ -252,19 +341,46 @@ function build(m: LocalMap) {
   og.setAttribute('position', new THREE.Float32BufferAttribute(ol, 3));
   const showOutline = outline ? outline.visible : true;
   outline = new THREE.Line(og, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 }));
-  outline.visible = showOutline;
+  outline.visible = showOutline && !cut;
   world.add(outline);
 
   scene.add(world);
-  (scene.fog as THREE.FogExp2).density = 0.55 / size;
-  camera.far = size * 6; camera.updateProjectionMatrix();
-  sun.position.set(size * 0.45, size * 0.7, size * 0.35);
-  const sc2 = sun.shadow.camera;
-  sc2.left = -size * 0.75; sc2.right = size * 0.75; sc2.top = size * 0.75; sc2.bottom = -size * 0.75;
-  sc2.near = 1; sc2.far = size * 3; sc2.updateProjectionMatrix();
-  sun.shadow.normalBias = step * 0.5;
+  applyLook(m);
 }
-function groundAtMap(m: LocalMap, x: number, y: number) { const old = map; map = m; const g = groundAt(x, y); map = old; return g; }
+
+/** Light, sky, fog and grade for the current style. */
+function applyLook(m: LocalMap) {
+  const st = style, size = m.size;
+  // Sky: a painted gradient, top to bottom of the screen.
+  const cv = document.createElement('canvas'); cv.width = 2; cv.height = 256;
+  const g = cv.getContext('2d')!, gr = g.createLinearGradient(0, 0, 0, 256);
+  gr.addColorStop(0, '#' + col(st.sky[0]).getHexString(THREE.SRGBColorSpace));
+  gr.addColorStop(1, '#' + col(st.sky[1]).getHexString(THREE.SRGBColorSpace));
+  g.fillStyle = gr; g.fillRect(0, 0, 2, 256);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  (scene.background as THREE.Texture | null)?.dispose?.();
+  scene.background = tex;
+  const fog = scene.fog as THREE.FogExp2;
+  fog.color.setHex(st.fogColor); fog.density = st.fog / size;
+  hemi.color.setHex(st.hemi.sky); hemi.groundColor.setHex(st.hemi.ground); hemi.intensity = st.hemi.intensity;
+  const el = st.sun.elev * Math.PI / 180, az = st.sun.azim * Math.PI / 180, d = size * 1.2;
+  sun.color.setHex(st.sun.color); sun.intensity = st.sun.intensity;
+  sun.position.set(Math.sin(az) * Math.cos(el) * d, Math.sin(el) * d, Math.cos(az) * Math.cos(el) * d);
+  rim.intensity = st.rim;
+  rim.position.set(-sun.position.x, size * 0.3, -sun.position.z);
+  renderer.toneMappingExposure = st.exposure;
+  const sc = sun.shadow.camera;
+  sc.left = -size * 0.75; sc.right = size * 0.75; sc.top = size * 0.75; sc.bottom = -size * 0.75;
+  sc.near = 1; sc.far = size * 4; sc.updateProjectionMatrix();
+  sun.shadow.normalBias = (size / (m.res - 1)) * 0.5;
+  camera.far = size * 8; camera.fov = st.camera.fov; camera.updateProjectionMatrix();
+  photoPass.enabled = st.photoGrade;
+  gradePass.enabled = !st.photoGrade;
+  const G = gradePass.uniforms;
+  G.uSat.value = st.grade.sat; G.uContrast.value = st.grade.contrast; G.uTint.value = st.grade.tint;
+  G.uVig.value = st.grade.vignette; G.uLift.value = st.grade.lift;
+  tiltH.enabled = tiltV.enabled = tiltOn;
+}
 
 // --- The inset: the planet's own picture of this ground. ---
 function drawInset(m: LocalMap) {
@@ -293,7 +409,27 @@ function drawInset(m: LocalMap) {
 }
 
 // --- Panel ---
+const stylesEl = $('styles');
+STYLES.forEach((st, i) => {
+  const b = document.createElement('button');
+  b.dataset.id = st.id;
+  b.innerHTML = `<kbd>${i + 1}</kbd>${st.label}<small>${st.blurb}</small>`;
+  b.onclick = () => pickStyle(st.id);
+  stylesEl.appendChild(b);
+});
+function pickStyle(id: string, keepTilt = false) {
+  const st = STYLES.find((x) => x.id === id);
+  if (!st) return;
+  const frameChanged = st.frame !== style.frame;
+  style = st;
+  if (!keepTilt) tiltOn = st.tiltShift;
+  syncPanel(); writeHash();
+  if (map) { build(map); if (frameChanged || true) resetView(); }
+}
+function setTilt(on: boolean) { tiltOn = on; tiltH.enabled = tiltV.enabled = on; syncPanel(); writeHash(); }
 function syncPanel() {
+  for (const b of stylesEl.querySelectorAll('button')) b.classList.toggle('on', b.dataset.id === style.id);
+  $<HTMLInputElement>('tilt').checked = tiltOn;
   $<HTMLInputElement>('mag').value = String(opts.mag); $('mag-out').textContent = `${opts.mag}×`;
   $<HTMLInputElement>('vscale').value = String(opts.vScale); $('vscale-out').textContent = String(opts.vScale);
   $<HTMLSelectElement>('river').value = opts.riverMode;
@@ -302,6 +438,7 @@ function syncPanel() {
   $<HTMLSelectElement>('res').value = String(opts.res);
 }
 const custom = () => { syncPanel(); request(); };
+$<HTMLInputElement>('tilt').onchange = (e) => setTilt((e.target as HTMLInputElement).checked);
 $<HTMLInputElement>('mag').oninput = (e) => { opts.mag = Number((e.target as HTMLInputElement).value); $('mag-out').textContent = `${opts.mag}×`; };
 $<HTMLInputElement>('mag').onchange = custom;
 $<HTMLInputElement>('vscale').oninput = (e) => { opts.vScale = Number((e.target as HTMLInputElement).value); $('vscale-out').textContent = String(opts.vScale); };
@@ -312,17 +449,19 @@ $<HTMLInputElement>('crags').onchange = (e) => { opts.crags = (e.target as HTMLI
 $<HTMLSelectElement>('res').onchange = (e) => { opts.res = Number((e.target as HTMLSelectElement).value); request(); };
 
 function writeHash() {
-  const out = new URLSearchParams(back);
-  out.set('cell', String(cell));
+  const o = new URLSearchParams(back);
+  o.set('cell', String(cell));
+  o.set('style', style.id);
+  if (tiltOn !== style.tiltShift) o.set('tilt', tiltOn ? '1' : '0');
   // Only what differs from the defaults (content-aware 10x).
   const D = LOCAL_DEFAULTS;
-  if (opts.mag !== D.mag) out.set('mag', String(opts.mag));
-  if (opts.vScale !== D.vScale) out.set('vScale', String(opts.vScale));
-  if (opts.vSoft !== D.vSoft) out.set('vSoft', String(opts.vSoft));
-  if (opts.riverMode !== D.riverMode) out.set('river', opts.riverMode);
-  if (opts.crags !== D.crags) out.set('crags', opts.crags ? '1' : '0');
-  if (opts.res !== LOCAL_DEFAULTS.res) out.set('res', String(opts.res));
-  history.replaceState(null, '', location.pathname + '#' + out.toString());
+  if (opts.mag !== D.mag) o.set('mag', String(opts.mag));
+  if (opts.vScale !== D.vScale) o.set('vScale', String(opts.vScale));
+  if (opts.vSoft !== D.vSoft) o.set('vSoft', String(opts.vSoft));
+  if (opts.riverMode !== D.riverMode) o.set('river', opts.riverMode);
+  if (opts.crags !== D.crags) o.set('crags', opts.crags ? '1' : '0');
+  if (opts.res !== D.res) o.set('res', String(opts.res));
+  history.replaceState(null, '', location.pathname + '#' + o.toString());
 }
 
 /** How rises of a few sizes come out, e.g. "100 m → 50 m, 1 km → 380 m, 5 km → 830 m". */
@@ -358,11 +497,11 @@ function request() {
 worker.onmessage = (e: MessageEvent<{ map: LocalMap; ms: { world: number; local: number } }>) => {
   busy = false;
   const m = e.data.map;
-  // Keep the camera's place relative to the map size, so variants compare from the same angle.
+  // Keep the camera's place relative to the map size, so changes compare from the same angle.
   const rel = map && !firstBuild ? { p: camera.position.clone().divideScalar(map.size), t: controls.target.clone().divideScalar(map.size) } : null;
   cell = m.cell;
-  build(m);
   map = m;
+  build(m);
   drawInset(m); facts(m);
   if (rel) { camera.position.copy(rel.p.multiplyScalar(m.size)); controls.target.copy(rel.t.multiplyScalar(m.size)); }
   else resetView();
@@ -372,43 +511,53 @@ worker.onmessage = (e: MessageEvent<{ map: LocalMap; ms: { world: number; local:
   if (again) { again = false; request(); } else $('busy').hidden = true;
 };
 
+/** The style's own camera: tilted `tilt` degrees from straight down, looking north at the centre. */
 function resetView() {
   if (!map) return;
-  const g = groundAt(0, 0);
+  const g = groundAt(0, 0), c = style.camera;
+  const fit = map.localWidth * 0.62 / Math.tan((c.fov * Math.PI / 180) / 2) * c.dist;
+  const t = c.tilt * Math.PI / 180;
   controls.target.set(0, g, 0);
-  camera.position.set(map.size * 0.05, g + map.size * 0.42, map.size * 0.62);
+  camera.position.set(0, g + Math.cos(t) * fit, Math.sin(t) * fit);
   controls.update();
+  tiltH.uniforms.uFocus.value = tiltV.uniforms.uFocus.value = 0.5;
 }
 $('reset').onclick = resetView;
 
 // --- Walking ---
 const keys = new Set<string>();
-let saved: { p: THREE.Vector3; t: THREE.Vector3 } | null = null;
+let saved: { p: THREE.Vector3; t: THREE.Vector3; tilt: boolean } | null = null;
 $('walk').onclick = () => {
   if (!map) return;
-  saved = { p: camera.position.clone(), t: controls.target.clone() };
+  saved = { p: camera.position.clone(), t: controls.target.clone(), tilt: tiltOn };
   camera.position.set(8, waterAt(8, 3) + 1.7, -3);
   camera.lookAt(0, groundAt(0, 0) + 2, 0);
   controls.enabled = false;
+  tiltH.enabled = tiltV.enabled = false;
   walker.lock();
 };
 walker.addEventListener('unlock', () => {
   controls.enabled = true;
-  if (saved) { camera.position.copy(saved.p); controls.target.copy(saved.t); controls.update(); saved = null; }
+  if (saved) { camera.position.copy(saved.p); controls.target.copy(saved.t); controls.update(); tiltH.enabled = tiltV.enabled = saved.tilt; saved = null; }
 });
 addEventListener('keydown', (e) => {
   keys.add(e.code);
-  if (walker.isLocked) return;
+  if (walker.isLocked || (e.target as HTMLElement)?.tagName === 'INPUT') return;
   const n = Number(e.key);
+  if (n >= 1 && n <= STYLES.length) pickStyle(STYLES[n - 1].id);
+  if (e.code === 'KeyT') setTilt(!tiltOn);
   if (e.code === 'KeyH' && outline) outline.visible = !outline.visible;
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
 
 const timer = new THREE.Timer();
 const fwd = new THREE.Vector3(), right = new THREE.Vector3();
+let frames = 0, fpsT = 0;
 renderer.setAnimationLoop(() => {
   timer.update();
   const dt = Math.min(0.1, timer.getDelta());
+  frames++; fpsT += dt;
+  if (fpsT > 1) { $('fps').textContent = `${Math.round(frames / fpsT)} fps`; frames = 0; fpsT = 0; }
   if (walker.isLocked && map) {
     const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 14 : 1.6;
     camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
@@ -429,10 +578,12 @@ renderer.setAnimationLoop(() => {
 
 syncPanel();
 request();
+void LAYERS; void L_DEPTH;
 (window as unknown as Record<string, unknown>).hex = {
   get map() { return map; },
   get busy() { return busy; },
-  resetView, scene,
+  get style() { return style.id; },
+  resetView, scene, pickStyle, setTilt,
   /** Hide the panels for clean screenshots. */
   capture: (on: boolean) => document.body.classList.toggle('capture', on),
   /**

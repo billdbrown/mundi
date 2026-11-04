@@ -58,6 +58,15 @@ export interface LocalRiver {
   pts: Float32Array;
 }
 
+/**
+ * Ground layers per sample, so a style can repaint the ground in its own palette without
+ * regenerating (hexstyle.ts). Each 0..1 unless noted, LAYERS values per sample.
+ */
+export const L_GRASS = 0, L_MOTTLE = 1, L_FOREST = 2, L_ROCK = 3, L_SNOW = 4, L_SAND = 5, L_BED = 6,
+  L_LUSH = 7, L_ALPINE = 8, L_DEPTH = 9, L_AO = 10, L_CLEARING = 11;
+/** (L_DEPTH is metres of water over the ground, 0 on land; L_AO how sunken the spot is, a crease.) */
+export const LAYERS = 12;
+
 export interface LocalMap {
   cell: number;
   res: number;
@@ -67,8 +76,12 @@ export interface LocalMap {
   trueWidthKm: number;
   localWidth: number;
   heights: Float32Array;
-  /** Linear RGB per sample. */
+  /** Linear RGB per sample: the planet's Earth look, ready to draw. */
   colors: Float32Array;
+  /** Linear RGB per sample: the climate palette alone, before any ground patterns. */
+  base: Float32Array;
+  /** LAYERS values per sample (L_GRASS...). */
+  layers: Float32Array;
   /** Sea level is 0 (when the map has sea). */
   sea: boolean;
   /** Lake surface and a 0..1 mask of where it is, or NaN level for none. */
@@ -134,6 +147,25 @@ export function localHeights(o: LocalOptions, centreTrue: number): (t: number) =
   const F = (d: number) => o.vSoft * Math.asinh(d / o.vSoft) / o.vScale;
   const zero = F(-centreTrue);
   return (t) => F(t - centreTrue) - zero;
+}
+
+/** Mean of a res x res field over a (2r+1)-square window, by two running-sum passes. */
+function boxBlur(f: Float32Array, res: number, r: number): Float32Array {
+  const tmp = new Float32Array(f.length), out = new Float32Array(f.length);
+  for (let pass = 0; pass < 2; pass++) {
+    const src = pass === 0 ? f : tmp, dst = pass === 0 ? tmp : out;
+    for (let a = 0; a < res; a++) {
+      let sum = 0, cnt = 0;
+      const at = (b: number) => (pass === 0 ? a * res + b : b * res + a);
+      for (let b = 0; b < Math.min(res, r); b++) { sum += src[at(b)]; cnt++; }
+      for (let b = 0; b < res; b++) {
+        if (b + r < res) { sum += src[at(b + r)]; cnt++; }
+        if (b - r - 1 >= 0) { sum -= src[at(b - r - 1)]; cnt--; }
+        dst[at(b)] = sum / cnt;
+      }
+    }
+  }
+  return out;
 }
 
 const smooth = (a: number, b: number, x: number) => {
@@ -461,6 +493,13 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   }
   const sea = cellList.some((c) => w.water[c] === WATER_OCEAN);
 
+  // Crease shading (ambient occlusion, baked): how far a sample sits below the ground around it,
+  // from a box blur of the heights about 20 m across.
+  const aoBlur = boxBlur(heights, res, Math.max(2, Math.round(10 / step)));
+  const base = colors.slice();
+  const layers = new Float32Array(N * LAYERS);
+  const lay = (v: number, k: number, val: number) => { layers[v * LAYERS + k] = val; };
+
   // --- Colour: the planet's Earth look, ported from its terrain shader (sky.ts) and per-vertex
   // shading (surface.ts naturalShading). Its noise scales are in planet radii; here they are
   // converted to map metres, so patterns keep their real size divided by mag like the ground.
@@ -478,8 +517,19 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   const n01 = (x: number, y: number, l: number, z: number) => 0.5 + 0.5 * noise(x / l, y / l, z);
   const lat = Math.abs(Math.asin(Math.max(-1, Math.min(1, cy)))) / (Math.PI / 2);
   const latT = 1 - 1.1 * Math.pow(lat, 1.25) + w.params.heat;
-  /** Grove pattern, shared by the canopy colour and the trees so the two agree. */
-  const groveAt = (x: number, y: number) => smooth(-0.35, 0.45, noise(x / 60, y / 60, 91) + 0.4 * noise(x / 17, y / 17, 93));
+  /**
+   * Groves, shared by the canopy colour and the trees so the two agree: solid stands with ragged
+   * edges and real clearings between, so forest and open ground read as distinct regions (2026-11-04:
+   * evenly scattered trees read as green fuzz). The denser the biome's planting, the more of the
+   * ground is grove: a forest has clearings, grassland the odd copse.
+   */
+  const FULL = 15;      // the planet's densest planting (expected plants per cell), as a full grove
+  const groveRaw = (x: number, y: number) => noise(x / 150, y / 150, 91) + 0.35 * noise(x / 45, y / 45, 93) + 0.15 * noise(x / 14, y / 14, 95);
+  const groveIn = (x: number, y: number, dens: number) => {
+    const th = 0.32 - 0.8 * Math.min(1, dens);
+    return smooth(th - 0.06, th + 0.06, groveRaw(x, y));
+  };
+  const densAt = (v: number) => plantingOf(w.biome[cellList[owner[v]]]).treeD / FULL;
   for (let j = 0; j < res; j++) {
     for (let i = 0; i < res; i++) {
       const v = j * res + i, x = -half + i * step, y = -half + j * step;
@@ -491,16 +541,20 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       // Height above the sea as a share of the planet's relief, as the shader's hAbove / uRelief.
       const e = Math.max(0, baseTrue[v] + (h - baseLocal[v]) * o.vScale) / reliefM + 0.09;
       const lowland = 1 - smooth(0.35, 0.6, e);
-      if (h < 0 && oceanW[v] > 0.3) {                                  // sea floor
+      lay(v, L_AO, smooth(0, 4, aoBlur[v] - h));
+      if (h < 0 && oceanW[v] > 0.3) {
+        lay(v, L_DEPTH, -h);                                  // sea floor
         mix(v, SEABED_SAND.map((a, k) => a + (SEABED_DEEP[k] - a) * smooth(0, 25, -h)), 1);
         grow[v] = 0;
         continue;
       }
-      if (!Number.isNaN(lakeLevel) && lakeMask[v] > 0.5 && h < lakeLevel) { mix(v, LAKEBED, 0.8); grow[v] = 0; continue; }
+      if (!Number.isNaN(lakeLevel) && lakeMask[v] > 0.5 && h < lakeLevel) { mix(v, LAKEBED, 0.8); lay(v, L_DEPTH, lakeLevel - h); grow[v] = 0; continue; }
+      lay(v, L_GRASS, smooth(0.12, 0.25, moist) * smooth(0.62, 0.42, moist) * smooth(0.25, 0.4, temp) * lowland);
       // Grass and steppe: mottled, sun-bleached patches.
       const grassW = smooth(0.12, 0.25, moist) * smooth(0.62, 0.42, moist) * smooth(0.25, 0.4, temp) * lowland;
       if (grassW > 0) {
         const m = n01(x, y, L(900), 101) * 0.55 + n01(x, y, L(2600), 103) * 0.3 + n01(x, y, L(7000), 105) * 0.15;
+        lay(v, L_MOTTLE, m);
         mul(v, 1 + (0.76 + 0.48 * m - 1) * grassW);
         const bl = smooth(0.55, 0.8, m) * grassW * 0.6;
         mul(v, 1 + 0.12 * bl, 1 + 0.04 * bl, 1 - 0.2 * bl);
@@ -510,7 +564,8 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       const forestW = smooth(0.3, 0.45, moist) * smooth(0.17, 0.24, temp) * lowland;
       if (forestW > 0) {
         const closed = smooth(0.6, 0.72, moist) * (0.35 + 0.15 * smooth(0.65, 0.75, temp));
-        const inGrove = Math.min(1, groveAt(x, y) + closed);
+        const inGrove = Math.min(1, groveIn(x, y, densAt(v)) + closed * 0.3);
+        lay(v, L_FOREST, forestW * inGrove); lay(v, L_CLEARING, forestW * (1 - inGrove));
         const tw = smooth(0.3, 0.7, temp);
         mix(v, [0.026 + 0.014 * tw, 0.066 + 0.054 * tw, 0.03 - 0.005 * tw], forestW * inGrove * 0.6);
         mul(v, 1 - 0.15 * forestW * inGrove);
@@ -522,8 +577,9 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
         const dryR = smooth(0.5, 0.18, moist) * smooth(0.15, 0.3, temp);
         const a = 0.3 + 0.7 * dryR;
         const rag = noise(x / 9, y / 9, 107) * 0.5;
-        if (riverNear[v] < 1) mix(v, BED, 0.85);
+        if (riverNear[v] < 1) { mix(v, BED, 0.85); lay(v, L_BED, 1); }
         else {
+          lay(v, L_LUSH, smooth(3.2, 2.2, riverNear[v] + rag) * a);
           const valley = [0, 1, 2].map((k) => colors[v * 3 + k] + ([0.2, 0.22, 0.1][k] - colors[v * 3 + k]) * 0.5);
           mix(v, valley, smooth(6, 3, riverNear[v]) * 0.5 * a);
           mix(v, LUSH, smooth(3.2, 2.2, riverNear[v] + rag) * 0.92 * a);
@@ -533,12 +589,14 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       const cn = noise(x / 23, y / 23, 77) * 0.6 + noise(x / 7, y / 7, 79) * 0.4;
       const rock = smooth(0.8, 1.5, slope + 0.2 * cn);
       mix(v, ROCK, rock * 0.85);
+      lay(v, L_ROCK, rock);
       // Above the tree line, alpine scrub; the line follows temperature (high in the tropics).
       const tv = latT - 0.55 * e;
       const an = noise(x / L(90), y / L(90), 109) * 0.5 + noise(x / L(260), y / L(260), 111) * 0.25;
       mix(v, ALPINE, smooth(0.3, 0.18, tv + an * 0.05) * 0.7);
+      lay(v, L_ALPINE, smooth(0.3, 0.18, tv + an * 0.05));
       // Beach: sand right at the sea's edge, in all but cold climates.
-      if (sea && h < 2.5 && oceanW[v] > 0.05 && temp > 0.25) mix(v, SAND, smooth(2.5, 0.6, h + cn));
+      if (sea && h < 2.5 && oceanW[v] > 0.05 && temp > 0.25) { mix(v, SAND, smooth(2.5, 0.6, h + cn)); lay(v, L_SAND, smooth(2.5, 0.6, h + cn)); }
       // Snow, by the shader's model: a line from latitude and height, peaks colder still, shed
       // off steep faces and lying in streaks.
       const edge = noise(x / L(25), y / L(25), 113) * 0.06 + noise(x / L(110), y / L(110), 115) * 0.03 + noise(x / L(420), y / L(420), 117) * 0.015;
@@ -547,6 +605,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       const streak = 0.5 + 0.5 * (noise(x / 40, y / 40, 119) * 0.6 + noise(x / 13, y / 13, 121) * 0.4);
       const lie = (1 - 0.9 * smooth(0.08, 0.3, slopeP)) * smooth(0.25, 0.65, streak + snow * 0.35);
       mix(v, SNOW, Math.min(1, snow * lie) * 0.95);
+      lay(v, L_SNOW, Math.min(1, snow * lie));
       // Where plants grow: not on rock, snow, the water's edge, or (trees) above the tree line.
       grow[v] = (1 - rock) * (1 - Math.min(1, snow * lie * 1.5)) * (riverNear[v] < 1.3 ? 0 : 1) * (h < 0.3 ? 0 : 1);
       treeLine[v] = smooth(0.2, 0.3, tv + an * 0.05);
@@ -557,8 +616,6 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   // grid, trees clumped into groves (the same pattern as the canopy colour).
   const treeOut: number[] = [];
   const TS = 7, cnt = Math.floor(size / TS);
-  // The planet's densities are expected plants per cell; its densest forest (~12) fills a grove.
-  const FULL = 15;
   for (let b = 0; b < cnt; b++) {
     for (let a = 0; a < cnt; a++) {
       const x = -half + (a + rng()) * TS, y = -half + (b + rng()) * TS;
@@ -566,7 +623,8 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       const i = Math.round((x + half) / step), j = Math.round((y + half) / step), v = j * res + i;
       if (grow[v] <= 0) continue;
       const pl = plantingOf(w.biome[cellList[owner[v]]]);
-      const pTree = Math.min(1, pl.treeD / FULL) * (0.2 + 1.1 * groveAt(x, y)) * grow[v] * treeLine[v];
+      // Solid in the groves, the odd lone tree outside them.
+      const pTree = pl.treeD > 0 ? (0.015 + 0.8 * groveIn(x, y, pl.treeD / FULL)) * grow[v] * treeLine[v] : 0;
       let e: [TreeKind, number, number, number] | null = null;
       if (pl.trees.length && r1 < pTree) e = pick(pl.trees, pl.treeD, r2);
       else if (pl.small.length && r1 > 1 - Math.min(0.6, pl.smallD / (FULL * 1.6)) * grow[v]) e = pick(pl.small, pl.smallD, r2);
@@ -603,7 +661,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     cell, res, size,
     trueWidthKm: apothem * 2 * o.mag / 1000,
     localWidth: apothem * 2,
-    heights, colors, sea, lakeLevel, lakeMask, rivers, hex,
+    heights, colors, base, layers, sea, lakeLevel, lakeMask, rivers, hex,
     trees: new Float32Array(treeOut),
     cells: Int32Array.from(cellList), cellXY,
     info: {
