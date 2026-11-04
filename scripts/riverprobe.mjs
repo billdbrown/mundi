@@ -58,7 +58,7 @@ const res = await page.evaluate(() => {
     const cd = Math.acos(Math.min(1, d[0] * C.x + d[1] * C.y + d[2] * C.z)); if (cd > 0.045) continue;
     const side = [bq[0] - a[0], bq[1] - a[1], bq[2] - a[2]].map((x) => x / l), hw = Math.hypot(...side) / 2;
     const s0 = at(d);
-    const water = l + s0.follow - 0.00027;   // (dunes.ts RIVER_SINK: keep in step)
+    const water = l + s0.follow - 0.0002;   // (dunes.ts RIVER_SINK: keep in step)
     const off = (k) => { const q = d.map((x, j) => x + side[j] * k); const n = Math.hypot(...q); return at(q.map((x) => x / n)).ground; };
     rows.push({ cd, water, mid: s0.ground, w: hw, L3: off(-1.5), R3: off(1.5), L6: off(-3), R6: off(3), carve: s0.liftC, chan: s0.chan, mask: s0.water });
     if (rows.length > 4000) break;

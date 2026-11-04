@@ -1397,10 +1397,10 @@ export class PlanetView {
         // the water: 2026-11-03, Bill: the ribbon must not float over the ocean).
         if (this.probe && o.f <= 0.95) {
           const g0 = this.probe.heightAt(d[0], d[1], d[2], h);
-          h = Math.max(g0 + 0.0002, SEA + 0.00002);
+          h = Math.max(g0 + 0.0002, SEA + 0.0002);   // (the patch sinks it RIVER_SINK: at the sea's level)
         } else if (this.probe && this.probe.heightAt(d[0], d[1], d[2], h) < SEA + 0.0001) {
           // Ground at or under the sea (an estuary): on the sea's surface, still drawn.
-          h = SEA + 0.00002;
+          h = SEA + 0.0002;
         } else if (this.probe && o.h >= SEA && o.f > 0.5) {
           const hw = o.w;
           const g0 = this.probe.heightAt(d[0], d[1], d[2], h);

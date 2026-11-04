@@ -166,7 +166,7 @@ export const PATCH_A = 0.15;         // grid spacing at the centre, relative to 
  */
 /** Valleys cut this much deeper again on the highest ground of the close-up patch (PATCH_BAKE_GLSL). */
 export const MTN_CARVE = 0.8;
-export const RIVER_SINK = 0.00027;
+export const RIVER_SINK = 0.0002;
 export const PATCH_R = 0.05;         // half-width, radians (~320 km on an Earth-sized world)
 export const CAPTURE_SIZE = 512;     // texels along a side of the patch's captures
 
@@ -201,27 +201,43 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
   uniform sampler2D uCapR;
   uniform float uRelief;
   const float MTN_CARVE = ${MTN_CARVE};
-  const float CHANNEL = 0.0003;   // river bed below the water (radians; exaggerated, like all relief)
+  const float CHANNEL = 0.0002;   // river bed below the water (radians; exaggerated, like all relief)
   const float RIVER_SINK = ${RIVER_SINK};   // the water as the patch draws it, below the mask's height
-  /** How far the ground at uv (height h above the sea) drops for a river channel (0 or less). */
+  /** How far the ground at uv (height h above the sea) moves for a river: down for the channel, up a little for a levee. */
   float channelLift(vec2 uv, float h) {
     float t = 1.0 / ${CAPTURE_SIZE}.0;
     vec4 c = texture(uCapR, uv);
-    // The water's height nearby: its own texel, else a ring at 2 and 4 texels (premultiplied:
-    // g is the height where r is 1, and both filter alike).
-    float sm = c.r, sg = c.g, bank = c.r;
-    for (int i = 0; i < 8; i++) {
-      float ang = float(i) * 0.785398;
-      vec2 o = vec2(cos(ang), sin(ang)) * t;
-      vec4 a = texture(uCapR, uv + o * 2.0), b = texture(uCapR, uv + o * 4.0);
-      sm += a.r + b.r * 0.5; sg += a.g + b.g * 0.5;
-      bank = max(bank, max(a.r * 0.75, b.r * 0.4));
+    // Distance to the water (texels) and its height nearby, from rings every texel out to 16 in
+    // 12 directions (the mask is drawn aliased and linear-filtered: r's fraction refines the
+    // distance). Coarser sampling stepped the banks into stairs and left walls where it ended.
+    float sm = c.r * 2.0, sg = c.g * 2.0, dist = c.r > 0.02 ? 1.0 - c.r : 99.0, dry = c.r < 0.98 ? c.r : 99.0;
+    for (int k = 1; k <= 16; k++) {
+      float rk = float(k), wgt = 1.0 / rk;
+      for (int i = 0; i < 12; i++) {
+        float ang = (float(i) + 0.5 * float(k & 1)) * 0.5235988;
+        vec4 a = texture(uCapR, uv + vec2(cos(ang), sin(ang)) * t * rk);
+        sm += a.r * wgt; sg += a.g * wgt;
+        if (a.r > 0.02) dist = min(dist, rk + 1.0 - a.r);
+        if (a.r < 0.98) dry = min(dry, rk - 1.0 + a.r);
+      }
     }
-    if (sm < 0.02) return 0.0;
+    if (sm < 0.02 || dist > 98.0) return 0.0;
     float wH = sg / sm / 50.0 - RIVER_SINK;
-    float inWater = smoothstep(0.1, 0.7, c.r);
-    float ceilH = wH + 0.00008 + 0.0005 * (1.0 - bank);   // banks rise away from the water
-    return min(0.0, mix(ceilH, wH - CHANNEL, inWater) - h);
+    // The bed slopes down over the first few texels in from the water's edge: dropped within a
+    // texel, the channel's side was a cliff, black in the shade and stepped like the mask.
+    float inWater = smoothstep(0.3, 1.0, c.r) * smoothstep(0.0, 1.5, dry);
+    // Banks rise steadily away from the water; the cut fades out by 16 texels, so higher ground
+    // beside a river slopes down to it rather than standing as a wall (2026-11-03, Bill: trenches).
+    float ceilH = wH + 0.00008 + 0.00005 * dist;
+    float reach = max(inWater, 1.0 - smoothstep(7.0, 16.0, dist));
+    // At the water's edge the ground is just under the water, then falls to the bed.
+    float edgeH = mix(ceilH, wH - 0.00003, smoothstep(0.2, 0.6, c.r));
+    float down = min(0.0, mix(edgeH, wH - CHANNEL, inWater) - h) * reach;
+    // Ground lying below the water (land a little under the sea at a mouth) rises to just under
+    // it, the bed included, easing off over 8 texels: raised beside the water only, or within a
+    // few texels, the rise stood as a black wall (2026-11-03).
+    float up = clamp(mix(wH + 0.00004, wH - CHANNEL, inWater) - h, 0.0, 0.0006) * (1.0 - smoothstep(1.0, 8.0, dist));
+    return down + up;
   }
   vec4 bake0, bake1, bake2;   // see PatchUniforms.uBake0..2
   void patchBake(vec2 lat) {
@@ -259,8 +275,12 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
       float c0 = groundCarve(base).x, c1 = groundCarve(base + east * e).x, c2 = groundCarve(base + north * e).x;
       // Deeper in the mountains (x MTN_CARVE at the top): the ridges between the valleys come out
       // sharp, where at plain depth ranges were rounded domes close up (2026-11-03).
-      liftC = -c0 * edge * (1.0 + MTN_CARVE * highland);
-      gC = -(east * (c1 - c0) + north * (c2 - c0)) / e;
+      // Never below the sea: toward the coast the valley floors come down to sea level and meet
+      // it. (Cut to full depth just above the sea and not at all below, the low coastal ground
+      // stood as a wall across every river mouth: 2026-11-03.)
+      float full = c0 * (1.0 + MTN_CARVE * highland), cut = min(full, 0.9 * hAbove);
+      liftC = -cut * edge;
+      gC = -(east * (c1 - c0) + north * (c2 - c0)) / e * (cut / max(full, 1e-9));
       gC *= min(1.0, 0.35 / max(length(gC), 1e-6)) * edge;   // walls no steeper than ~20 deg, as in sky.ts
     }
 
@@ -271,14 +291,19 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
     float eroFar = uErosion * edge;
     // Rivers run on flat valley floors: no hills or gullies within a few km of one. (Relief
     // crossing a river also rose between the river ribbon's sparse points and hid the water.)
+    // Faded by distance to the water (fine rings, as in channelLift): switched off by two coarse
+    // rings, the hills dropped away in steps beside every river, black walls (2026-11-03).
     if (eroFar > 0.0) {
-      float t = 1.0 / ${CAPTURE_SIZE}.0, river = texture(uCapR, capUv).r;
-      for (int i = 0; i < 8; i++) {
-        float ang = float(i) * 0.785398;
-        vec2 o = vec2(cos(ang), sin(ang)) * t;
-        river = max(river, max(texture(uCapR, capUv + o * 2.0).r, texture(uCapR, capUv + o * 4.0).r * 0.6));
+      float t = 1.0 / ${CAPTURE_SIZE}.0, c = texture(uCapR, capUv).r, rd = c > 0.02 ? 1.0 - c : 99.0;
+      for (int k = 1; k <= 16; k++) {
+        float rk = float(k);
+        for (int i = 0; i < 12; i++) {
+          float ang = (float(i) + 0.5 * float(k & 1)) * 0.5235988;
+          float a = texture(uCapR, capUv + vec2(cos(ang), sin(ang)) * t * rk).r;
+          if (a > 0.02) rd = min(rd, rk + 1.0 - a);
+        }
       }
-      eroFar *= 1.0 - river;
+      eroFar *= smoothstep(2.0, 12.0, rd);
     }
     if (eroFar > 0.0) {
       float iceK = smoothstep(0.6, 0.8, min(b.r, min(b.g, b.b)));
@@ -307,7 +332,9 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
     // middle stood higher than its water).
     float chanLift = 0.0;
     vec3 chanG = vec3(0.0);
-    if (hAbove > 0.0002) {
+    // Down to a little below the sea (land on the coarse mesh can be): cut only above 0.0002, the
+    // coast's low ground stood as a wall across every river mouth (2026-11-03).
+    if (hAbove > -0.0008) {
       float texel = 2.0 * R / ${CAPTURE_SIZE}.0;
       float c0 = channelLift(capUv, hAbove);
       vec2 uE = capUv + vec2(1.0 / ${CAPTURE_SIZE}.0, 0.0), uN = capUv + vec2(0.0, 1.0 / ${CAPTURE_SIZE}.0);
@@ -316,6 +343,10 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
       chanLift = c0 * edge;
       // Its slope (uphill, tangent) for the normal: d(lift)/d(ground distance).
       chanG = (east * (cE - c0) + north * (cN - c0)) / texel * edge;
+      // No steeper than ~35 deg in the shading: the channel's edge drops within a texel, and its
+      // full slope tipped the normal past level, drawing the bank beside the water black (seen
+      // through the shallow edge of the water; 2026-11-03).
+      chanG *= min(1.0, 0.7 / max(length(chanG), 1e-6));
     }
     // (x: lift everything follows, trees and rivers included, so the valleys carry them down.)
     bake0 = vec4(raw * DUNE_CELL * hk + liftC, liftEro, geo, chanLift);
@@ -344,7 +375,10 @@ export const PATCH_GLSL = PATCH_BASE_GLSL + /* glsl */`
     // At sea the patch sinks out of the way and the plain seabed shows: its depth offset (to sit
     // in front of the terrain) made the water fail its depth test in the shallows, which drew
     // the patch's square edge across the sea.
-    if (capA.x <= 0.0) pSurf = base - up * 0.002;
+    // Only where the ground is clearly under the water. Land a little below the sea on the coarse
+    // mesh (beaches, river mouths) is drawn as land: sunk there, it left pits along the rivers,
+    // black walls beside the water (2026-11-03).
+    if (capA.x <= -0.04) pSurf = base - up * 0.002;
     pNorm = normalize(n0 - b1.xyz - b2.xyz * farDist);
     pCol = capB.rgb;
     pClim = vec2(capA.w, capB.w);

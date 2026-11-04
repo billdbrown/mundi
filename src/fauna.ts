@@ -152,7 +152,7 @@ export class Fauna {
   private cells = new Map<number, Group[]>();
   private near: number[] = [];
   private nearKey = -1;
-  private size = 8;
+  private size = 6;   // times their proportion with the trees (Bill picked 6x, 2026-11-03)
 
   constructor() {
     for (const s of Object.keys(SHAPES) as Shape[]) {
