@@ -296,3 +296,5 @@ body.capture .loader { display: none; }
 .ui .pclaim { pointer-events: auto; margin-left: 8px; vertical-align: 1px; padding: 3px 9px; font-size: 12px; border-radius: 999px;
   background: rgba(255, 200, 90, 0.16); border: 1px solid rgba(255, 200, 90, 0.4); color: #ffe3a6; text-shadow: none; }
 .ui .pclaim:hover { border-color: rgba(255, 200, 90, 0.8); }
+.ui .pclaim.unclaimed { background: rgba(255, 255, 255, 0.08); border: 1px dashed rgba(255, 255, 255, 0.4); color: #dfe6ef; }
+.ui .pclaim.unclaimed:hover { border-color: rgba(255, 200, 90, 0.8); color: #ffe3a6; }

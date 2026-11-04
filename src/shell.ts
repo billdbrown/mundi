@@ -134,7 +134,7 @@ export function mountShell(app: App) {
           <button role="menuitem" id="nw-custom"><b>✦ Custom world…</b><span>Set every dial yourself</span></button>
         </div>
       </div>
-      <button class="pill" id="share" title="Copy a link to this exact planet">⤴ Share</button>
+      <button class="pill" id="share" title="Claim this planet, or copy a link to it">⤴ Share</button>
     </div>
     <nav class="lenses collapsed" id="lenses">
       <button class="lens-toggle" id="lens-toggle" aria-expanded="false"><span class="ico" id="lens-cur-ico"></span><span class="lbl" id="lens-cur"></span><span class="chev"></span></button>
