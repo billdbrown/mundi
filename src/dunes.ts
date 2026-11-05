@@ -203,6 +203,9 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
   const float MTN_CARVE = ${MTN_CARVE};
   const float CHANNEL = 0.0002;   // river bed below the water (radians; exaggerated, like all relief)
   const float RIVER_SINK = ${RIVER_SINK};   // the water as the patch draws it, below the mask's height
+  const float CRAG_BAND = 0.00028;   // height of a cliff band (radians; exaggerated, like all relief)
+  const float CRAG_INV = 1.0 / 0.0003;   // 1 / rock block size (radians)
+  const float CRAG_AMP = 0.0001;    // how far a block stands proud or sunk
   /** How far the ground at uv (height h above the sea) moves for a river: down for the channel, up a little for a levee. */
   float channelLift(vec2 uv, float h) {
     float t = 1.0 / ${CAPTURE_SIZE}.0;
@@ -238,6 +241,26 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
     // few texels, the rise stood as a black wall (2026-11-03).
     float up = clamp(mix(wH + 0.00004, wH - CHANNEL, inWater) - h, 0.0, 0.0006) * (1.0 - smoothstep(1.0, 8.0, dist));
     return down + up;
+  }
+  /**
+   * Rock blocks for crags: x distance to the nearest wall of a 3D Voronoi pattern (cell units,
+   * about F2 - F1), y a random 0..1 for the nearest cell.
+   */
+  vec2 cragCells(vec3 x) {
+    vec3 c = floor(x);
+    float f1 = 9.0, f2 = 9.0, id = 0.0;
+    for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) for (int k = -1; k <= 1; k++) {
+      vec3 g = c + vec3(i, j, k);
+      vec3 o = vec3(eroHash(g + 1.3), eroHash(g + 71.9), eroHash(g + 143.7));
+      float d = length(g + o - x);
+      if (d < f1) { f2 = f1; f1 = d; id = eroHash(g + 211.1); } else if (d < f2) f2 = d;
+    }
+    return vec2(f2 - f1, id);
+  }
+  /** Block relief: each block stands a little proud or sunk, with a crack between them. */
+  float cragBlocks(vec3 p) {
+    vec2 v = cragCells(p * CRAG_INV);
+    return (v.y - 0.5) - 0.8 * (1.0 - smoothstep(0.0, 0.18, v.x)) + 0.2;
   }
   vec4 bake0, bake1, bake2;   // see PatchUniforms.uBake0..2
   void patchBake(vec2 lat) {
@@ -328,6 +351,48 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
         }
       }
     }
+    // Crags (2026-11-04, Bill: close-up rock was plain noise). On steep high ground the ground
+    // breaks into cliff bands, its height terraced into flat ledges and steep risers like layered
+    // rock, and its faces into blocks split by cracks. Both average out to nothing, so ranges keep
+    // their height (they sank once as the patch reached them), and both depend only on where the
+    // point is, not on the camera, so they hold still as it moves.
+    // (Their slope goes with the dunes' and the valleys' in bake1, not with the gullies': the pixel
+    // shader takes the gullies' baked slope back out of its own gully shading.)
+    vec3 cragG = vec3(0.0);
+    if (eroFar >= 0.01 && hAbove > 0.0) {
+      float cz = max(dot(n0, up), 0.3);
+      vec3 G = -(n0 - up * dot(n0, up)) / cz + gC + eroG;   // ground slope (uphill, tangent)
+      float steep = length(G);
+      float iceK = smoothstep(0.6, 0.8, min(b.r, min(b.g, b.b)));
+      float k = smoothstep(0.28, 0.55, steep) * smoothstep(0.15, 0.5, hAbove / uRelief) * eroFar * (1.0 - 0.6 * iceK);
+      if (k > 0.0) {
+        // Cliff bands. Layered rock in some ranges, massive rock in others; the bands dip and
+        // wander, and break off into runs of cliff with plain slope between (everywhere at once,
+        // they read as terraced fields). Faded out where the grid has too few vertices per band.
+        float layered = smoothstep(-0.3, 0.3, snoise(base * 14.0 + 5.0));
+        float runs = smoothstep(-0.15, 0.45, snoise(base * 1200.0 + 2.0) + 0.35 * snoise(base * 4000.0 + 8.0));
+        float bandsK = layered * runs * (1.0 - smoothstep(CRAG_BAND / 7.0, CRAG_BAND / 3.5, spacing * steep));
+        if (bandsK > 0.0) {
+          float H = hAbove + liftC + liftEro + CRAG_BAND * (0.6 * snoise(base * 400.0 + 9.0) + 0.25 * snoise(base * 2500.0 + 4.0));
+          float t = H / CRAG_BAND, f = fract(t), u = clamp((f - 0.55) / 0.45, 0.0, 1.0);
+          // Ledge, then riser: flat for the lower 55% of each band, steep above it.
+          float terr = (floor(t) + u * u * (3.0 - 2.0 * u) - t + 0.275) * CRAG_BAND;
+          float dTerr = 6.0 * u * (1.0 - u) / 0.45 - 1.0;   // d(terr)/d(height)
+          liftEro += terr * k * bandsK;
+          cragG += G * dTerr * k * bandsK;
+        }
+        // Blocks and cracks on the faces, steepest first.
+        float blocksK = smoothstep(0.3, 0.6, steep) * (1.0 - smoothstep(0.25 / CRAG_INV, 0.5 / CRAG_INV, spacing)) * mix(1.0, 0.5, layered);
+        if (blocksK > 0.0) {
+          float e = 0.12 / CRAG_INV;
+          float h0 = cragBlocks(base), h1 = cragBlocks(base + east * e), h2 = cragBlocks(base + north * e);
+          vec3 gB = (east * (h1 - h0) + north * (h2 - h0)) / e * CRAG_AMP;
+          gB *= min(1.0, 1.2 / max(length(gB), 1e-6));
+          liftEro += h0 * CRAG_AMP * k * blocksK;
+          cragG += gB * k * blocksK;
+        }
+      }
+    }
     // River channels. The river mask holds where water runs and its surface height (dunepatch.ts
     // riverMat). Under the water the ground drops to a bed CHANNEL below the surface; beside it,
     // to no more than a little above the surface, rising away: a channel between low banks. The
@@ -353,7 +418,7 @@ export const PATCH_BAKE_GLSL = PATCH_BASE_GLSL + /* glsl */`
     }
     // (x: lift everything follows, trees and rivers included, so the valleys carry them down.)
     bake0 = vec4(raw * DUNE_CELL * hk + liftC, liftEro, geo, chanLift);
-    bake1 = vec4((east * d.z + north * d.w) * hk + chanG + gC, 0.0);
+    bake1 = vec4((east * d.z + north * d.w) * hk + chanG + gC + cragG, 0.0);
     bake2 = vec4(eroG, 0.0);
   }
 `;
