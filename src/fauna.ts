@@ -21,6 +21,12 @@
  * savanna and desert, a lone hawk over open country); and skeins, a V that travels, its wingbeat
  * rippling down the line (geese, cranes).
  *
+ * Sea life (2026-11-04). Whales anywhere at sea, most in shallow water by coasts and islands and
+ * most of all along the hotspot chains: every ~30 s one comes up, rolls its back along the surface,
+ * blows and dives flukes-up, or now and then breaches, leaping half out. Dolphins in pods in warmer
+ * coastal water, each leaping in a low arc every couple of seconds. Seals hauled out on cold
+ * shores, penguin colonies on the coldest southern ones, set on the last dry ground before the sea.
+ *
  * Movement is a function of time, not state: a group's centre wanders along a sum of slow sines
  * about its home, and each animal keeps its place in the group, so nothing is simulated and
  * nothing drifts. Herds graze along; deer walk and stop; rabbits hop in bursts; flocks circle
@@ -131,10 +137,38 @@ const SHAPES = {
     ...wings([[0, 0, 0.09], [0.45, 0.07, 0.01], [0.48, 0.07, -0.05], [0, 0, -0.09]]),
     plate([[0, 0, -0.14], [0.06, 0, -0.24], [-0.06, 0, -0.24]]),
   ]),
+  // Sea life (2026-11-04). Swimmers are centred on the body (y = 0 is the middle, not the feet):
+  // they ride at and under the water's surface.
+  whale: () => merge([
+    egg(0.13, 0.11, 0.42, 0, 0, 0.06, 1), egg(0.1, 0.08, 0.2, 0, -0.005, 0.38, 1), limb([0, 0, -0.3], [0, 0.01, -0.52], 0.045),
+    ...wings([[0.04, 0, -0.5], [0.2, 0.02, -0.6], [0.12, 0.02, -0.53], [0, 0, -0.55]]),   // flukes
+    ...wings([[0.1, -0.05, 0.2], [0.3, -0.1, 0.06], [0.1, -0.05, 0.12]]),               // flippers
+    plate([[0, 0.09, -0.12], [0, 0.15, -0.2], [0, 0.08, -0.22]]),                        // dorsal fin
+  ]),
+  dolphin: () => merge([
+    egg(0.075, 0.075, 0.36, 0, 0, 0, 1), limb([0, -0.01, 0.34], [0, -0.02, 0.46], 0.025),
+    plate([[0, 0.06, 0.04], [0, 0.18, -0.1], [0, 0.06, -0.08]]),
+    ...wings([[0, 0, -0.34], [0.13, 0.01, -0.46], [0.05, 0.01, -0.4], [0, 0, -0.42]]),
+    ...wings([[0.05, -0.04, 0.12], [0.16, -0.08, 0.02], [0.05, -0.04, 0.06]]),
+  ]),
+  // A whale's blow: a column of spray, feet at the water.
+  spout: () => merge([egg(0.03, 0.22, 0.03, 0, 0.22, 0, 1), egg(0.13, 0.08, 0.13, 0, 0.44, 0, 1), egg(0.08, 0.06, 0.08, 0.07, 0.38, 0.03, 1), egg(0.08, 0.06, 0.08, -0.06, 0.39, -0.04, 1)]),
+  // Lying on the shore, head up a little.
+  seal: () => merge([
+    egg(0.14, 0.1, 0.42, 0, 0.1, 0, 1), egg(0.08, 0.075, 0.09, 0, 0.17, 0.44, 1),
+    ...wings([[0.03, 0.04, -0.38], [0.14, 0.02, -0.52], [0.02, 0.03, -0.46]]),
+    ...wings([[0.12, 0.05, 0.16], [0.22, 0.0, 0.08], [0.12, 0.04, 0.06]]),
+  ]),
+  // Standing: a tall body, head, beak, flippers held out a little.
+  penguin: () => merge([
+    egg(0.15, 0.34, 0.13, 0, 0.34, 0, 1), egg(0.085, 0.085, 0.09, 0, 0.74, 0.02, 1), limb([0, 0.73, 0.08], [0, 0.71, 0.17], 0.018),
+    ...wings([[0.14, 0.55, 0], [0.24, 0.25, 0.02], [0.15, 0.35, -0.02]]),
+    box(0.1, 0.03, 0.12, -0.06, 0.015, 0.05), box(0.1, 0.03, 0.12, 0.06, 0.015, 0.05),
+  ]),
 } as const;
 type Shape = keyof typeof SHAPES;
 
-type Behaviour = 'herd' | 'wander' | 'hop' | 'flock' | 'soar' | 'skein';
+type Behaviour = 'herd' | 'wander' | 'hop' | 'flock' | 'soar' | 'skein' | 'swim' | 'porpoise' | 'rest';
 interface Species {
   shape: Shape | Shape[]; metres: number; act: Behaviour; group: [number, number];
   /** One colour, or several: a group takes one (or, mixed, each bird its own). */
@@ -165,11 +199,18 @@ const SPECIES = {
   hawk:       { shape: 'raptor', colour: [0xa88a66, 0xbfa27c, 0x8e6c4a], metres: 1.6, act: 'soar', group: [1, 1], alt: 16, scale: 1.7 },
   goose:      { shape: 'goose', colour: [0x6b655c, 0x8a8578], metres: 2.2, act: 'skein', group: [9, 25], alt: 14, scale: 1.4 },
   crane:      { shape: 'heron', colour: [0x9c9c9a, 0xb8b8b4], metres: 2.6, act: 'skein', group: [5, 13], alt: 13, scale: 1.6 },
+  // Sea life. (scale: as for the big birds, drawn bigger again: at the plain size a whale showed as
+  // a sliver of back a few pixels long, and a leaping dolphin not at all. A whale is ~10 deer long.)
+  whale:      { shape: 'whale', colour: [0x3c4652, 0x4a4f57, 0x2f3740], metres: 15, act: 'swim', group: [1, 3], scale: 4 },
+  dolphin:    { shape: 'dolphin', colour: [0x6a7682, 0x7d8894], metres: 2.5, act: 'porpoise', group: [5, 14], scale: 3.5 },
+  seal:       { shape: 'seal', colour: [0x6b6258, 0x857a6c, 0x4f4a44], mixed: true, metres: 2.0, act: 'rest', group: [6, 20], scale: 1.5 },
+  penguin:    { shape: 'penguin', colour: [0x26292e, 0x30343a], metres: 1.0, act: 'rest', group: [20, 60], scale: 1.7 },
 } satisfies Record<string, Species>;
 type Kind = keyof typeof SPECIES;
 
 /** Groups a cell of this (base) biome may hold: [species, groups per cell (mean)]. */
-function residents(raw: number, coast: boolean, warm: boolean): [Kind, number][] {
+function residents(raw: number, coast: boolean, temp: number, south: boolean): [Kind, number][] {
+  const warm = temp > 0.55;
   const out: [Kind, number][] = [], b = baseOf(raw);
   switch (b) {
     case B.GRASSLAND: case B.PRAIRIE: out.push(['bison', 1.6], ['rabbit', 5], ['bird', 0.8], ['deer', 1]); break;
@@ -209,7 +250,21 @@ function residents(raw: number, coast: boolean, warm: boolean): [Kind, number][]
   }
   if (warm && (raw === B.SALT_FLAT || raw === B.SALT_MARSH || raw === B.MANGROVE)) out.push(['flamingo', 0.5]);
   if (coast) out.push(['gull', 1.2]);
+  // Hauled out on cold shores: seals, and penguin colonies on the coldest southern ones.
+  if (coast && temp < 0.35) out.push(['seal', 0.7]);
+  if (coast && temp < 0.1 && south) out.push(['penguin', 0.8]);
 
+  return out;
+}
+
+/**
+ * Groups an ocean cell may hold. Whales anywhere, most in shallow water by coasts and islands,
+ * and most of all along the hotspot island chains; pods of dolphins in warmer coastal water.
+ */
+function seaResidents(raw: number, shore: boolean, hot: boolean, temp: number): [Kind, number][] {
+  if (raw === B.SEA_ICE) return [['whale', 0.04]];
+  const out: [Kind, number][] = [['whale', 0.06 + (shore ? 0.15 : 0) + (hot ? 0.5 : 0)]];
+  if (temp > 0.4 && (shore || hot)) out.push(['dolphin', 0.5]);
   return out;
 }
 
@@ -234,6 +289,7 @@ export class Fauna {
   private cells = new Map<number, Group[]>();
   private near: number[] = [];
   private nearKey = -1;
+  private hot = new Set<number>();
   private size = 6;   // times their proportion with the trees (Bill picked 6x, 2026-11-03)
 
   constructor() {
@@ -253,6 +309,17 @@ export class Fauna {
   setWorld(w: World | undefined, heightAt: ((x: number, y: number, z: number) => number) | null) {
     this.world = w;
     this.heightAt = heightAt;
+    // Ocean cells within two of a hotspot chain's volcanoes (whales gather there).
+    this.hot.clear();
+    if (w) {
+      let ring = w.hotspots.volcanoes.map((v) => v.cell);
+      for (const c of ring) this.hot.add(c);
+      for (let k = 0; k < 2; k++) {
+        const next: number[] = [];
+        for (const c of ring) for (const n of w.grid.neighbors[c]) if (!this.hot.has(n)) { this.hot.add(n); next.push(n); }
+        ring = next;
+      }
+    }
     this.cells.clear();
     this.nearKey = -1;
   }
@@ -267,7 +334,8 @@ export class Fauna {
     if (hit) return hit;
     const w = this.world!, g = w.grid, P = g.centers, out: Group[] = [];
     this.cells.set(c, out);
-    if (w.water[c] !== WATER_LAND) return out;
+    const sea = w.water[c] === WATER_OCEAN;
+    if (!sea && w.water[c] !== WATER_LAND) return out;
     const bare = w.biome[c] === B.ICE || w.biome[c] === B.PEAK;   // (only birds, over ice and peaks)
     const rng = makeRng(w.params.seed * 977 + c * 131 + 5);
     const coast = g.neighbors[c].some((n) => w.water[n] === WATER_OCEAN);
@@ -277,19 +345,33 @@ export class Fauna {
     if (e.lengthSq() < 1e-8) e.set(1, 0, 0);
     e.normalize();
     const nth = new THREE.Vector3().crossVectors(centre, e);
-    for (const [kind, mean] of residents(w.biome[c], coast, w.temperature[c] > 0.55)) {
+    const shallow = (b: number) => b === B.SHALLOWS || b === B.REEF || b === B.LAGOON || b === B.KELP;
+    const list = sea
+      ? seaResidents(w.biome[c], shallow(w.biome[c]) || g.neighbors[c].some((n) => w.water[n] === WATER_LAND), this.hot.has(c), w.temperature[c])
+      : residents(w.biome[c], coast, w.temperature[c], centre.y < 0);
+    for (const [kind, mean] of list) {
       const sp: Species = SPECIES[kind];
-      if (bare && sp.act !== 'soar') continue;
+      if (bare && sp.act !== 'soar' && sp.act !== 'rest') continue;
       if (coast && (kind === 'songbird' || kind === 'parrot')) continue;   // (land birds: their flocks would wander out to sea)
       const groups = Math.floor(mean + rng());
       for (let k = 0; k < groups; k++) {
         const shapes = Array.isArray(sp.shape) ? sp.shape : [sp.shape];
-        const home = centre.clone().addScaledVector(e, (rng() - 0.5) * spacing * 0.9).addScaledVector(nth, (rng() - 0.5) * spacing * 0.9).normalize();
+        let home = centre.clone().addScaledVector(e, (rng() - 0.5) * spacing * 0.9).addScaledVector(nth, (rng() - 0.5) * spacing * 0.9).normalize();
+        // Shore animals: on the beach, the last dry ground on the way to a neighbouring sea cell.
+        if (sp.act === 'rest' && this.heightAt) {
+          const seas = g.neighbors[c].filter((n) => w.water[n] === WATER_OCEAN);
+          const n = seas[Math.floor(rng() * seas.length)], to = new THREE.Vector3(P[n * 3], P[n * 3 + 1], P[n * 3 + 2]), q = new THREE.Vector3();
+          for (let k = 0; k <= 32; k++) {
+            q.copy(home).lerp(to, k / 32).normalize();
+            if (this.heightAt(q.x, q.y, q.z) <= SEA + 2e-5) break;
+            if (k > 0) home = q.clone();
+          }
+        }
         const n = sp.group[0] + Math.floor(rng() * (sp.group[1] - sp.group[0] + 1));
         // Sizes drawn closer together than life (as the square root, about a deer's 1.8 m), so
         // rabbits can be seen and bison aren't giants beside them.
         const size = Math.sqrt(sp.metres * 1.8) * METRE * this.size;
-        const spread = sp.act === 'flock' ? 2.2 : sp.act === 'herd' ? 1.4 : 3;
+        const spread = sp.act === 'flock' ? 2.2 : sp.act === 'herd' ? 1.4 : sp.act === 'rest' ? 1.1 : sp.act === 'porpoise' ? 1.6 : 3;
         const cols = Array.isArray(sp.colour) ? sp.colour : [sp.colour];
         const groupCol = cols[Math.floor(rng() * cols.length)];
         const members = Array.from({ length: n }, (_, i) => {
@@ -305,7 +387,7 @@ export class Fauna {
         out.push({
           kind, shapes: [...shapes], n, size: size * (sp.scale ?? 1), lift: size, colour: new THREE.Color(groupCol), home, e, nth,
           // Range: herds and deer ~30 body lengths; flocks circle wider, higher up; skeins travel.
-          amp: (sp.act === 'flock' ? 40 : sp.act === 'hop' ? 12 : sp.act === 'skein' ? 90 : sp.act === 'soar' ? 25 : 30) * size,
+          amp: (sp.act === 'flock' ? 40 : sp.act === 'hop' ? 12 : sp.act === 'skein' ? 90 : sp.act === 'soar' ? 25 : sp.act === 'swim' ? 60 : sp.act === 'porpoise' ? 50 : sp.act === 'rest' ? 0 : 30) * size,
           w1: 0.004 + 0.006 * rng(), w2: 0.011 + 0.01 * rng(), p: [rng() * 6.3, rng() * 6.3, rng() * 6.3, rng() * 6.3],
           members,
         });
@@ -356,7 +438,7 @@ export class Fauna {
           return out.copy(g.home).addScaledVector(g.e, x).addScaledVector(g.nth, z);
         };
         // Deer and camels walk and stop; others keep going (flocks fly faster).
-        const pace = act === 'flock' ? 12 : act === 'skein' ? 18 : act === 'soar' ? 3 : act === 'wander' ? 2.5 : 1.6;
+        const pace = act === 'flock' ? 12 : act === 'skein' ? 18 : act === 'soar' ? 3 : act === 'wander' ? 2.5 : act === 'swim' ? 1.5 : act === 'porpoise' ? 9 : act === 'rest' ? 0 : 1.6;
         let s = t * pace;
         if (act === 'wander') { const T = 40, k = Math.floor(t / T), f = (t / T) - k; s = (k + smooth(0.55, 1, f)) * T * pace; }
         path(s, centre);
@@ -394,10 +476,11 @@ export class Fauna {
           heading.normalize();
           side.crossVectors(up, heading);
           // Each animal's own small drift and heading wobble (grazing animals face every way).
-          const wob = act === 'flock' ? 0.15 : act === 'herd' ? 0.6 : act === 'soar' ? 0 : act === 'skein' ? 0.04 : 0.25;
-          const yaw = wob * Math.sin(t * 0.05 + a.ph);
+          const wob = act === 'flock' ? 0.15 : act === 'herd' ? 0.6 : act === 'soar' || act === 'swim' ? 0 : act === 'skein' || act === 'porpoise' ? 0.04 : 0.25;
+          // (Resting animals face every way and keep to it.)
+          const yaw = act === 'rest' ? a.ph : wob * Math.sin(t * 0.05 + a.ph);
           const own = act === 'hop' || act === 'soar' ? 0 : 1;
-          const drift = act === 'skein' ? 0.15 : 0.6;
+          const drift = act === 'skein' ? 0.15 : act === 'rest' ? (g.kind === 'penguin' ? 0.3 : 0) : act === 'swim' ? 0 : 0.6;
           let dx = own * a.x + drift * Math.sin(t * 0.1 + a.ph), dz = own * a.z + drift * Math.cos(t * 0.08 + a.ph * 1.3);
           // Flocks swirl and stretch about their middle (songbirds the most: a murmuration).
           if (act === 'flock') {
@@ -410,7 +493,50 @@ export class Fauna {
           side.crossVectors(up.copy(pos), fwd).normalize();
           fwd.crossVectors(side, up).normalize();
           let r = h(pos.x, pos.y, pos.z);
-          if (r <= SEA + 1e-5 && !flier) continue;     // nothing walks on water
+          const swimmer = act === 'swim' || act === 'porpoise';
+          if (swimmer) {
+            if (r > SEA) continue;                      // nothing swims on land
+            // Height of the body's middle against the water (body lengths) and its pitch (nose up +).
+            let y = -1, pitch = 0, blow = 0;
+            if (act === 'swim') {
+              // Every ~30 s a whale comes up: its back rolls along the surface, it blows, then
+              // dives with its flukes raised. Now and then it breaches instead, leaping half out.
+              const T = 28, tt = t + a.ph * 3, k = Math.floor(tt / T), u = (tt / T - k) / 0.4;
+              if (u < 1.15) {
+                if (hash01(k * 13 + a.ph) < 0.3) {
+                  if (u < 1) { y = -0.35 + 1.15 * Math.sin(Math.PI * u); pitch = 1.2 * Math.cos(Math.PI * u); }
+                } else {
+                  y = 0.02 - 0.34 * (1 - smooth(0, 0.25, u)) - 0.1 * smooth(0.8, 1, u) - 0.4 * smooth(1, 1.15, u);
+                  pitch = 0.15 * (1 - smooth(0, 0.3, u)) - 0.7 * smooth(0.7, 1, u);
+                  if (u > 0.15 && u < 0.45) blow = Math.sin((Math.PI * (u - 0.15)) / 0.3);
+                }
+              }
+            } else {
+              // Dolphins: each leaps clear in a low arc every couple of seconds.
+              const T = 2.6, tt = t + a.ph, v = (tt / T - Math.floor(tt / T)) / 0.5;
+              if (v < 1) { y = -0.2 + 0.65 * Math.sin(Math.PI * v); pitch = 0.9 * Math.cos(Math.PI * v); }
+            }
+            // Nothing above the water: not drawn (the flukes count, raised by a nose-down pitch).
+            if (y + 0.55 * Math.max(0, -Math.sin(pitch)) + 0.5 * Math.max(0, Math.sin(pitch)) < -0.12) continue;
+            if (blow > 0) {
+              const sm = this.meshes.get('spout')!, sj = counts.get('spout') ?? 0;
+              if (sj < MAX_PER_SHAPE) {
+                const head = pos.clone().addScaledVector(fwd, 0.3 * L).normalize(), Ls = L * 0.9;
+                const sUp = head.clone(), sSide = new THREE.Vector3().crossVectors(sUp, fwd).normalize(), sFwd = new THREE.Vector3().crossVectors(sSide, sUp);
+                m.makeBasis(sSide.multiplyScalar(Ls * (0.6 + 0.4 * blow)), sUp.multiplyScalar(Ls * blow), sFwd.multiplyScalar(Ls * (0.6 + 0.4 * blow)));
+                m.setPosition(head.multiplyScalar(SEA));
+                sm.setMatrixAt(sj, m);
+                sm.setColorAt(sj, c.setRGB(0.92, 0.94, 0.96));
+                counts.set('spout', sj + 1);
+              }
+            }
+            if (pitch !== 0) {
+              const cp = Math.cos(pitch), sn = Math.sin(pitch), f2 = fwd.clone().multiplyScalar(cp).addScaledVector(up, sn);
+              up.multiplyScalar(cp).addScaledVector(fwd, -sn);
+              fwd.copy(f2);
+            }
+            r = SEA + y * L;
+          } else if (r <= SEA + 1e-5 && !flier) continue;     // nothing walks on water
           if (flier) {
             const alt = sp.alt ?? 26;
             // (A skein rises and falls together, so the V holds.)
