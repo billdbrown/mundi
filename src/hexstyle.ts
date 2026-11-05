@@ -6,7 +6,7 @@
  * them). Moodboard: vault raw/2026-11-04-hex-moodboard (Dorfromantik, Civilization VI and VII,
  * Banished), for ideas only.
  */
-import { LAYERS, L_GRASS, L_MOTTLE, L_FOREST, L_ROCK, L_SNOW, L_SAND, L_BED, L_LUSH, L_ALPINE, L_DEPTH, L_AO, L_CLEARING, L_PATH, L_FIELD, L_FIELDKIND, L_HEDGE, L_ELEV, type LocalMap } from './hexlocal.ts';
+import { LAYERS, L_GRASS, L_MOTTLE, L_FOREST, L_ROCK, L_SNOW, L_SAND, L_BED, L_LUSH, L_ALPINE, L_DEPTH, L_AO, L_CLEARING, L_PATH, L_FIELD, L_FIELDKIND, L_HEDGE, L_ELEV, L_HOLLOW, L_SCREE, L_GRAVEL, L_DRIFT, L_BARE, type LocalMap } from './hexlocal.ts';
 
 type RGB = [number, number, number];
 /** sRGB hex to linear RGB. */
@@ -36,6 +36,8 @@ export interface HexStyle {
     keepBase: number;
     grass: number; grassDry: number; forest: number; clearing: number; rock: number; snow: number;
     sand: number; bed: number; lush: number; alpine: number; seaShallow: number; seaDeep: number;
+    /** Ground patterns: bare soil, loose stone, river gravel, and desert pavement (dark, stony). */
+    soil: number; scree: number; gravel: number; pavement: number;
     /** Saturation multiplier on the final ground colour. */
     sat: number;
     /** Strength of mottling (grass patches) and of the crease shading. */
@@ -82,6 +84,7 @@ export const STYLE: HexStyle = {
   palette: {
     keepBase: 0.75, grass: 0x7a8a42, grassDry: 0xb09a58, forest: 0x34502a, clearing: 0x8a8f4a, rock: 0x8a7c6c, snow: 0xf0ece4,
     sand: 0xd8c08c, bed: 0x5a4a38, lush: 0x5e8a36, alpine: 0x8a8462, seaShallow: 0x5aa0a0, seaDeep: 0x24506a,
+    soil: 0x7e5c3e, scree: 0x86847e, gravel: 0xaca89c, pavement: 0x7a5440,
     sat: 1.0, mottle: 0.7, ao: 0.6, grain: 0.12, peaks: 0.5,
   },
   water: { shallow: 0x5aa6a8, deep: 0x23506c, foam: 0xf4eadc, opacity: 0.9, foamDepth: 0.6, roughness: 0.08 },
@@ -103,6 +106,27 @@ const hash = (n: number) => {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 };
 
+/** True desert: no grass, no forest, a pale tan climate colour (0..1). */
+function aridAt(m: LocalMap, v: number): number {
+  const L = v * LAYERS, b0 = m.base[v * 3], b1 = m.base[v * 3 + 1];
+  const pale = Math.min(1, Math.max(0, (b0 - b1) * 6 + 0.3));
+  return pale * (1 - Math.min(1, (m.layers[L + L_GRASS] + m.layers[L + L_FOREST] + m.layers[L + L_CLEARING]) * 4));
+}
+
+/** Which texture's grain the ground shows per sample: soil, stone, and snow (smooth: no grain), 3
+ * values each; the rest is grass. So a desert, a scree slope or a gravel bar isn't drawn with the
+ * grass texture, and snow isn't darkened by it. */
+export function groundGrain(m: LocalMap): Float32Array {
+  const N = m.res * m.res, out = new Float32Array(N * 3);
+  for (let v = 0; v < N; v++) {
+    const L = v * LAYERS, ly = (k: number) => m.layers[L + k];
+    out[v * 3] = Math.min(1, Math.max(ly(L_BARE), aridAt(m, v) * 0.85, ly(L_SAND), ly(L_BED)));
+    out[v * 3 + 1] = Math.min(1, Math.max(ly(L_SCREE), ly(L_GRAVEL), ly(L_ROCK) * 0.8));
+    out[v * 3 + 2] = Math.min(1, Math.max(smooth01(0.08, 0.42, ly(L_SNOW)), ly(L_DRIFT)));
+  }
+  return out;
+}
+
 /** The ground colour per sample (linear RGB) for a style. */
 export function paintGround(m: LocalMap, st: HexStyle): Float32Array {
   const N = m.res * m.res, out = new Float32Array(N * 3);
@@ -119,6 +143,8 @@ export function paintGround(m: LocalMap, st: HexStyle): Float32Array {
     grass: lin(p.grass), dry: lin(p.grassDry), forest: lin(p.forest), clearing: lin(p.clearing), rock: lin(p.rock),
     snow: lin(p.snow), sand: lin(p.sand), bed: lin(p.bed), lush: lin(p.lush), alpine: lin(p.alpine),
     sh: lin(p.seaShallow), sd: lin(p.seaDeep),
+    soil: lin(p.soil), scree: lin(p.scree), gravel: lin(p.gravel), pavement: lin(p.pavement),
+    wash: lin(p.sand).map((x) => Math.min(1, x * 1.3)) as RGB,
   };
   const TC = { path: lin(st.town.path), hedge: lin(st.town.hedge), crops: st.town.crops.map(lin) };
   const c: RGB = [0, 0, 0];
@@ -138,7 +164,7 @@ export function paintGround(m: LocalMap, st: HexStyle): Float32Array {
         c[k] = g + ([b0, b1, b2][k] - g) * p.keepBase;
       }
       // True desert (no grass, no forest, a pale tan climate colour) is sand, not dry grass.
-      const arid = pale * (1 - Math.min(1, (ly(L_GRASS) + ly(L_FOREST) + ly(L_CLEARING)) * 4));
+      const arid = aridAt(m, v);
       mix(C.sand, arid * 0.85);
       const mt = ly(L_MOTTLE);
       if (p.mottle > 0 && ly(L_GRASS) > 0) {
@@ -152,10 +178,20 @@ export function paintGround(m: LocalMap, st: HexStyle): Float32Array {
       mix(C.bed, ly(L_BED));
       mix(C.rock, ly(L_ROCK) * 0.9);
       mix(C.alpine, ly(L_ALPINE) * 0.6);
+      // Ground patterns (richer hexes step 3): green swales and sun-dried ridges in grass, pale
+      // washes in desert, then bare ground, scree and gravel.
+      const hol = ly(L_HOLLOW), veg = Math.min(1, ly(L_GRASS) + ly(L_CLEARING) * 0.7) * (1 - arid);
+      mix(C.lush, smooth01(0.8, 5, hol) * 0.5 * veg);
+      mix(C.dry, smooth01(-0.8, -5, hol) * 0.45 * veg);
+      if (arid > 0) mix(C.wash, smooth01(0.5, 4, hol) * arid * 0.6);
+      mix(arid > 0.4 ? C.pavement : C.soil, ly(L_BARE) * 0.8);
+      mix(C.scree, ly(L_SCREE) * 0.85);
+      mix(C.gravel, ly(L_GRAVEL) * 0.85);
       mix(C.sand, ly(L_SAND));
       // Snow decisively: the planet's partial snow (often ~0.4 on its peaks) reads white-grey over its
       // grey rock, but over this palette's warm tan it read as more tan. Past half cover, it's white.
       mix(C.snow, smooth01(0.08, 0.42, ly(L_SNOW)) * 0.97);
+      mix(C.snow, ly(L_DRIFT) * 0.95);
       if (p.peaks > 0 && ly(L_ELEV) > 0.3) {
         const e = ly(L_ELEV) + (hash(v * 7 + 1) - 0.5) * 0.04;
         mix(C.alpine, smooth01(0.45, 0.65, e) * 0.8 * p.peaks);

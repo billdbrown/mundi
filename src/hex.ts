@@ -19,7 +19,7 @@ import { loadPack, packModel, packMaterial, PackPlants, type Pack } from './hexp
 import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
 import { parseSeed } from './seedname.ts';
 import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, L_FOREST, L_SNOW, L_LUSH, HOUSE_STRIDE, type LocalMap, type LocalOptions, H_LOG, H_LILYPAD, isFlower, H_FERN, H_STUMP, isHexKind } from './hexlocal.ts';
-import { STYLE, paintGround, STYLE_GRADE, TILT_SHIFT, type HexStyle } from './hexstyle.ts';
+import { STYLE, paintGround, groundGrain, STYLE_GRADE, TILT_SHIFT, type HexStyle } from './hexstyle.ts';
 import { daylight, hourForElevation, type RGB } from './daylight.ts';
 import type { HexJob, ValleyJob } from './hexworker.ts';
 import type { Spot } from './debug.ts';
@@ -249,11 +249,11 @@ function texturedGround(mat: THREE.MeshStandardMaterial) {
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, groundTex);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vLPos; varying vec3 vLN;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLPos = position; vLN = normal;');
+      .replace('#include <common>', '#include <common>\nvarying vec3 vLPos; varying vec3 vLN; attribute vec3 grain; varying vec3 vGrain;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLPos = position; vLN = normal; vGrain = grain;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying vec3 vLPos; varying vec3 vLN;
+        varying vec3 vLPos; varying vec3 vLN; varying vec3 vGrain;
         uniform sampler2D tGrass, tGround, tRock;
         uniform vec3 uMeans;
         uniform float uTexAmt, uTexScale;
@@ -268,8 +268,9 @@ function texturedGround(mat: THREE.MeshStandardMaterial) {
           float r = 0.5 * (texL(tRock, uv * 0.5) + texL(tRock, uv2 * 0.5)) / uMeans.z;
           float soil = smoothstep(0.35, 0.65, texL(tGround, uv * 0.03));
           float steep = 1.0 - smoothstep(0.7, 0.88, normalize(vLN).y);
-          float det = mix(mix(g, d, soil * 0.5), r, steep);
-          diffuseColor.rgb *= mix(1.0, clamp(det, 0.4, 1.8), uTexAmt);
+          // (vGrain: the ground's own soil and stone, from its patterns (desert, scree, gravel), and snow.)
+          float det = mix(mix(g, d, max(soil * 0.5, vGrain.x)), r, max(steep, vGrain.y));
+          diffuseColor.rgb *= mix(1.0, clamp(det, 0.4, 1.8), uTexAmt * (1.0 - 0.55 * vGrain.z));
         }`);
   };
   mat.customProgramCacheKey = () => 'hexground';
@@ -507,6 +508,7 @@ function build(m: LocalMap) {
   const tg = new THREE.BufferGeometry();
   tg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   tg.setAttribute('color', new THREE.BufferAttribute(paintGround(m, st), 3));
+  tg.setAttribute('grain', new THREE.BufferAttribute(groundGrain(m), 3));
   tg.setIndex(idx);
   tg.computeVertexNormals();
   const tmat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97 });

@@ -76,12 +76,17 @@ export interface LocalRiver {
  * regenerating (hexstyle.ts). Each 0..1 unless noted, LAYERS values per sample.
  */
 export const L_GRASS = 0, L_MOTTLE = 1, L_FOREST = 2, L_ROCK = 3, L_SNOW = 4, L_SAND = 5, L_BED = 6,
-  L_LUSH = 7, L_ALPINE = 8, L_DEPTH = 9, L_AO = 10, L_CLEARING = 11, L_PATH = 12, L_FIELD = 13, L_FIELDKIND = 14, L_HEDGE = 15, L_ELEV = 16;
+  L_LUSH = 7, L_ALPINE = 8, L_DEPTH = 9, L_AO = 10, L_CLEARING = 11, L_PATH = 12, L_FIELD = 13, L_FIELDKIND = 14, L_HEDGE = 15, L_ELEV = 16,
+  L_HOLLOW = 17, L_SCREE = 18, L_GRAVEL = 19, L_DRIFT = 20, L_BARE = 21;
 /** (L_DEPTH is metres of water over the ground, 0 on land; L_AO how sunken the spot is, a crease;
  * L_FIELDKIND which crop a field grows, 0..1; L_HEDGE how close to a field's edge.) */
 /** L_ELEV: how high a sample stands on this map's own land, 0..1, scaled down where the map is
  * nearly flat: for styles that paint mountains their own way (alpine, rock, snow caps). */
-export const LAYERS = 17;
+/** Ground patterns (richer hexes step 3): L_HOLLOW how far a sample sits below the ground ~45 m
+ * round, metres (+ a swale, - a ridge); L_SCREE loose stone on slopes and high flats; L_GRAVEL
+ * bars along rivers and lake shores; L_DRIFT snow lying in hollows and on shaded slopes below
+ * the snow line; L_BARE bare ground in dry country (soil, or in desert a stony pavement). */
+export const LAYERS = 22;
 
 /** Plant kinds the hex adds to the planet's own (flora.ts, species.ts): drawn only from the
  * plant pack (hexplants.ts), so they appear once it has loaded. */
@@ -239,6 +244,70 @@ const LAND0 = 0.0012;
 /** The planet's densest planting (expected plants per cell), as a full grove. */
 const FULL = 15;
 
+/** What groundPatterns needs from buildLocalMap. */
+interface PatternInput {
+  w: World; res: number; step: number; half: number; cy: number;
+  heights: Float32Array; layers: Float32Array; tempV: Float32Array; moistV: Float32Array; riverNear: Float32Array;
+  lakeMask: Float32Array; lakeLevel: number; grow: Float32Array; owner: Int16Array; cellList: number[]; noise: Noise3;
+  snowLine: Float32Array; slopeA: Float32Array;
+}
+
+/** Biomes whose ground is stony where it is at all steep or high. */
+const STONY: Set<number> = new Set([B.MOUNTAIN, B.PEAK, B.BADLANDS, B.CANYONS, B.KARST, B.POLAR_DESERT, B.COLD_DESERT, B.TUNDRA, B.DESERT, B.DESERT_SCRUB]);
+
+/**
+ * Ground patterns (richer hexes step 3): what the ground is made of, by its shape. Lays L_HOLLOW,
+ * L_SCREE, L_GRAVEL, L_DRIFT and L_BARE, and keeps plants off gravel, drifts and most scree.
+ * (A pass of its own: inside buildLocalMap's colour loop it made the browser build the whole hex
+ * ~0.8 s slower, as the planting did, 2026-11-05.)
+ */
+function groundPatterns(P: PatternInput): void {
+  const { w, res, step, half, cy, heights, layers, tempV, moistV, riverNear, lakeMask, lakeLevel, grow, owner, cellList, noise, snowLine, slopeA } = P;
+  const n01 = (x: number, y: number, l: number, z: number) => 0.5 + 0.5 * noise(x / l, y / l, z);
+  // The ground ~90 m across: swales (+) gather water and snow; ridges (-) dry out and blow bare.
+  const swaleBlur = boxBlur(heights, res, Math.max(3, Math.round(45 / step)));
+  for (let j = 0; j < res; j++) {
+    for (let i = 0; i < res; i++) {
+      const v = j * res + i;
+      if (Number.isNaN(snowLine[v])) continue;
+      const x = -half + i * step, y = -half + j * step, h = heights[v], L0 = v * LAYERS;
+      const hD = heights[Math.max(0, j - 1) * res + i], hU = heights[Math.min(res - 1, j + 1) * res + i];
+      const temp = tempV[v], moist = moistV[v], slope = slopeA[v];
+      const rock = layers[L0 + L_ROCK], white = layers[L0 + L_SNOW];
+      const hol = swaleBlur[v] - h;
+      layers[L0 + L_HOLLOW] = hol;
+      const alpineV = layers[L0 + L_ALPINE], canopy = layers[L0 + L_FOREST];
+      const stony = Math.max(alpineV, STONY.has(w.biome[cellList[owner[v]]]) ? 1 : 0, smooth(0.35, 0.12, temp) * 0.7);
+      const dry = smooth(0.34, 0.1, moist) * smooth(0.12, 0.28, temp);
+      // (The patch noise only where some pattern can use it: it is most of this section's cost.)
+      const patch = stony > 0 || dry > 0 || slope > 0.2 ? n01(x, y, 34, 151) * 0.65 + n01(x, y, 10, 153) * 0.35 : 0.5;
+      // Scree: loose stone on slopes short of cliffs, most in cold, high or stony country, and
+      // fell-field stones in patches on the high flats.
+      const scree = Math.min(1, smooth(0.32, 0.8, slope + 0.3 * (patch - 0.5)) * (1 - rock) * (0.25 + 0.75 * stony)
+        + 0.85 * stony * smooth(0.55, 0.75, patch)) * (1 - 0.85 * canopy) * (1 - white);
+      layers[L0 + L_SCREE] = scree;
+      // Gravel bars along rivers, in patches, and a stony strip round lakes just above the water.
+      const rnG = riverNear[v];
+      // (Out to ~1.5 river widths from the water: a narrower band hid under the river's surface.)
+      let gravel = rnG >= 1 && rnG < 3.4 ? smooth(3.3, 1.9, rnG + 0.8 * (n01(x, y, 18, 155) - 0.5)) * smooth(0.4, 0.6, n01(x, y, 50, 157)) : 0;
+      if (!Number.isNaN(lakeLevel) && lakeMask[v] > 0.04) gravel = Math.max(gravel, smooth(0.04, 0.2, lakeMask[v]) * smooth(lakeLevel + 2.5, lakeLevel + 0.8, h) * smooth(0.3, 0.55, n01(x, y, 25, 159)));
+      gravel *= 1 - white;
+      layers[L0 + L_GRAVEL] = gravel;
+      // Drifts: below the snow line, snow lies on in hollows and on slopes facing the pole.
+      const shade = -((hU - hD) / (2 * step)) * (cy < 0 ? -1 : 1);
+      const near = smooth(0.34, 0.17, snowLine[v]);
+      // (Its own, broader patches: the fine noise made a salt-and-pepper speckle of snow.)
+      const dp = near > 0 ? n01(x, y, 55, 161) * 0.75 + n01(x, y, 18, 163) * 0.25 : 0;
+      const drift = near * Math.max(smooth(1, 4, hol), smooth(0.06, 0.3, shade)) * smooth(0.6 - 0.2 * near, 0.7 - 0.2 * near, dp) * (1 - rock) * (1 - white);
+      layers[L0 + L_DRIFT] = drift;
+      // Bare ground in dry country, in patches and on ridges; the swales keep their cover.
+      const bare = dry * Math.min(1, smooth(0.5, 0.72, patch + 0.12 * smooth(0, -4, hol)) + 0.6 * smooth(-1.5, -6, hol)) * smooth(2.5, -1, hol) * (1 - canopy);
+      layers[L0 + L_BARE] = bare;
+      grow[v] *= (1 - gravel) * (1 - 0.6 * scree) * (1 - drift) * (1 - 0.6 * bare);
+    }
+  }
+}
+
 /** What placePlants needs from buildLocalMap (the map's grids, its noise and helpers). */
 interface PlantInput {
   w: World; size: number; half: number; step: number; res: number;
@@ -308,7 +377,7 @@ function placePlants(P: PlantInput): Float32Array {
       const z = sampleH(x, y);
       // Banks: reeds in a band along rivers and round lakes, willows behind them.
       const rn = riverNear[v];
-      const bank = snow > 0.3 ? 0 : Math.max(rn >= 1.1 && rn < 3.2 ? smooth(3.2, 1.6, rn) : 0, lakeMask[v] > 0.03 ? smooth(0.03, 0.25, lakeMask[v]) : 0);
+      const bank = snow > 0.3 ? 0 : (1 - layers[L0 + L_GRAVEL]) * Math.max(rn >= 1.1 && rn < 3.2 ? smooth(3.2, 1.6, rn) : 0, lakeMask[v] > 0.03 ? smooth(0.03, 0.25, lakeMask[v]) : 0);
       if (bank > 0 && temp > 0.2) {
         if (r1 < 0.5 * bank) {
           if (temp > 0.28) clump(x, y, REEDS + Math.floor(r2 * SPECIES_VARIANTS), 3 + Math.floor(r3 * 4), 1.6, 2.4, 0x5d7a36);
@@ -353,7 +422,7 @@ function placePlants(P: PlantInput): Float32Array {
         [H_LOG, 0.012 * g + 0.006 * clearing, 3 + 3 * r3, 0],
         [H_STUMP, 0.004 * g + 0.012 * clearing, 0.5 + 0.4 * r3, 0],
         [TUFT, 0.35 * above * (1 - rock), 1.4 * (0.6 + 0.7 * r3), colourOf(pl, TUFT, 0x6e6a44)],
-        [ROCK_KIND, 0.04 * above + 0.02 * smooth(0.22, 0.1, moist) + 0.008 * g, (0.6 + 1.6 * r3 * r3), 0x74716c],
+        [ROCK_KIND, 0.04 * above + 0.02 * smooth(0.22, 0.1, moist) + 0.008 * g + 0.12 * layers[L0 + L_SCREE], (0.6 + 1.6 * r3 * r3), 0x74716c],
       ];
       let acc = 0, done = false;
       for (const [kind, p, metres, colour] of extras) {
@@ -367,7 +436,8 @@ function placePlants(P: PlantInput): Float32Array {
       }
       if (done) continue;
       // Else the biome's own small things; grass thicker in the mottle's lush patches.
-      const pSmall = Math.min(0.6, pl.smallD / (FULL * 1.6)) * grow[v] * (grass > 0.2 ? 0.5 + mottle : 1);
+      // (And in the swales, where the water gathers.)
+      const pSmall = Math.min(0.6, pl.smallD / (FULL * 1.6) * (1 + 0.6 * smooth(0.5, 4, layers[L0 + L_HOLLOW]))) * grow[v] * (grass > 0.2 ? 0.5 + mottle : 1);
       if (pl.small.length && r1 > 1 - pSmall) {
         const [kind, colour, , sz] = pick(pl.small, pl.smallD, r2);
         put(x, y, z, kind, plantMetres(kind) * sz * (0.75 + 0.5 * r3), colour, r4);
@@ -828,6 +898,8 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   // Crease shading (ambient occlusion, baked): how far a sample sits below the ground around it,
   // from a box blur of the heights about 20 m across.
   const aoBlur = boxBlur(heights, res, Math.max(2, Math.round(10 / step)));
+  // Per land sample, for the ground patterns' pass: the snow line's measure (NaN: water) and slope.
+  const snowLine = new Float32Array(N).fill(NaN), slopeA = new Float32Array(N);
   const base = colors.slice();
   const layers = new Float32Array(N * LAYERS);
   const lay = (v: number, k: number, val: number) => { layers[v * LAYERS + k] = val; };
@@ -963,11 +1035,15 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       const white = Math.max(Math.min(1, snow * lie), glacier);
       mix(v, SNOW, white * 0.95);
       lay(v, L_SNOW, white);
+      // (For the ground patterns, a pass of their own after this loop.)
+      snowLine[v] = latT - 0.5 * eS + edge; slopeA[v] = slope;
       // Where plants grow: not on rock, snow, the water's edge, or (trees) above the tree line.
       grow[v] = (1 - rock) * (1 - Math.min(1, white * 1.5)) * (riverNear[v] < 1.3 ? 0 : 1) * (h < 0.3 ? 0 : 1);
       treeLine[v] = smooth(0.2, 0.3, tv + an * 0.05);
     }
   }
+
+  groundPatterns({ w, res, step, half, cy, heights, layers, tempV, moistV, riverNear, lakeMask, lakeLevel, grow, owner, cellList, noise, snowLine, slopeA });
 
   // Height on this map's own land, for styles that draw their own mountain bands.
   {
