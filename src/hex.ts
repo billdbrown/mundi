@@ -15,10 +15,10 @@ import { GRADE_SHADER } from './grade.ts';
 import { Atmosphere, applyAerial } from './atmosphere.ts';
 import { treeGeometry, treeMaterial, TUFT } from './flora.ts';
 import { FIRST, FAMILIES, VARIANTS } from './species.ts';
-import { loadPack, loadTexPack, packModel, texModel, packMaterial, setOnTexMaterial, PackPlants, type Pack, type TexPack } from './hexplants.ts';
+import { loadPack, packModel, packMaterial, PackPlants, type Pack } from './hexplants.ts';
 import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
 import { parseSeed } from './seedname.ts';
-import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, L_FOREST, L_SNOW, L_LUSH, HOUSE_STRIDE, type LocalMap, type LocalOptions } from './hexlocal.ts';
+import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, L_FOREST, L_SNOW, L_LUSH, HOUSE_STRIDE, type LocalMap, type LocalOptions, H_LOG, H_LILYPAD, isFlower, H_FERN, H_STUMP, isHexKind } from './hexlocal.ts';
 import { STYLE, paintGround, STYLE_GRADE, TILT_SHIFT, type HexStyle } from './hexstyle.ts';
 import { daylight, hourForElevation, type RGB } from './daylight.ts';
 import type { HexJob, ValleyJob } from './hexworker.ts';
@@ -49,13 +49,14 @@ let userHour: number | null = h.get('time') !== null && h.get('time') !== '' ? (
 let playing = false;
 /** The neighbouring hexes, drawn blurred behind the tile (N, or the panel). */
 let showCtx = h.get('around') !== '0';
-/** Which plant models (a comparison, 2026-11-05): the planet's own, or the free pack's (hexplants.ts),
- * with or without the full models close to the camera. */
-type PlantMode = 'mundi' | 'pack' | 'packnear' | 'tex';
-let plantMode: PlantMode = (['mundi', 'pack', 'packnear', 'tex'] as const).find((v) => v === h.get('plants')) ?? 'mundi';
-let pack: Pack | null = null, texPack: TexPack | null = null;
+/** Plant models from the free Ultimate Nature pack (hexplants.ts; Bill's pick of four, 2026-11-05),
+ * fetched from the start. Kinds it lacks keep the planet's own models. */
+let pack: Pack | null = null;
+let packReady: Promise<void> | null = null;
+const fetchPack = () => (packReady ??= loadPack().then((p) => { pack = p; }));
+void fetchPack();
 let packPlants: PackPlants | null = null;
-/** Near models within this far of the camera, map metres. */
+/** The full models within this far of the camera, map metres; simplified ones beyond. */
 const NEAR_M = 140;
 const back = new URLSearchParams(h);
 for (const k of ['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around', 'plants']) back.delete(k);
@@ -116,7 +117,6 @@ scene.add(atmo.sky);
 atmo.sky.layers.enableAll();
 applyAerial(treeMaterial, true);
 applyAerial(packMaterial, true);
-setOnTexMaterial((m) => applyAerial(m, true));
 const planetCam = new THREE.PerspectiveCamera(50, 1, 1e-6, 1);
 /** Map metres to planet radii, for the current map (identity until a map is in). */
 const toPlanet = new THREE.Matrix4(), toPlanetRot = new THREE.Quaternion();
@@ -672,6 +672,8 @@ function build(m: LocalMap) {
   }
 
   world.add(buildPlants(m, inFrame));
+  // A cold open can beat the pack: draw with the planet's models, then swap once it is here.
+  if (!pack) void fetchPack().then(() => { if (map === m) redrawPlants(); });
 
   // Houses (placeholders where the history put towns): walls and a pitched roof, instanced, in the
   // style's colours; scaled up a little in the stylised looks, like the trees.
@@ -816,14 +818,14 @@ function refWidth(kind: number): number {
 }
 
 /**
- * The plants, life-size: the planet's own models (flora.ts) or the pack's (hexplants.ts), one
- * instanced mesh per model. In pack mode, kinds the pack lacks keep the planet's models.
+ * The plants, life-size: the pack's models (hexplants.ts) where it has one for the kind, else the
+ * planet's own (flora.ts), one instanced mesh per model.
  */
 function buildPlants(m: LocalMap, inFrame: (x: number, y: number) => boolean): THREE.Group {
   const st = style, group = new THREE.Group();
   group.name = 'plantgroup';
   packPlants?.dispose(); packPlants = null;
-  const usePack = plantMode !== 'mundi' && pack;
+  const usePack = !!pack;
   const { res, size, layers } = m, half = size / 2, step = size / (res - 1);
   const layerAt = (x: number, y: number, L: number) => {
     const i = Math.max(0, Math.min(res - 1, Math.round((x + half) / step))), j = Math.max(0, Math.min(res - 1, Math.round((y + half) / step)));
@@ -831,7 +833,7 @@ function buildPlants(m: LocalMap, inFrame: (x: number, y: number) => boolean): T
   };
   const T = m.trees, STRIDE = 6, count = T.length / STRIDE;
   const byKind = new Map<number, number[]>();
-  const byModel = new Map<string, { mtx: number[]; col: number[] }>();
+  const byModel = new Map<string, { mtx: number[]; col: number[]; nearOnly?: boolean }>();
   const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc3 = new THREE.Vector3(), ps = new THREE.Vector3(), pc = new THREE.Color();
   const up = new THREE.Vector3(0, 1, 0);
   const place = (i: number) => {
@@ -849,22 +851,26 @@ function buildPlants(m: LocalMap, inFrame: (x: number, y: number) => boolean): T
     if (!inFrame(x, y)) continue;
     if (st.plants.keep < 1 && ((i * 2246822519) >>> 0) / 4294967296 > st.plants.keep) continue;
     const k = T[i * STRIDE + 4];
-    const name = usePack ? packModel(pack!, k, i, layerAt(x, y, L_SNOW), layerAt(x, y, L_LUSH)) : null;
+    const name = usePack ? packModel(pack!, k, i, layerAt(x, y, L_SNOW), Math.max(layerAt(x, y, L_LUSH), layerAt(x, y, L_FOREST))) : null;
     if (name) {
       place(i);
       // Pack crowns are wider for their height than Mundi's: shrink them to its footprint, so a
       // forest keeps its gaps and its mix (wide oaks swallowed the pines).
-      const f = Math.max(0.55, Math.min(1, refWidth(k) / pack!.index.models[name].w));
-      // Conifers keep their height (they stand over the broadleaf canopy) and only narrow a little.
-      if (f < 1) mtx.scale(name.startsWith('Pine') ? sc3.set(Math.sqrt(f), 1, Math.sqrt(f)) : sc3.setScalar(f));
-      const tx = plantMode === 'tex' && texPack ? texModel(texPack, name, i) : null;
-      const key = name + '|' + (tx ? 'tx:' + tx : 'un:' + name);
-      if (!byModel.has(key)) byModel.set(key, { mtx: [], col: [] });
-      const d = byModel.get(key)!;
+      // (The hex's own kinds have no planet model to match; logs and lilies are sized by length.)
+      const w = pack!.index.models[name].w;
+      if (k === H_LOG || k === H_LILYPAD) mtx.scale(sc3.setScalar(1 / w));
+      else if (!isHexKind(k)) {
+        const f = Math.max(0.55, Math.min(1, refWidth(k) / w));
+        // Conifers keep their height (they stand over the broadleaf canopy) and only narrow a little.
+        if (f < 1) mtx.scale(name.startsWith('Pine') ? sc3.set(Math.sqrt(f), 1, Math.sqrt(f)) : sc3.setScalar(f));
+      }
+      if (!byModel.has(name)) byModel.set(name, { mtx: [], col: [], nearOnly: isFlower(k) || k === H_FERN || k === H_STUMP });
+      const d = byModel.get(name)!;
       for (let e = 0; e < 16; e++) d.mtx.push(mtx.elements[e]);
       d.col.push(pc.r, pc.g, pc.b);
       continue;
     }
+    if (isHexKind(k)) continue;   // (the pack's alone: until it loads, or where it has none)
     // Grass tufts and reeds are too fine for the stylised looks: scribbles at this distance.
     if (!st.plants.tufts && (k === TUFT || (k >= FIRST && FAMILIES[Math.floor((k - FIRST) / VARIANTS)] === 'reeds'))) continue;
     if (!byKind.has(k)) byKind.set(k, []);
@@ -878,20 +884,15 @@ function buildPlants(m: LocalMap, inFrame: (x: number, y: number) => boolean): T
     group.add(mesh);
   }
   if (byModel.size) {
-    packPlants = new PackPlants(pack!, texPack, byModel, plantMode === 'pack' ? 0 : NEAR_M);
+    packPlants = new PackPlants(pack!, byModel, NEAR_M);
     group.add(packPlants.group);
   }
   return group;
 }
 
-/** Switch plant models and redraw the plants alone. */
-async function setPlants(mode: PlantMode) {
-  plantMode = mode;
-  $<HTMLSelectElement>('plants').value = mode;
-  writeHash();
-  if (mode !== 'mundi' && !pack) pack = await loadPack();
-  if (mode === 'tex' && !texPack) texPack = await loadTexPack();
-  if (!map || plantMode !== mode) return;
+/** Redraw the plants alone. */
+function redrawPlants() {
+  if (!map) return;
   const old = world.getObjectByName('plantgroup');
   if (old) { world.remove(old); dispose(old); }
   const st = style, shape = hexShape(map), half = map.size / 2;
@@ -1032,7 +1033,6 @@ function syncPanel() {
   $<HTMLSelectElement>('vsoft').value = String(opts.vSoft);
   $<HTMLInputElement>('crags').checked = opts.crags;
   $<HTMLSelectElement>('res').value = String(opts.res);
-  $<HTMLSelectElement>('plants').value = plantMode;
 }
 const custom = () => { syncPanel(); request(); };
 $<HTMLInputElement>('tilt').onchange = (e) => setTilt((e.target as HTMLInputElement).checked);
@@ -1044,7 +1044,6 @@ $<HTMLSelectElement>('vsoft').onchange = (e) => { opts.vSoft = Number((e.target 
 $<HTMLSelectElement>('river').onchange = (e) => { opts.riverMode = (e.target as HTMLSelectElement).value as LocalOptions['riverMode']; custom(); };
 $<HTMLInputElement>('crags').onchange = (e) => { opts.crags = (e.target as HTMLInputElement).checked; custom(); };
 $<HTMLSelectElement>('res').onchange = (e) => { opts.res = Number((e.target as HTMLSelectElement).value); request(); };
-$<HTMLSelectElement>('plants').onchange = (e) => void setPlants((e.target as HTMLSelectElement).value as PlantMode);
 
 function writeHash() {
   const o = new URLSearchParams(back);
@@ -1060,7 +1059,6 @@ function writeHash() {
   if (opts.res !== D.res) o.set('res', String(opts.res));
   if (userHour !== null) o.set('time', userHour.toFixed(2));
   if (!showCtx) o.set('around', '0');
-  if (plantMode !== 'mundi') o.set('plants', plantMode);
   history.replaceState(null, '', location.pathname + '#' + o.toString());
 }
 
@@ -1274,7 +1272,6 @@ function renderFrame() {
 }
 
 syncPanel();
-if (plantMode !== 'mundi') void setPlants(plantMode);
 if (embedded && cell < 0) {
   // Loaded hidden: build the world now, so the first hex opened is quick.
   warm();
@@ -1338,8 +1335,8 @@ void LAYERS; void L_DEPTH;
     controls.update();
   },
   /** Camera at (x, y north) metres, height above ground, looking at (tx, ty). */
-  look: (x: number, y: number, up: number, tx: number, ty: number) => {
+  look: (x: number, y: number, up: number, tx: number, ty: number, tUp = 0) => {
     camera.position.set(x, groundAt(x, y) + up, -y);
-    controls.target.set(tx, groundAt(tx, ty), -ty); controls.update();
+    controls.target.set(tx, groundAt(tx, ty) + tUp, -ty); controls.update();
   },
 };

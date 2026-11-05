@@ -27,19 +27,26 @@ export const SETS = {
   pine: range('PineTree', 5), pineSnow: range('PineTree_Snow', 5),
   broadleaf: range('CommonTree', 5), broadleafSnow: range('CommonTree_Snow', 5), broadleafDead: range('CommonTree_Dead', 5),
   birch: range('BirchTree', 5), birchSnow: range('BirchTree_Snow', 5), birchDead: range('BirchTree_Dead', 5),
-  willow: range('Willow', 5), willowDead: range('Willow_Dead', 5),
+  broadleafDeadSnow: range('CommonTree_Dead_Snow', 5), birchDeadSnow: range('BirchTree_Dead_Snow', 5),
+  willow: range('Willow', 5), willowSnow: range('Willow_Snow', 5), willowDead: range('Willow_Dead', 5), willowDeadSnow: range('Willow_Dead_Snow', 5),
   palm: range('PalmTree', 4),
   bush: ['Bush_1', 'Bush_2'], bushBerries: ['BushBerries_1', 'BushBerries_2'], bushSnow: ['Bush_Snow_1', 'Bush_Snow_2'],
   cactus: range('Cactus', 5), cactusFlowers: ['CactusFlower_1', ...range('CactusFlowers', 4, 2)],
   rock: range('Rock', 7), rockMoss: range('Rock_Moss', 7), rockSnow: range('Rock_Snow', 7),
-  grass: ['Grass', 'Grass_2', 'Grass_Short'], plant: range('Plant', 5), flowers: ['Flowers'],
+  grass: ['Grass', 'Grass_2', 'Grass_Short'], plant: range('Plant', 5),
+  // (One flower model in the pack; its petals recoloured for variety: "name~colour".)
+  flowers: ['Flowers', 'Flowers~yellow', 'Flowers~white', 'Flowers~purple', 'Flowers~red'],
   stump: ['TreeStump', 'TreeStump_Moss', 'TreeStump_Snow'], log: ['WoodLog', 'WoodLog_Moss', 'WoodLog_Snow'],
   lilypad: ['Lilypad'],
 };
 
+/** Petal colours for recoloured copies ("Flowers~yellow"): replace the model's Cyan. */
+const PETALS = { yellow: 0xe6c23c, white: 0xe9e5dc, purple: 0x8058b8, red: 0xc0383a };
 /** Colour (sRGB hex) and tint (0..1) for a material, by its name (the pack's own are dimmed). */
 function role(mat, model) {
   const n = mat.replace(/\.\d+$/, '');
+  const petal = PETALS[model.split('~')[1]];
+  if (petal && n === 'Cyan') return [petal, 0];
   const isRock = model.startsWith('Rock');
   switch (n) {
     case 'Green': return isRock ? [0x5d6b3a, 0] : [0xffffff, 1];
@@ -67,7 +74,7 @@ function role(mat, model) {
 const loader = new FBXLoader();
 /** One model as groups of welded triangles, one group per material: { pos: number[], idx: number[], col: [r,g,b,a] }. */
 function load(name) {
-  const b = readFileSync(DIR + name + '.fbx');
+  const b = readFileSync(DIR + name.split('~')[0] + '.fbx');
   const root = loader.parse(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength), DIR);
   root.updateMatrixWorld(true);
   const groups = new Map();
@@ -159,69 +166,3 @@ writeFileSync(OUT + 'plants.bin', bin);
 writeFileSync(OUT + 'plants.json', JSON.stringify({ source: 'Quaternius Ultimate Nature (CC0)', sets: SETS, models }));
 console.log(`plants.bin ${(offset / 1e6).toFixed(2)} MB (vertices ${(vBytes / 1e6).toFixed(2)}, indices ${(iBytes / 1e6).toFixed(2)})`);
 
-// --- Textured trees, for close to the camera: Quaternius's Textured Tree Pack (CC0) ---
-// Per model: position (float32 x3), normal (int8 x3 + pad), uv (float32 x2), and index ranges for
-// its bark and its leaves (alpha-cut cards). Into texplants.bin / texplants.json; the textures are
-// copied beside them into trees/.
-const TEXDIR = process.argv[3] ?? 'C:/Users/Bill/assets/cc0/quaternius/stylizedtree/';
-const TEXSETS = {
-  broadleaf: range('Tree', 10), birch: range('Birch', 10), pine: range('Pine', 5), dead: range('DeadTree', 10),
-};
-const TEXMAP = { Bark: 'Tree_Bark.jpg', Tree_Leaves: 'Tree_Leaves.png', Pine_Leaves: 'Pine_Leaves.png', Birch_Bark: 'Birch_Bark.png', Birch_Leaves: 'Birch_Leaves_Green.png' };
-const tchunks = []; let toff = 0;
-const tpush = (buf) => { const pad = (4 - (toff % 4)) % 4; if (pad) { tchunks.push(new Uint8Array(pad)); toff += pad; } tchunks.push(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)); const at = toff; toff += buf.byteLength; return at; };
-const tmodels = {};
-for (const name of Object.values(TEXSETS).flat()) {
-  const b = readFileSync(TEXDIR + 'FBX/' + name + '.fbx');
-  const root = loader.parse(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength), TEXDIR + 'FBX/');
-  root.updateMatrixWorld(true);
-  const parts = new Map();   // texture -> soup of [x y z nx ny nz u v]
-  root.traverse((o) => {
-    if (!o.isMesh) return;
-    const g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry;
-    const P = g.attributes.position, Nn = g.attributes.normal, U = g.attributes.uv, mats = [o.material].flat();
-    const nm = new THREE.Matrix3().getNormalMatrix(o.matrixWorld), v = new THREE.Vector3(), n = new THREE.Vector3();
-    for (const r of g.groups.length ? g.groups : [{ start: 0, count: P.count, materialIndex: 0 }]) {
-      const mn = (mats[r.materialIndex] ?? mats[0]).name.replace(/\.\d+$/, '');
-      const tex = TEXMAP[mn];
-      if (!tex) { console.warn('unknown material', mn, 'in', name); continue; }
-      if (!parts.has(tex)) parts.set(tex, []);
-      const S = parts.get(tex);
-      for (let i = r.start; i < r.start + r.count; i++) {
-        v.fromBufferAttribute(P, i).applyMatrix4(o.matrixWorld); n.fromBufferAttribute(Nn, i).applyMatrix3(nm).normalize();
-        S.push(v.x, v.y, v.z, n.x, n.y, n.z, U.getX(i), U.getY(i));
-      }
-    }
-  });
-  // Bounds as the plain models: one unit tall, base at 0, trunk on the axis.
-  let y0 = Infinity, y1 = -Infinity;
-  for (const S of parts.values()) for (let i = 1; i < S.length; i += 8) { y0 = Math.min(y0, S[i]); y1 = Math.max(y1, S[i]); }
-  const H = y1 - y0; let cx = 0, cz = 0, cn = 0;
-  for (const S of parts.values()) for (let i = 0; i < S.length; i += 8) if (S[i + 1] < y0 + 0.1 * H) { cx += S[i]; cz += S[i + 2]; cn++; }
-  cx /= cn || 1; cz /= cn || 1;
-  const pos = [], nor = [], uv = [], idx = [], groups = [], map = new Map();
-  // Bark first, then leaves (drawn with alpha cut-out).
-  for (const [tex, S] of [...parts].sort((a, b) => Number(a[0].includes('Leaves')) - Number(b[0].includes('Leaves')))) {
-    const start = idx.length;
-    for (let i = 0; i < S.length; i += 8) {
-      const x = (S[i] - cx) / H, y = (S[i + 1] - y0) / H, z = (S[i + 2] - cz) / H;
-      const k = [x, y, z, S[i + 3], S[i + 4], S[i + 5], S[i + 6], S[i + 7]].map((t) => t.toFixed(4)).join(',') + tex;
-      let j = map.get(k);
-      if (j === undefined) { j = pos.length / 3; map.set(k, j); pos.push(x, y, z); nor.push(Math.round(S[i + 3] * 127), Math.round(S[i + 4] * 127), Math.round(S[i + 5] * 127), 0); uv.push(S[i + 6], S[i + 7]); }
-      idx.push(j);
-    }
-    groups.push({ tex, leaves: tex.includes('Leaves'), start, count: idx.length - start });
-  }
-  const I = pos.length / 3 > 65535 ? new Uint32Array(idx) : new Uint16Array(idx);
-  let rr = 0; for (let i = 0; i < pos.length; i += 3) rr = Math.max(rr, Math.hypot(pos[i], pos[i + 2]));
-  tmodels[name] = { w: 2 * rr, verts: pos.length / 3, tris: idx.length / 3, wide: I instanceof Uint32Array, groups,
-    pos: tpush(new Float32Array(pos)), nor: tpush(new Int8Array(nor)), uv: tpush(new Float32Array(uv)), idx: tpush(I) };
-  console.log(name.padEnd(14), 'tris', idx.length / 3, 'verts', pos.length / 3);
-}
-const tbin = new Uint8Array(toff);
-o = 0; for (const c of tchunks) { tbin.set(c, o); o += c.byteLength; }
-writeFileSync(OUT + 'texplants.bin', tbin);
-writeFileSync(OUT + 'texplants.json', JSON.stringify({ source: 'Quaternius Textured Tree Pack (CC0)', sets: TEXSETS, models: tmodels }));
-mkdirSync(OUT + 'trees', { recursive: true });
-for (const t of new Set(Object.values(TEXMAP))) writeFileSync(OUT + 'trees/' + t, readFileSync(TEXDIR + 'Textures/' + t));
-console.log(`texplants.bin ${(toff / 1e6).toFixed(2)} MB`);

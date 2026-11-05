@@ -83,6 +83,14 @@ export const L_GRASS = 0, L_MOTTLE = 1, L_FOREST = 2, L_ROCK = 3, L_SNOW = 4, L_
  * nearly flat: for styles that paint mountains their own way (alpine, rock, snow caps). */
 export const LAYERS = 17;
 
+/** Plant kinds the hex adds to the planet's own (flora.ts, species.ts): drawn only from the
+ * plant pack (hexplants.ts), so they appear once it has loaded. */
+export const H_STUMP = 100, H_LOG = 101, H_LILYPAD = 103, H_DEAD = 104, H_FERN = 105;
+/** Flowers, a kind per petal colour (H_FLOWERS + 0..FLOWER_COLOURS-1), so a patch is one colour. */
+export const H_FLOWERS = 110, FLOWER_COLOURS = 5;
+export const isFlower = (k: number) => k >= H_FLOWERS && k < H_FLOWERS + FLOWER_COLOURS;
+export const isHexKind = (k: number) => k >= 100;
+
 export interface LocalMap {
   cell: number;
   res: number;
@@ -227,6 +235,147 @@ export function trueRiverWidth(w: World, c: number): number {
 const grounds = new WeakMap<World, PlanetGround>();
 /** Planet radii above the sea where the planet's lowest land starts (surface.ts landH). */
 const LAND0 = 0.0012;
+
+/** The planet's densest planting (expected plants per cell), as a full grove. */
+const FULL = 15;
+
+/** What placePlants needs from buildLocalMap (the map's grids, its noise and helpers). */
+interface PlantInput {
+  w: World; size: number; half: number; step: number; res: number;
+  rng: () => number; noise: Noise3;
+  layers: Float32Array; tempV: Float32Array; moistV: Float32Array; lakeMask: Float32Array; lakeLevel: number;
+  riverNear: Float32Array; grow: Float32Array; treeLine: Float32Array; owner: Int16Array; cellList: number[];
+  sampleH: (x: number, y: number) => number;
+  groveIn: (x: number, y: number, dens: number) => number;
+}
+
+/**
+ * The plants, six values each: x, y, ground height, metres, kind, colour.
+ * (Its own function: inside buildLocalMap, already huge, it made the browser optimise the whole
+ * build less well, ~0.6 s slower on a hex though the planting itself took 0.15 s.)
+ */
+function placePlants(P: PlantInput): Float32Array {
+  const { w, size, half, step, res, rng, noise, layers, tempV, moistV, lakeMask, lakeLevel, riverNear, grow, treeLine, owner, cellList, sampleH, groveIn } = P;
+  const treeOut: number[] = [];
+  const famKind = (f: (typeof FAMILIES)[number]) => FIRST + FAMILIES.indexOf(f) * SPECIES_VARIANTS;
+  const REEDS = famKind('reeds'), WILLOW = famKind('willow');
+  const at = (x: number, y: number) => {
+    const i = Math.max(0, Math.min(res - 1, Math.round((x + half) / step))), j = Math.max(0, Math.min(res - 1, Math.round((y + half) / step)));
+    return j * res + i;
+  };
+  const put = (x: number, y: number, z: number, kind: number, metres: number, colour: number, r: number) => {
+    const shade = 0.85 + 0.3 * r;
+    const rr = Math.min(255, ((colour >> 16) & 255) * shade), gg = Math.min(255, ((colour >> 8) & 255) * shade), bb = Math.min(255, (colour & 255) * shade);
+    treeOut.push(x, y, z, metres, kind, (Math.round(rr) << 16) | (Math.round(gg) << 8) | Math.round(bb));
+  };
+  /** Several of a kind round (x, y): a patch of flowers, a stand of reeds. One alone is lost. */
+  const clump = (x: number, y: number, kind: number, n: number, radius: number, metres: number, colour: number) => {
+    for (let k = 0; k < n; k++) {
+      const ang = rng() * Math.PI * 2, d = radius * Math.sqrt(rng()), px = x + Math.cos(ang) * d, py = y + Math.sin(ang) * d;
+      put(px, py, sampleH(px, py), kind, metres * (0.7 + 0.6 * rng()), colour, rng());
+    }
+  };
+  /** The biome's own colour for a small kind (its grass, its shrubs), else a fallback. */
+  const colourOf = (pl: ReturnType<typeof plantingOf>, kind: number, fallback: number) => pl.small.find((e) => e[0] === kind)?.[1] ?? fallback;
+  const TS = 7, cnt = Math.floor(size / TS);
+  for (let b = 0; b < cnt; b++) {
+    for (let a = 0; a < cnt; a++) {
+      const x = -half + (a + rng()) * TS, y = -half + (b + rng()) * TS;
+      const r1 = rng(), r2 = rng(), r3 = rng(), r4 = rng(), r5 = rng(), r6 = rng(), r7 = rng();
+      const v = at(x, y), L0 = v * LAYERS;
+      const temp = tempV[v], moist = moistV[v], depth = layers[L0 + L_DEPTH], snow = layers[L0 + L_SNOW];
+      // Water lilies in groups near a lake's shore, in warm and temperate country. (By distance
+      // to the shore, not depth: the lakes here shelve to 15-40 m within a few metres.)
+      if (depth > 0) {
+        if (lakeMask[v] > 0.5 && !Number.isNaN(lakeLevel) && temp > 0.3 && r1 < 0.3 * smooth(0.2, 0.45, moist)) {
+          let shore = 0;
+          for (let k = 0; k < 8 && !shore; k++) {
+            const ca = Math.cos(k * 0.785 + r5), sa = Math.sin(k * 0.785 + r5);
+            if (layers[at(x + ca * 8, y + sa * 8) * LAYERS + L_DEPTH] === 0) shore = 1;
+            else if (layers[at(x + ca * 16, y + sa * 16) * LAYERS + L_DEPTH] === 0) shore = 0.4;
+          }
+          if (r6 < shore) for (let k = 0, n = 4 + Math.floor(r3 * 6); k < n; k++) {
+            const px = x + (rng() - 0.5) * 5, py = y + (rng() - 0.5) * 5;
+            if (layers[at(px, py) * LAYERS + L_DEPTH] > 0) put(px, py, lakeLevel + 0.1, H_LILYPAD, 0.6 + 0.9 * rng(), 0x5a8a34, rng());   // (just above the surface, or the water hides the pads)
+          }
+        }
+        continue;
+      }
+      // The biome a plant belongs to is read a little way off, warped and jittered, so at a
+      // border the two biomes' plants interleave over ~100 m.
+      const wx = x + 45 * noise(x / 60, y / 60, 131) + 60 * (r5 - 0.5), wy = y + 45 * noise(x / 60, y / 60, 133) + 60 * (r6 - 0.5);
+      const pl = plantingOf(w.biome[cellList[owner[at(wx, wy)]]]);
+      const z = sampleH(x, y);
+      // Banks: reeds in a band along rivers and round lakes, willows behind them.
+      const rn = riverNear[v];
+      const bank = snow > 0.3 ? 0 : Math.max(rn >= 1.1 && rn < 3.2 ? smooth(3.2, 1.6, rn) : 0, lakeMask[v] > 0.03 ? smooth(0.03, 0.25, lakeMask[v]) : 0);
+      if (bank > 0 && temp > 0.2) {
+        if (r1 < 0.5 * bank) {
+          if (temp > 0.28) clump(x, y, REEDS + Math.floor(r2 * SPECIES_VARIANTS), 3 + Math.floor(r3 * 4), 1.6, 2.4, 0x5d7a36);
+          else put(x, y, z, TUFT, 1.6 * (0.7 + 0.5 * r3), 0x6b7038, r4);
+          continue;
+        }
+        if (temp > 0.3 && moist > 0.28 && r1 < 0.58 * bank) { put(x, y, z, WILLOW + Math.floor(r2 * SPECIES_VARIANTS), 12 * (0.7 + 0.5 * r3), 0x467a2e, r4); continue; }
+      }
+      // Bare rock: boulders, more on the steepest.
+      const rock = layers[L0 + L_ROCK];
+      if (rock > 0.3 && r7 < 0.05 * rock) { put(x, y, z, ROCK_KIND, (1.6 + 3.5 * r3 * r3), 0x74716c, r4); continue; }
+      if (grow[v] <= 0) continue;
+      const tl = treeLine[v];                     // 1 below the tree line, 0 above it
+      const g = groveIn(x, y, pl.treeD / FULL);   // 1 deep in a grove, 0 in the open
+      const pTree = pl.treeD > 0 ? (0.015 + 0.8 * g) * Math.min(1, pl.treeD / 5) * grow[v] * tl : 0;
+      if (pl.trees.length && r1 < pTree) {
+        let [kind, colour, , sz] = pick(pl.trees, pl.treeD, r2);
+        let metres = plantMetres(kind) * sz * (0.75 + 0.5 * r3);
+        // Towards the tree line the trees turn to conifers and shrink.
+        if (tl < 0.95 && r7 < 1 - tl) { kind = CONIFER; colour = 0x385036; }
+        metres *= 0.4 + 0.6 * tl;
+        // The odd dead tree: in old groves, near the tree line, in dry country.
+        const pDead = 0.02 * g + 0.1 * (1 - tl) + 0.06 * smooth(0.25, 0.12, moist);
+        // (Not conifers: the pack has no dead pine, and a bare oak in a pine wood looks wrong.)
+        const conifer = kind === CONIFER || (kind >= FIRST && ['spruce', 'umbrellaPine', 'cypress'].includes(FAMILIES[Math.floor((kind - FIRST) / SPECIES_VARIANTS)]));
+        if (r6 < pDead && !conifer && kind !== PALM && kind !== CACTUS) kind = H_DEAD;
+        put(x, y, z, kind, metres, colour, r4);
+        continue;
+      }
+      // No tree here. What grows in its place depends on where it is.
+      const lush = smooth(0.3, 0.55, moist);
+      const edge = pl.treeD > 1 ? 4 * g * (1 - g) : 0;                           // a grove's margin
+      const clearing = pl.treeD > 2 ? smooth(0.3, 0.05, g) : 0;                  // open ground in a forest
+      const grass = layers[L0 + L_GRASS], mottle = layers[L0 + L_MOTTLE];
+      const meadow = smooth(0.1, 0.5, noise(x / 38, y / 38, 141) + 0.3 * noise(x / 11, y / 11, 143));
+      const above = 1 - tl;                                                      // past the tree line
+      const cold = temp < 0.2;
+      const extras: [number, number, number, number][] = [   // kind, chance, metres, colour
+        [SCRUB, 0.3 * edge * tl + 0.08 * above, (above > 0.5 ? 1.6 : 3) * (0.7 + 0.6 * r3), colourOf(pl, SCRUB, 0x56703a)],
+        [H_FLOWERS, cold ? 0 : (0.22 * clearing + 0.14 * grass) * meadow * lush, 0.6, 0x5a7a34],
+        [H_FERN, 0.16 * smooth(0.5, 0.9, g) * lush * tl * smooth(0.2, 0.3, temp), 1.1, 0x3f6a2a],
+        [H_LOG, 0.012 * g + 0.006 * clearing, 3 + 3 * r3, 0],
+        [H_STUMP, 0.004 * g + 0.012 * clearing, 0.5 + 0.4 * r3, 0],
+        [TUFT, 0.35 * above * (1 - rock), 1.4 * (0.6 + 0.7 * r3), colourOf(pl, TUFT, 0x6e6a44)],
+        [ROCK_KIND, 0.04 * above + 0.02 * smooth(0.22, 0.1, moist) + 0.008 * g, (0.6 + 1.6 * r3 * r3), 0x74716c],
+      ];
+      let acc = 0, done = false;
+      for (const [kind, p, metres, colour] of extras) {
+        acc += p;
+        if (r7 < acc) {
+          if (kind === H_FLOWERS) clump(x, y, H_FLOWERS + Math.floor(r2 * FLOWER_COLOURS), 6 + Math.floor(r3 * 10), 2.2, metres, colour);
+          else if (kind === H_FERN) clump(x, y, kind, 2 + Math.floor(r3 * 3), 1.5, metres, colour);
+          else put(x, y, z, kind, metres, colour, r4);
+          done = true; break;
+        }
+      }
+      if (done) continue;
+      // Else the biome's own small things; grass thicker in the mottle's lush patches.
+      const pSmall = Math.min(0.6, pl.smallD / (FULL * 1.6)) * grow[v] * (grass > 0.2 ? 0.5 + mottle : 1);
+      if (pl.small.length && r1 > 1 - pSmall) {
+        const [kind, colour, , sz] = pick(pl.small, pl.smallD, r2);
+        put(x, y, z, kind, plantMetres(kind) * sz * (0.75 + 0.5 * r3), colour, r4);
+      }
+    }
+  }
+  return new Float32Array(treeOut);
+}
 
 export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions> = {}, history?: History, valleys: ValleyField | null = null): LocalMap {
   const o = { ...LOCAL_DEFAULTS, ...opts };
@@ -706,7 +855,6 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
    * evenly scattered trees read as green fuzz). The denser the biome's planting, the more of the
    * ground is grove: a forest has clearings, grassland the odd copse.
    */
-  const FULL = 15;      // the planet's densest planting (expected plants per cell), as a full grove
   const groveRaw = (x: number, y: number) => noise(x / 150, y / 150, 91) + 0.35 * noise(x / 45, y / 45, 93) + 0.15 * noise(x / 14, y / 14, 95);
   const groveIn = (x: number, y: number, dens: number) => {
     const th = 0.32 - 0.8 * Math.min(1, dens);
@@ -864,32 +1012,16 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     }
   }
 
-  // --- Plants: the planet's own models in its per-biome mix (flora.ts), life-size, on a jittered
-  // grid, trees clumped into groves (the same pattern as the canopy colour).
-  const treeOut: number[] = [];
-  const TS = 7, cnt = o.plants ? Math.floor(size / TS) : 0;
-  for (let b = 0; b < cnt; b++) {
-    for (let a = 0; a < cnt; a++) {
-      const x = -half + (a + rng()) * TS, y = -half + (b + rng()) * TS;
-      const r1 = rng(), r2 = rng(), r3 = rng(), r4 = rng();
-      const i = Math.round((x + half) / step), j = Math.round((y + half) / step), v = j * res + i;
-      if (grow[v] <= 0) continue;
-      const pl = plantingOf(w.biome[cellList[owner[v]]]);
-      // Solid in the groves, the odd lone tree outside them.
-      // (Scaled by how wooded the biome is: a forest's groves are solid, a desert's the odd tree;
-      // solid groves everywhere put 21,000 Joshua trees in one desert hex.)
-      const pTree = pl.treeD > 0 ? (0.015 + 0.8 * groveIn(x, y, pl.treeD / FULL)) * Math.min(1, pl.treeD / 5) * grow[v] * treeLine[v] : 0;
-      let e: [TreeKind, number, number, number] | null = null;
-      if (pl.trees.length && r1 < pTree) e = pick(pl.trees, pl.treeD, r2);
-      else if (pl.small.length && r1 > 1 - Math.min(0.6, pl.smallD / (FULL * 1.6)) * grow[v]) e = pick(pl.small, pl.smallD, r2);
-      if (!e) continue;
-      const [kind, colour, , sz] = e;
-      const scale = plantMetres(kind) * sz * (0.75 + 0.5 * r3);
-      const shade = 0.85 + 0.3 * r4;
-      const rr = Math.min(255, ((colour >> 16) & 255) * shade), gg = Math.min(255, ((colour >> 8) & 255) * shade), bb = Math.min(255, (colour & 255) * shade);
-      treeOut.push(x, y, sampleH(x, y), scale, kind, (Math.round(rr) << 16) | (Math.round(gg) << 8) | Math.round(bb));
-    }
-  }
+  // --- Plants: the planet's per-biome mix (flora.ts), life-size, on a jittered grid, trees
+  // clumped into groves (the canopy colour's pattern). Then shaped by the ground each one stands
+  // on (2026-11-05): reeds and willows on the banks, lilies on still shallows, boulders on rock,
+  // the forest thinning to stunted pines and scrub at the tree line, bushes along grove edges,
+  // flowers, stumps and logs in clearings, ferns under the trees, the odd dead tree, and
+  // neighbouring biomes interleaving across their border instead of meeting on a line.
+  const treeOut = o.plants ? placePlants({
+    w, size, half, step, res, rng, noise, layers, tempV, moistV, lakeMask, lakeLevel, riverNear, grow, treeLine,
+    owner, cellList, sampleH, groveIn,
+  }) : new Float32Array(0);
 
   // The planet's picture, for the inset.
   const polyStart = new Int32Array(M + 1), polyArr: number[] = [], tmp2 = new Float32Array(2);
@@ -917,7 +1049,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     localWidth: apothem * 2,
     frame: Float32Array.of(cx, cy, cz, ex, ey, ez, nx, ny, nz), mag: o.mag, radiusKm: o.radiusKm,
     heights, colors, base, layers, houses, townNames, sea, lakeLevel, lakeMask, rivers, hex,
-    trees: new Float32Array(treeOut),
+    trees: treeOut,
     cells: Int32Array.from(cellList), cellXY,
     info: {
       biome: BIOMES[w.biome[cell]].name,

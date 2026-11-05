@@ -9,4 +9,3 @@ the licence can be checked. Licences verified at download time, 2026-11-04.
 | ground.jpg | ambientCG Ground037, Color map (1K, resized to 512): https://ambientcg.com/view?id=Ground037 | CC0 1.0 |
 | rock.jpg | ambientCG Rock030, Color map (1K, resized to 512): https://ambientcg.com/view?id=Rock030 | CC0 1.0 |
 | plants.bin, plants.json | Quaternius "Ultimate Nature" pack: trees, bushes, cacti, rocks, grass, plants (converted and simplified by `scripts/plantpack.mjs`; colours reassigned). https://quaternius.com/packs/ultimatenature.html | CC0 1.0 (pack page; Quaternius FAQ: "All models are under the CC0 License"). Checked 2026-11-04 |
-| texplants.bin, texplants.json, trees/*.png, trees/*.jpg | Quaternius "Textured Tree Pack" (stylized trees): broadleaf, birch, pine, dead trees and their textures (converted by `scripts/plantpack.mjs`). https://quaternius.com | CC0 1.0. Checked 2026-11-04 |
