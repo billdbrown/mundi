@@ -362,6 +362,17 @@ export class PlanetView {
   setPeakSnow(on: boolean) { this.cloudU.uPeakSnow.value = on ? 1 : 0; }
   /** The whole planet's carved valleys (valleys.ts), on by default. */
   setValleys(on: boolean) { this.terrainShadow.setValleys(on); }
+  /**
+   * The whole planet's carved valleys once worked out (valleys.ts), for the hex view: the carving
+   * channel alone, half floats, six faces of n x n. Null until they are in.
+   */
+  valleyCarve(): { n: number; half: Uint16Array } | null {
+    const v = this.terrainShadow.valleys;
+    if (!v.ready) return null;
+    const src = v.tex.image.data as Uint16Array, n = v.tex.image.width, half = new Uint16Array(6 * n * n);
+    for (let i = 0; i < half.length; i++) half[i] = src[i * 2];
+    return { n, half };
+  }
   /** Resolves once the view draws for real (not the stand-in): the gate's first stage. */
   whenGateReady(): Promise<void> {
     return new Promise((res) => { const check = () => (this.gateReady ? res() : setTimeout(check, 50)); check(); });

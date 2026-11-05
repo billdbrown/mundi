@@ -28,8 +28,9 @@ import { makeSimplex, type Noise3 } from './noise.ts';
 import { makeRng, hash01 } from './rng.ts';
 import { FLORA_RICH, CONIFER, BROADLEAF, SCRUB, PALM, ROCK as ROCK_KIND, CACTUS, ACACIA, BIRCH, TUFT, type TreeKind } from './flora.ts';
 import { FIRST, VARIANTS as SPECIES_VARIANTS, FAMILIES } from './species.ts';
-import { climateColour, ECO, OWN_COLOUR } from './surface.ts';
+import { climateColour, ECO, OWN_COLOUR, planetGround, SEA, type PlanetGround, type GroundSample } from './surface.ts';
 import { Color } from 'three';
+import { patchLift, type ValleyField, type ReliefInput } from './relief.ts';
 import type { History } from './civ.ts';
 import { layoutTowns, HOUSE_STRIDE } from './hextown.ts';
 export { HOUSE_STRIDE };
@@ -46,7 +47,8 @@ export interface LocalOptions {
    * squeezed more and more (asinh), so a 300 m hill stays a hill and an 8 km peak still fits. */
   vSoft: number;
   riverMode: RiverMode;
-  /** Walking-scale ridges and cliffs where the planet is mountainous. */
+  /** Walking-scale ridges and cliffs of the hex view's own where the planet is mountainous. Off:
+   * the planet's own relief (relief.ts) now draws its ranges, and these drew different ones. */
   crags: boolean;
   /** Grid samples per side. */
   res: number;
@@ -59,7 +61,10 @@ export interface LocalOptions {
   plants: boolean;
 }
 
-export const LOCAL_DEFAULTS: LocalOptions = { mag: 10, vScale: 2, vSoft: 600, riverMode: 'flow', crags: true, res: 513, radiusKm: 640, extent: 1, plants: true };
+/** Heights shrink as much as the ground does (vScale = mag, 2026-11-04): the hex's hills and
+ * ranges then have the shapes the planet draws. The 10x content-aware default before it (vScale 2,
+ * soft squeeze) turned the same ground into spikes. */
+export const LOCAL_DEFAULTS: LocalOptions = { mag: 10, vScale: 10, vSoft: 0, riverMode: 'flow', crags: false, res: 513, radiusKm: 640, extent: 1, plants: true };
 
 export interface LocalRiver {
   /** Per point: x, y, water level, width (local metres). */
@@ -218,7 +223,12 @@ export function trueRiverWidth(w: World, c: number): number {
   return Math.max(8, Math.min(600, 12 * Math.sqrt(w.flow[c] / w.riverThreshold)));
 }
 
-export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions> = {}, history?: History): LocalMap {
+/** The planet's ground formula per world (surface.ts planetGround), shared by every hex built on it. */
+const grounds = new WeakMap<World, PlanetGround>();
+/** Planet radii above the sea where the planet's lowest land starts (surface.ts landH). */
+const LAND0 = 0.0012;
+
+export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions> = {}, history?: History, valleys: ValleyField | null = null): LocalMap {
   const o = { ...LOCAL_DEFAULTS, ...opts };
   const g = w.grid, P = g.centers, K = g.cornerPos;
   const R = o.radiusKm * 1000, reliefM = RELIEF_RADII * R;
@@ -267,6 +277,18 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     proj(P[c * 3], P[c * 3 + 1], P[c * 3 + 2], cellXY, i * 2);
   }
   const indexOf = new Map(cellList.map((c, i) => [c, i]));
+  const edgeMid = (a: number, b: number): [number, number] | null => {
+    const nb = g.neighbors[a];
+    for (let k = 0; k < nb.length; k++) {
+      if (nb[k] !== b) continue;
+      const q0 = g.corners[a][k], q1 = g.corners[a][(k + 1) % nb.length];
+      const tmp = new Float32Array(4);
+      proj(K[q0 * 3], K[q0 * 3 + 1], K[q0 * 3 + 2], tmp, 0);
+      proj(K[q1 * 3], K[q1 * 3 + 1], K[q1 * 3 + 2], tmp, 2);
+      return [(tmp[0] + tmp[2]) / 2, (tmp[1] + tmp[3]) / 2];
+    }
+    return null;
+  };
   const spacing = apothem * 2;                     // centre to centre
   const sigma2 = (0.5 * spacing) ** 2;
 
@@ -276,6 +298,17 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   let lakeLevel = NaN;
   for (let i = 0; i < M; i++) { cellTrueH[i] = trueHeight(w, cellList[i], reliefM); cellT[i] = tempC(w.temperature[cellList[i]]); cellMoist[i] = w.moisture[cellList[i]]; cellTemp[i] = w.temperature[cellList[i]]; }
   const toLocal = localHeights(o, cellTrueH[0]);
+  // The ground is the planet's own (surface.ts planetGround): the same formula its terrain mesh is
+  // drawn from, so coasts, peninsulas and ranges are the ones the planet shows. Its heights are in
+  // planet radii; as real metres, the band just above the sea where it starts its land (beaches)
+  // is the first BAND metres, and the sea floor shelves away.
+  let G = grounds.get(w);
+  if (!G) { G = planetGround(w, 1); grounds.set(w, G); }
+  // (The band was the first 15 m once; at true vertical scale that made shores so flat that sea
+  // and ground fought for the same pixels and the planet's shoal noise stood up as sandbars.)
+  const BAND = 60, radToTrue = (h: number) => h >= SEA + LAND0 ? BAND + (h - SEA - LAND0) * R : h >= SEA ? BAND * (h - SEA) / LAND0 : (h - SEA) * 40000;
+  const gs: GroundSample = { h: 0, cell: 0, water: -1, lake: false };
+  const mR = o.mag / R;
   const climTmp = new Color(), ecoCol = new Float32Array(M * 3);
   for (let i = 0; i < M; i++) {
     const eco = ECO[w.biome[cellList[i]]];
@@ -287,7 +320,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     cellLocalH[i] = toLocal(cellTrueH[i]);
     const hx = BIOMES[w.biome[c]].color;
     for (let k = 0; k < 3; k++) cellCol[i * 3 + k] = Math.pow(((hx >> (16 - 8 * k)) & 255) / 255, 2.2);
-    if (w.water[c] === WATER_LAKE && Number.isNaN(lakeLevel)) lakeLevel = toLocal(cellTrueH[i] + 25 - 1);
+    if (w.water[c] === WATER_LAKE && Number.isNaN(lakeLevel) && G.shape.level[c] > 0) lakeLevel = toLocal(radToTrue(G.shape.level[c]));
   }
 
   // Blending the cells' values over the map: normalised Gaussian weights around each centre,
@@ -323,6 +356,11 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   const colors = new Float32Array(N * 3), lakeMask = new Float32Array(N), grow = new Float32Array(N).fill(1);
   const owner = new Int16Array(N);
   const oceanW = new Float32Array(N);
+  const groundR = new Float32Array(N), waterR = new Float32Array(N), lakeAt = new Uint8Array(N), iceV = new Float32Array(N);
+  // The planet's ground and relief are worked out every S samples and filled in between: on the
+  // hex's fine grid (~36 m real a sample) every other one is plenty for its finest gullies (~100 m)
+  // and takes a quarter of the time.
+  const S = (res - 1) % 2 === 0 && step * o.mag < 60 ? 2 : 1;
   let hiTrue = -Infinity, loTrue = Infinity;
   for (let j = 0; j < res; j++) {
     for (let i = 0; i < res; i++) {
@@ -347,17 +385,15 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
         if (w.water[c] === WATER_OCEAN) { sea += wt; seaH += wt * cellLocalH[m]; } else landH += wt * cellLocalH[m];
         if (wt > bestW && !cellWater[m]) { bestW = wt; best = m; }
       }
-      // Sea cells are sea and land cells land, as on the planet: the coast follows the boundary
-      // between them (where the sea's weight passes one half), not wherever a blend of the
-      // heights crosses zero, which let a ring of land cells lift a whole lagoon out of the water.
-      if (sea > 0.02 && sea < 0.98) {
-        // Land eases down to the shore and the sea floor shelves away from it: beaches, not cliffs.
-        const lh = 0.6 + Math.max(0, landH / (1 - sea) - 0.6) * smooth(0.5, 0.12, sea);
-        const sh = Math.min(-1.5, seaH / sea) * smooth(0.5, 0.85, sea) - 1.5;
-        const t = smooth(0.42, 0.58, sea);
-        h = lh + (sh - lh) * t;
+      // The ground and its water, as the planet draws them here (gnomonic, so back out along the
+      // tangent plane to the sphere). The blend above still gives climate, colour and plants.
+      if (i % S === 0 && j % S === 0) {
+        G.at(cx + (x * ex + y * nx) * mR, cy + (x * ey + y * ny) * mR, cz + (x * ez + y * nz) * mR, gs);
+        groundR[v] = gs.h; waterR[v] = gs.water; lakeAt[v] = gs.lake ? 1 : 0;
       }
-      heights[v] = h; baseLocal[v] = h; baseTrue[v] = ht; moistV[v] = mo; tempV[v] = tp; lakeMask[v] = lake; oceanW[v] = sea; owner[v] = best;
+      iceV[v] = lw > 0.02 ? own / lw : 0;
+      moistV[v] = mo; tempV[v] = tp; owner[v] = best;
+      void h; void ht; void sea; void lake;
       // Land takes its colour from land cells only (or a lagoon's turquoise tints the beach), and
       // in the planet's Earth look: the climate palette by moisture and temperature, ice keeping
       // its own colour, then the finer biomes' tints (surface.ts colourAt).
@@ -369,7 +405,100 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
         if (t > 0) { r += (tr / tk - r) * t; gr += (tg / tk - gr) * t; b += (tb / tk - b) * t; }
       }
       colors[v * 3] = r; colors[v * 3 + 1] = gr; colors[v * 3 + 2] = b;
-      if (Math.hypot(x, y) < reach) { hiTrue = Math.max(hiTrue, ht); loTrue = Math.min(loTrue, ht); }
+    }
+  }
+
+  // The planet's close-up relief on its ground (relief.ts): the hills, gullies and carved valleys
+  // its ground patch raises near the camera. The gullies are steered by the slope of the planet's
+  // mesh, which is smooth over its vertex spacing, so the slope is taken over that distance.
+  {
+    const vSpacingLocal = G.shape.spacing / G.shape.k * R / o.mag;
+    const radPerLocal = o.mag / R;
+    const sp = step * radPerLocal;
+    // The slope on a coarse grid of its own, centred on the cell (so every map of this hex, wide
+    // or not, measures it at the same points), a node every half vertex spacing, one node past
+    // the map's edge; central differences there, bilinear in between.
+    const Q = vSpacingLocal * 0.5, nq = Math.ceil(half / Q) + 2, side = 2 * nq + 1;
+    const coarse = new Float32Array(side * side), gE = new Float32Array(side * side), gN = new Float32Array(side * side);
+    const at = (x: number, y: number) => G.at(cx + (x * ex + y * nx) * mR, cy + (x * ey + y * ny) * mR, cz + (x * ez + y * nz) * mR, gs).h;
+    for (let b = 0; b < side; b++) for (let a = 0; a < side; a++) coarse[b * side + a] = at((a - nq) * Q, (b - nq) * Q);
+    for (let b = 0; b < side; b++) for (let a = 0; a < side; a++) {
+      const a0 = Math.max(0, a - 1), a1 = Math.min(side - 1, a + 1), b0 = Math.max(0, b - 1), b1 = Math.min(side - 1, b + 1);
+      gE[b * side + a] = (coarse[b * side + a1] - coarse[b * side + a0]) / ((a1 - a0) * Q * radPerLocal);
+      gN[b * side + a] = (coarse[b1 * side + a] - coarse[b0 * side + a]) / ((b1 - b0) * Q * radPerLocal);
+    }
+    const slopeAt = (x: number, y: number, f: Float32Array) => {
+      const fx = x / Q + nq, fy = y / Q + nq;
+      const a = Math.min(side - 2, Math.max(0, Math.floor(fx))), b = Math.min(side - 2, Math.max(0, Math.floor(fy)));
+      const tx = fx - a, ty = fy - b;
+      return (f[b * side + a] * (1 - tx) + f[b * side + a + 1] * tx) * (1 - ty) + (f[(b + 1) * side + a] * (1 - tx) + f[(b + 1) * side + a + 1] * tx) * ty;
+    };
+    // Planet rivers as the planet runs them (centre, edge middle, next centre): its relief keeps
+    // off them, so they flow on flat floors.
+    const segs: number[] = [];
+    for (const c of cellList) {
+      const d = w.downstream[c];
+      if (!w.river[c] || d < 0 || !indexOf.has(d) || w.water[c] === WATER_OCEAN) continue;
+      const mid = edgeMid(c, d);
+      if (!mid) continue;
+      const a = indexOf.get(c)!, b2 = indexOf.get(d)!;
+      segs.push(cellXY[a * 2], cellXY[a * 2 + 1], mid[0], mid[1], mid[0], mid[1], cellXY[b2 * 2], cellXY[b2 * 2 + 1]);
+    }
+    const riverD = (x: number, y: number) => {
+      let best = Infinity;
+      for (let k = 0; k < segs.length; k += 4) {
+        const x0 = segs[k], y0 = segs[k + 1], sx = segs[k + 2] - x0, sy = segs[k + 3] - y0;
+        const t = Math.max(0, Math.min(1, ((x - x0) * sx + (y - y0) * sy) / (sx * sx + sy * sy || 1)));
+        best = Math.min(best, Math.hypot(x - x0 - sx * t, y - y0 - sy * t));
+      }
+      return best;
+    };
+    const tmp = [0, 0, 0, 0];
+    const ri: ReliefInput = { x: 0, y: 0, z: 0, hAbove: 0, mx: 0, my: 0, mz: 0, sand: 0, ice: 0, river: 0, sp };
+    for (let j = 0; j < res; j += S) {
+      for (let i = 0; i < res; i += S) {
+        const x = -half + i * step, y = -half + j * step, v = j * res + i;
+        const gh = groundR[v];
+        if (gh > SEA) {
+          // Direction of the point, and the mesh's uphill slope there, tangent (east, north).
+          let px = cx + (x * ex + y * nx) * mR, py = cy + (x * ey + y * ny) * mR, pz = cz + (x * ez + y * nz) * mR;
+          const pl = Math.hypot(px, py, pz); px /= pl; py /= pl; pz /= pl;
+          const ge = slopeAt(x, y, gE), gn = slopeAt(x, y, gN);
+          ri.x = px; ri.y = py; ri.z = pz; ri.hAbove = gh - SEA;
+          ri.mx = ge * ex + gn * nx; ri.my = ge * ey + gn * ny; ri.mz = ge * ez + gn * nz;
+          ri.sand = smooth(0.24, 0.12, moistV[v]) * smooth(0.4, 0.55, tempV[v]);
+          ri.ice = iceV[v];
+          ri.river = segs.length ? smooth(700, 300, riverD(x, y) * o.mag) : 0;
+          groundR[v] = gh + patchLift(ri, valleys, tmp);
+        }
+      }
+    }
+    // In between: ground and water level bilinear, which water it is from the nearest node.
+    if (S > 1) {
+      for (let j = 0; j < res; j++) {
+        const j0 = Math.min(res - 1 - S, j - (j % S)), ty = (j - j0) / S;
+        for (let i = 0; i < res; i++) {
+          if (i % S === 0 && j % S === 0) continue;
+          const i0 = Math.min(res - 1 - S, i - (i % S)), tx = (i - i0) / S, v = j * res + i;
+          const a = j0 * res + i0, b2 = a + S, c2 = a + S * res, d2 = c2 + S;
+          groundR[v] = (groundR[a] * (1 - tx) + groundR[b2] * tx) * (1 - ty) + (groundR[c2] * (1 - tx) + groundR[d2] * tx) * ty;
+          waterR[v] = (waterR[a] * (1 - tx) + waterR[b2] * tx) * (1 - ty) + (waterR[c2] * (1 - tx) + waterR[d2] * tx) * ty;
+          lakeAt[v] = lakeAt[(tx < 0.5 ? (ty < 0.5 ? a : c2) : (ty < 0.5 ? b2 : d2))];
+        }
+      }
+    }
+    for (let j = 0; j < res; j++) {
+      for (let i = 0; i < res; i++) {
+        const x = -half + i * step, y = -half + j * step, v = j * res + i;
+        const ht = radToTrue(groundR[v]);
+        let h = toLocal(ht);
+        const sea = waterR[v] > 0 && !lakeAt[v] ? 1 : 0;
+        // Ground below the sea with no water drawn over it on the planet stays dry here.
+        if (!sea && h < 0.3) h = 0.3;
+        heights[v] = h; baseLocal[v] = h; baseTrue[v] = ht; oceanW[v] = sea;
+        lakeMask[v] = lakeAt[v] ? smooth(-3, 3, radToTrue(waterR[v]) - ht) : 0;
+        if (Math.hypot(x, y) < reach) { hiTrue = Math.max(hiTrue, ht); loTrue = Math.min(loTrue, ht); }
+      }
     }
   }
 
@@ -377,14 +506,17 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   // in proportion to the hex's relief; crags (ridged noise, cliffs) only where it is mountainous.
   const reliefLocal = (hiTrue - loTrue) / o.vScale;
   // Rolling ground is capped: scaled with relief it turned an 8 km peak into a field of needles.
-  const rollA = 1.5 + 0.02 * Math.min(reliefLocal, 300), rollL = 140;
+  const hasSea = cellList.some((c) => w.water[c] === WATER_OCEAN);
+  // (Sized in real metres, as it was at the old vScale 2, so true scale doesn't make it 5x rougher.)
+  const rollA = (1.5 + 0.02 * Math.min(reliefLocal * o.vScale / 2, 300)) * 2 / o.vScale, rollL = 140;
   const cragL = Math.max(150, baseSize * 0.32), cragA = baseSize * 0.06;
   for (let j = 0; j < res; j++) {
     for (let i = 0; i < res; i++) {
       const x = -half + i * step, y = -half + j * step, v = j * res + i;
       let d = 0, a = 1, f = 1 / rollL, nn = 0;
       for (let k = 0; k < 5; k++) { d += a * noise(x * f, y * f, 21 + k); nn += a; a *= 0.5; f *= 2.1; }
-      heights[v] += rollA * d / nn;
+      // Not on low ground by the water: there it punched puddles through the shore.
+      heights[v] += rollA * d / nn * (hasSea || !Number.isNaN(lakeLevel) ? smooth(0.3, 1.5 + rollA, heights[v] - Math.max(0, Number.isNaN(lakeLevel) ? 0 : lakeLevel)) : 1);
       // Sand seas: dunes, long crests across the wind with a steep slip face (a sawtooth across
       // the crest line, wandering along it), only on sand desert.
       const ob = w.biome[cellList[owner[v]]];
@@ -429,18 +561,6 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     const a = heights[j0 * res + i0], b = heights[j0 * res + i0 + 1];
     const c2 = heights[(j0 + 1) * res + i0], d = heights[(j0 + 1) * res + i0 + 1];
     return (a * (1 - tx) + b * tx) * (1 - ty) + (c2 * (1 - tx) + d * tx) * ty;
-  };
-  const edgeMid = (a: number, b: number): [number, number] | null => {
-    const nb = g.neighbors[a];
-    for (let k = 0; k < nb.length; k++) {
-      if (nb[k] !== b) continue;
-      const q0 = g.corners[a][k], q1 = g.corners[a][(k + 1) % nb.length];
-      const tmp = new Float32Array(4);
-      proj(K[q0 * 3], K[q0 * 3 + 1], K[q0 * 3 + 2], tmp, 0);
-      proj(K[q1 * 3], K[q1 * 3 + 1], K[q1 * 3 + 2], tmp, 2);
-      return [(tmp[0] + tmp[2]) / 2, (tmp[1] + tmp[3]) / 2];
-    }
-    return null;
   };
   const widthOf = (c: number) => {
     const wt = trueRiverWidth(w, c);

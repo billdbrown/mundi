@@ -20,7 +20,7 @@ import { parseSeed } from './seedname.ts';
 import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, L_FOREST, HOUSE_STRIDE, type LocalMap, type LocalOptions } from './hexlocal.ts';
 import { STYLE, paintGround, STYLE_GRADE, TILT_SHIFT, type HexStyle } from './hexstyle.ts';
 import { daylight, hourForElevation, type RGB } from './daylight.ts';
-import type { HexJob } from './hexworker.ts';
+import type { HexJob, ValleyJob } from './hexworker.ts';
 import type { Spot } from './debug.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -595,7 +595,10 @@ function build(m: LocalMap) {
   // Water: coloured by depth, shallow to deep, with foam where it meets the land.
   const W = st.water, shallow = col(W.shallow), deep = col(W.deep), foam = col(W.foam);
   const waterMat = () => {
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: W.roughness, metalness: 0.05, transparent: true, opacity: W.opacity });
+    // Pushed back a touch in depth: on gentle shores (true vertical scale) the ground and the
+    // water are nearly the same height and flickered over each other; the ground wins ties.
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: W.roughness, metalness: 0.05, transparent: true, opacity: W.opacity,
+      polygonOffset: true, polygonOffsetFactor: 0.5, polygonOffsetUnits: 2 });
     animateWater(mat);
     return mat;
   };
@@ -1007,6 +1010,8 @@ function facts(m: LocalMap) {
 const worker = new Worker(new URL('./hexworker.ts', import.meta.url), { type: 'module' });
 const ctxWorker = new Worker(new URL('./hexworker.ts', import.meta.url), { type: 'module' });
 let busy = false, again = false, firstBuild = true;
+/** The planet's valleys have arrived (for which world), and whether the hex on show has them. */
+let valleysIn = '', mapValleys = false;
 function request() {
   writeHash();
   if (busy) { again = true; return; }
@@ -1019,6 +1024,23 @@ function request() {
 /** Both workers build the world now (the hex view loading hidden behind the planet). */
 function warm() {
   for (const [w, kind] of [[worker, 'hex'], [ctxWorker, 'context']] as const) w.postMessage({ kind, params, cell: -1, opts, warm: true } satisfies HexJob);
+}
+/** The planet's carved valleys (relief.ts) for the world in a planet hash: to both workers. */
+function takeValleys(hash: string, n: number, half: Uint16Array) {
+  // The planet's carved valleys (relief.ts), for the world in the hash: to both workers.
+  const q = new URLSearchParams(hash), p = { ...params };
+  const sd = parseSeed(q.get('seed') ?? '');
+  if (sd) p.seed = sd.seed;
+  for (const k of Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[]) {
+    const v = q.get(k);
+    if (k !== 'seed' && v !== null && v !== '' && !Number.isNaN(Number(v))) p[k] = Number(v);
+  }
+  const msg = (h: Uint16Array): ValleyJob => ({ kind: 'valleys', params: p, n, half: h });
+  worker.postMessage(msg(half.slice()));
+  ctxWorker.postMessage(msg(half), [half.buffer]);
+  valleysIn = JSON.stringify(p);
+  // A hex on show without them: build it again.
+  if (map && !mapValleys && JSON.stringify(params) === valleysIn) request();
 }
 /** Start building a hex before it is opened (the planet's pointer is resting on it). */
 function prefetch(c: number) {
@@ -1034,6 +1056,7 @@ worker.onmessage = (e: MessageEvent<{ map: LocalMap; ms: { world: number; local:
   if ((e.data as { warmed?: boolean }).warmed) return;
   busy = false;
   const m = e.data.map;
+  mapValleys = !!(e.data as { valleys?: boolean }).valleys;
   if (cell < 0) ctxWorker.postMessage({ kind: 'context', params, cell: m.cell, opts } satisfies HexJob);
   // Keep the camera's place relative to the map size, so changes compare from the same angle.
   const rel = map && !firstBuild ? { p: camera.position.clone().divideScalar(map.size), t: controls.target.clone().divideScalar(map.size) } : null;
@@ -1193,6 +1216,7 @@ if (embedded) {
       renderer.setAnimationLoop(null);
     }
     if (e.data.type === 'mundi-hex-warm') { applyHash(e.data.hash); warm(); }
+    if (e.data.type === 'mundi-hex-valleys') takeValleys(e.data.hash, e.data.n, e.data.half);
     if (e.data.type === 'mundi-hex-prefetch') {
       // The world settings may be new; which hex is shown is not, until it is opened.
       const shown = cell;
@@ -1208,8 +1232,12 @@ void LAYERS; void L_DEPTH;
 (window as unknown as Record<string, unknown>).hex = {
   get map() { return map; },
   get busy() { return busy; },
+  /** The hex on show was built with the planet's valleys. */
+  get valleys() { return mapValleys; },
   get style() { return style.id; },
   resetView, scene, setTilt, setTime, setAround,
+  /** The planet's valleys, as the planet page sends them (scripts/hexcompare.mjs). */
+  takeValleys,
   /** Hide the panels for clean screenshots. */
   capture: (on: boolean) => document.body.classList.toggle('capture', on),
   /**

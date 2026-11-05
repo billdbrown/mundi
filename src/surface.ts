@@ -341,9 +341,14 @@ function treeBudget(world: World): number {
 
 // ---------------------------------------------------------------------------------------------
 
-function buildSmooth(inp: SurfaceInput): Surface {
-  const { world: w, cellColor, tint, rough } = inp;
+/**
+ * The planet's ground as a formula: heights at cell centres and corners, then smoothing on high
+ * ground and noise (gentle in lowlands, eroded ridges up high). buildSmooth samples it at its
+ * mesh's vertices; planetGround() at any point, so the hex view's ground is the planet's own.
+ */
+export function terrainShape(w: World, reliefMul: number, tint: Noise3, rough: Noise3) {
   const g = w.grid, N = g.count, P = g.centers, C = g.cornerPos, K = C.length / 3;
+  const inp = { relief: reliefMul };
   // Vertical exaggeration: peaks reach ~1.3% of the radius (~85 km on an Earth-sized planet,
   // ~10× Everest), low enough to stay under the cloud deck. Real scale would look smooth as a
   // marble; readable mountains come from ridges (below) more than from height.
@@ -410,7 +415,7 @@ function buildSmooth(inp: SurfaceInput): Surface {
   }
   const cornerLake = new Uint8Array(K);
   for (let kk = 0; kk < K; kk++) for (const o of cornerCells[kk]) if (vLake[o] && w.water[o] === WATER_LAKE) cornerLake[kk] = 1;
-  const cornerH = new Float32Array(K), cornerLevel = new Float32Array(K), cornerCol = new Float32Array(K * 3);
+  const cornerH = new Float32Array(K), cornerLevel = new Float32Array(K);
   for (let k = 0; k < K; k++) {
     const cells = cornerCells[k];
     let h = 0, lvl = -1;
@@ -418,6 +423,118 @@ function buildSmooth(inp: SurfaceInput): Surface {
     h /= cells.length;
     cornerH[k] = h;
     cornerLevel[k] = lvl > 0 ? lvl : SEA;
+  }
+
+  const lf = 2.2 / spacing;
+  // Each fan triangle (cell centre + two corners) becomes a k×k triangular grid. k is picked so
+  // the planet stays near a fixed triangle budget: finer on small worlds, coarser on big ones.
+  const k = Math.max(2, Math.min(6, Math.round(Math.sqrt(850000 / (N * 6)))));
+  // Noise scales are tied to the vertex spacing: the finest octave spans about three vertices.
+  // Finer than that, neighbouring vertices get unrelated heights and the surface turns to spikes.
+  // (Vertex spacing is the cell spacing over k; tuned at k = 3.)
+  const vSpacing = spacing / k;
+  const freq = 0.5 / (3 * vSpacing);
+  const ridgeBase = 0.45 / (3 * vSpacing);
+  /** Ridged multi-octave noise, about 0..1: sharp crests where the noise crosses zero. */
+  const ridged = (dx: number, dy: number, dz: number) => {
+    let sum = 0, amp = 0.5, f = ridgeBase, norm = 0;
+    for (let o = 0; o < 3; o++) {
+      const n = 1 - Math.abs(rough(dx * f + 3.7 * o, dy * f, dz * f));
+      sum += n * n * amp; norm += amp; amp *= 0.5; f *= 2;
+    }
+    return sum / norm;
+  };
+  /**
+   * Eroded-looking relief (after Inigo Quilez's derivative-damped fBm): each octave is damped
+   * where the octaves below it are already steep, so slopes stay smooth and detail gathers on
+   * crests and in valley floors. Combined with a ridged first octave, ranges read as branching
+   * spurs and gullies rather than uniform bumps. About −0.5..0.6.
+   */
+  const H = 0.02;
+  const eroded = (dx: number, dy: number, dz: number) => {
+    let sum = 0, amp = 0.55, f = ridgeBase * 0.8, gx = 0, gy = 0, gz = 0;
+    for (let o = 0; o < 5; o++) {
+      const qx = dx * f + 7.1 * o, qy = dy * f, qz = dz * f;
+      // The first octave is ridged (1 − |n|): long crest lines to hang the spurs from.
+      const shape = (v: number) => (o === 0 ? 0.5 - Math.abs(v) : v);
+      const n = shape(rough(qx, qy, qz));
+      const nx = (shape(rough(qx + H, qy, qz)) - n) / H, ny = (shape(rough(qx, qy + H, qz)) - n) / H, nz = (shape(rough(qx, qy, qz + H)) - n) / H;
+      gx += nx * amp; gy += ny * amp; gz += nz * amp;
+      sum += (amp * n) / (1 + 0.6 * (gx * gx + gy * gy + gz * gz));
+      amp *= 0.48; f *= 2.03;
+    }
+    return sum;
+  };
+  /**
+   * Smooth height on high ground. Linear centre-to-corner interpolation makes every high cell a
+   * hexagonal pyramid, and snow on the apexes then tiles the range in hexagons. Up high, height
+   * instead comes from a noise-warped Gaussian blend of nearby land cells, like the colours.
+   */
+  const hSigma2 = (0.7 * spacing) ** 2, hWarp = 0.45 * spacing, hf = 0.9 / spacing;
+  const smoothH = (owner: number, dx: number, dy: number, dz: number, lin: number) => {
+    const t = Math.max(0, Math.min(1, (lin - SEA - 0.12 * relief) / (0.25 * relief)));
+    if (t <= 0 || w.water[owner] !== WATER_LAND) return lin;
+    const qx = dx + hWarp * tint(dx * hf + 51.3, dy * hf, dz * hf);
+    const qy = dy + hWarp * tint(dx * hf, dy * hf + 63.7, dz * hf);
+    const qz = dz + hWarp * tint(dx * hf, dy * hf, dz * hf + 77.1);
+    let sh = 0, sw = 0;
+    const consider = (c: number) => {
+      if (w.water[c] !== WATER_LAND) return;
+      const ex = P[c * 3] - qx, ey = P[c * 3 + 1] - qy, ez = P[c * 3 + 2] - qz;
+      const wt = Math.exp(-(ex * ex + ey * ey + ez * ez) / hSigma2);
+      sh += cellH[c] * wt; sw += wt;
+    };
+    consider(owner);
+    for (const nb of g.neighbors[owner]) consider(nb);
+    if (sw < 1e-9) return lin;
+    const hs = t * t * (3 - 2 * t);
+    return lin + (sh / sw - lin) * hs;
+  };
+  /** Displacement for a point whose interpolated height is h: gentle in lowlands, craggy up high. */
+  const bump = (owner: number, dx: number, dy: number, dz: number, h0: number) => {
+    const h = smoothH(owner, dx, dy, dz, h0);
+    const n = rough(dx * freq, dy * freq, dz * freq);
+    // Delta land (deltas.ts): flat, barely above the water, whatever the land behind it does.
+    if (isDelta(w.water, w.elevation, owner)) {
+      // Highest at the old coast, sinking toward the sea it grew into, with a ragged edge, so the
+      // shore wanders across the cell in lobes instead of following its sides.
+      let sea = 0;
+      const cx = P[owner * 3], cy = P[owner * 3 + 1], cz = P[owner * 3 + 2];
+      for (const nb of g.neighbors[owner]) {
+        if (w.water[nb] !== WATER_OCEAN) continue;
+        const ax = P[nb * 3] - cx, ay = P[nb * 3 + 1] - cy, az = P[nb * 3 + 2] - cz, al = Math.hypot(ax, ay, az);
+        sea = Math.max(sea, ((dx - cx) * ax + (dy - cy) * ay + (dz - cz) * az) / (al * al * 0.5));
+      }
+      const wob = tint(dx * lf * 1.7 + 2.1, dy * lf * 1.7, dz * lf * 1.7) * 0.45 + tint(dx * lf * 4.3, dy * lf * 4.3 + 5.5, dz * lf * 4.3) * 0.2;
+      // (Shore at ~0.75 of the way to the sea edge, was ~0.5: room for the channel fan, render.ts.)
+      const k = Math.min(1, Math.max(0, (sea + wob - 0.05) / 0.75));
+      return SEA + 0.0005 - 0.0011 * k * k * (3 - 2 * k) + 0.00006 * n;
+    }
+    if (h <= SEA + 0.0005) return h + 0.0003 * n;
+    const e = Math.min(1, (h - SEA) / Math.max(1e-6, relief));
+    const gentle = (0.0004 + 0.0015 * e) * n;
+    // Ranges are ridges and valleys, not domes: only the crests reach the snow line, so snow
+    // lies in streaks along them instead of capping the whole massif.
+    // Valleys bottom out (the floor clamp) rather than sinking into round pits.
+    const crags = e > 0.12
+      ? 0.55 * relief * Math.pow(e, 1.1) * Math.max(-0.16, eroded(dx, dy, dz)) * Math.min(1, (e - 0.12) / 0.15)
+      : 0;
+    // Ice sheets bury their relief: smooth domes, the odd nunatak.
+    if (w.biome[owner] === B.ICE) return h + gentle * inp.relief * 0.35 + crags * 0.2;
+    return h + gentle * inp.relief + crags;
+  };
+
+  return { relief, spacing, cellH, level, vLevel, vLake, cornerCells, cornerH, cornerLevel, cornerLake, k, lf, tint, smoothH, bump };
+}
+
+function buildSmooth(inp: SurfaceInput): Surface {
+  const { world: w, cellColor, tint } = inp;
+  const g = w.grid, N = g.count, P = g.centers, C = g.cornerPos, K = C.length / 3;
+  const S = terrainShape(w, inp.relief, tint, inp.rough);
+  const { relief, spacing, cellH, vLevel, vLake, cornerCells, cornerH, cornerLevel, cornerLake, k, lf } = S;
+  const cornerCol = new Float32Array(K * 3);
+  for (let k = 0; k < K; k++) {
+    const cells = cornerCells[k], h = cornerH[k];
     // Above water, colour from the land cells only, so beaches are not tinted by sea floor.
     const landOnly = h > SEA && cells.some((c) => w.water[c] === WATER_LAND);
     let r = 0, gg = 0, b = 0, n = 0;
@@ -534,104 +651,8 @@ function buildSmooth(inp: SurfaceInput): Surface {
     depth.push(lake && dd > 0 ? dd + 0.01 * Math.min(1, dd / 0.0007) : dd);
     return i;
   };
-  const lf = 2.2 / spacing;
-  // Each fan triangle (cell centre + two corners) becomes a k×k triangular grid. k is picked so
-  // the planet stays near a fixed triangle budget: finer on small worlds, coarser on big ones.
-  const k = Math.max(2, Math.min(6, Math.round(Math.sqrt(850000 / (N * 6)))));
-  // Noise scales are tied to the vertex spacing: the finest octave spans about three vertices.
-  // Finer than that, neighbouring vertices get unrelated heights and the surface turns to spikes.
-  // (Vertex spacing is the cell spacing over k; tuned at k = 3.)
-  const vSpacing = spacing / k;
-  const freq = 0.5 / (3 * vSpacing);
-  const ridgeBase = 0.45 / (3 * vSpacing);
-  /** Ridged multi-octave noise, about 0..1: sharp crests where the noise crosses zero. */
-  const ridged = (dx: number, dy: number, dz: number) => {
-    let sum = 0, amp = 0.5, f = ridgeBase, norm = 0;
-    for (let o = 0; o < 3; o++) {
-      const n = 1 - Math.abs(rough(dx * f + 3.7 * o, dy * f, dz * f));
-      sum += n * n * amp; norm += amp; amp *= 0.5; f *= 2;
-    }
-    return sum / norm;
-  };
-  /**
-   * Eroded-looking relief (after Inigo Quilez's derivative-damped fBm): each octave is damped
-   * where the octaves below it are already steep, so slopes stay smooth and detail gathers on
-   * crests and in valley floors. Combined with a ridged first octave, ranges read as branching
-   * spurs and gullies rather than uniform bumps. About −0.5..0.6.
-   */
-  const H = 0.02;
-  const eroded = (dx: number, dy: number, dz: number) => {
-    let sum = 0, amp = 0.55, f = ridgeBase * 0.8, gx = 0, gy = 0, gz = 0;
-    for (let o = 0; o < 5; o++) {
-      const qx = dx * f + 7.1 * o, qy = dy * f, qz = dz * f;
-      // The first octave is ridged (1 − |n|): long crest lines to hang the spurs from.
-      const shape = (v: number) => (o === 0 ? 0.5 - Math.abs(v) : v);
-      const n = shape(rough(qx, qy, qz));
-      const nx = (shape(rough(qx + H, qy, qz)) - n) / H, ny = (shape(rough(qx, qy + H, qz)) - n) / H, nz = (shape(rough(qx, qy, qz + H)) - n) / H;
-      gx += nx * amp; gy += ny * amp; gz += nz * amp;
-      sum += (amp * n) / (1 + 0.6 * (gx * gx + gy * gy + gz * gz));
-      amp *= 0.48; f *= 2.03;
-    }
-    return sum;
-  };
-  /**
-   * Smooth height on high ground. Linear centre-to-corner interpolation makes every high cell a
-   * hexagonal pyramid, and snow on the apexes then tiles the range in hexagons. Up high, height
-   * instead comes from a noise-warped Gaussian blend of nearby land cells, like the colours.
-   */
-  const hSigma2 = (0.7 * spacing) ** 2, hWarp = 0.45 * spacing, hf = 0.9 / spacing;
-  const smoothH = (dx: number, dy: number, dz: number, lin: number) => {
-    const t = Math.max(0, Math.min(1, (lin - SEA - 0.12 * relief) / (0.25 * relief)));
-    if (t <= 0 || w.water[owner] !== WATER_LAND) return lin;
-    const qx = dx + hWarp * tint(dx * hf + 51.3, dy * hf, dz * hf);
-    const qy = dy + hWarp * tint(dx * hf, dy * hf + 63.7, dz * hf);
-    const qz = dz + hWarp * tint(dx * hf, dy * hf, dz * hf + 77.1);
-    let sh = 0, sw = 0;
-    const consider = (c: number) => {
-      if (w.water[c] !== WATER_LAND) return;
-      const ex = P[c * 3] - qx, ey = P[c * 3 + 1] - qy, ez = P[c * 3 + 2] - qz;
-      const wt = Math.exp(-(ex * ex + ey * ey + ez * ez) / hSigma2);
-      sh += cellH[c] * wt; sw += wt;
-    };
-    consider(owner);
-    for (const nb of g.neighbors[owner]) consider(nb);
-    if (sw < 1e-9) return lin;
-    const hs = t * t * (3 - 2 * t);
-    return lin + (sh / sw - lin) * hs;
-  };
-  /** Displacement for a point whose interpolated height is h: gentle in lowlands, craggy up high. */
-  const bump = (dx: number, dy: number, dz: number, h0: number) => {
-    const h = smoothH(dx, dy, dz, h0);
-    const n = rough(dx * freq, dy * freq, dz * freq);
-    // Delta land (deltas.ts): flat, barely above the water, whatever the land behind it does.
-    if (isDelta(w.water, w.elevation, owner)) {
-      // Highest at the old coast, sinking toward the sea it grew into, with a ragged edge, so the
-      // shore wanders across the cell in lobes instead of following its sides.
-      let sea = 0;
-      const cx = P[owner * 3], cy = P[owner * 3 + 1], cz = P[owner * 3 + 2];
-      for (const nb of g.neighbors[owner]) {
-        if (w.water[nb] !== WATER_OCEAN) continue;
-        const ax = P[nb * 3] - cx, ay = P[nb * 3 + 1] - cy, az = P[nb * 3 + 2] - cz, al = Math.hypot(ax, ay, az);
-        sea = Math.max(sea, ((dx - cx) * ax + (dy - cy) * ay + (dz - cz) * az) / (al * al * 0.5));
-      }
-      const wob = tint(dx * lf * 1.7 + 2.1, dy * lf * 1.7, dz * lf * 1.7) * 0.45 + tint(dx * lf * 4.3, dy * lf * 4.3 + 5.5, dz * lf * 4.3) * 0.2;
-      // (Shore at ~0.75 of the way to the sea edge, was ~0.5: room for the channel fan, render.ts.)
-      const k = Math.min(1, Math.max(0, (sea + wob - 0.05) / 0.75));
-      return SEA + 0.0005 - 0.0011 * k * k * (3 - 2 * k) + 0.00006 * n;
-    }
-    if (h <= SEA + 0.0005) return h + 0.0003 * n;
-    const e = Math.min(1, (h - SEA) / Math.max(1e-6, relief));
-    const gentle = (0.0004 + 0.0015 * e) * n;
-    // Ranges are ridges and valleys, not domes: only the crests reach the snow line, so snow
-    // lies in streaks along them instead of capping the whole massif.
-    // Valleys bottom out (the floor clamp) rather than sinking into round pits.
-    const crags = e > 0.12
-      ? 0.55 * relief * Math.pow(e, 1.1) * Math.max(-0.16, eroded(dx, dy, dz)) * Math.min(1, (e - 0.12) / 0.15)
-      : 0;
-    // Ice sheets bury their relief: smooth domes, the odd nunatak.
-    if (w.biome[owner] === B.ICE) return h + gentle * inp.relief * 0.35 + crags * 0.2;
-    return h + gentle * inp.relief + crags;
-  };
+  const smoothH = (dx: number, dy: number, dz: number, lin: number) => S.smoothH(owner, dx, dy, dz, lin);
+  const bump = (dx: number, dy: number, dz: number, h0: number) => S.bump(owner, dx, dy, dz, h0);
 
   const cornerIdx = new Int32Array(K).fill(-1);
   const corner = (kk: number) => {
@@ -910,3 +931,80 @@ function buildTiles(inp: SurfaceInput): Surface {
   return { terrain, faces: Int32Array.from(faces), water, trees, cellTop: top, cornerH: null };
 }
 
+
+/** What planetGround() reports for a point. */
+export interface GroundSample {
+  /** Ground radius (sea level is SEA), as the planet draws it. */
+  h: number;
+  /** The cell the point is in. */
+  cell: number;
+  /** Water surface over the point (radius), or -1 where the planet draws none. */
+  water: number;
+  /** That water is a lake's. */
+  lake: boolean;
+}
+
+/**
+ * The planet's ground at any point, by the same formula its terrain mesh is sampled from
+ * (terrainShape): so a coast, a peninsula or a range drawn closer up (the hex view) is the one the
+ * planet shows. The mesh pins its cell centres and corners to the smoothed heights and draws
+ * straight between vertices; this follows the formula everywhere, so it carries the same shapes
+ * with the finer octaves of the same noise.
+ */
+export function planetGround(w: World, reliefMul = 1) {
+  const seed = w.params.seed;
+  const S = terrainShape(w, reliefMul, makeSimplex(seed * 5 + 11), makeSimplex(seed * 5 + 12));
+  const g = w.grid, P = g.centers, C = g.cornerPos;
+  let hint = 0;
+  const cellOf = (x: number, y: number, z: number) => {
+    let cur = hint;
+    for (;;) {
+      let best = cur, bd = P[cur * 3] * x + P[cur * 3 + 1] * y + P[cur * 3 + 2] * z;
+      for (const n of g.neighbors[cur]) {
+        const d = P[n * 3] * x + P[n * 3 + 1] * y + P[n * 3 + 2] * z;
+        if (d > bd) { bd = d; best = n; }
+      }
+      if (best === cur) return (hint = cur);
+      cur = best;
+    }
+  };
+  const det = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number) =>
+    ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+  return {
+    shape: S,
+    /** The ground along a direction (any length). */
+    at(x: number, y: number, z: number, out: GroundSample = { h: 0, cell: 0, water: -1, lake: false }): GroundSample {
+      const l = Math.hypot(x, y, z); x /= l; y /= l; z /= l;
+      const c = cellOf(x, y, z), ks = g.corners[c], m = ks.length;
+      const px = P[c * 3], py = P[c * 3 + 1], pz = P[c * 3 + 2];
+      // The fan triangle (centre, corner, next corner) the point is in, and its weights there.
+      let wa = 1, wb = 0, wc = 0, k0 = ks[0], k1 = ks[1 % m], bestMin = -Infinity;
+      for (let i = 0; i < m; i++) {
+        const a = ks[i], b = ks[(i + 1) % m];
+        const ax = C[a * 3], ay = C[a * 3 + 1], az = C[a * 3 + 2], bx = C[b * 3], by = C[b * 3 + 1], bz = C[b * 3 + 2];
+        const D = det(px, py, pz, ax, ay, az, bx, by, bz);
+        if (Math.abs(D) < 1e-18) continue;
+        const u = det(x, y, z, ax, ay, az, bx, by, bz) / D;
+        const v = det(px, py, pz, x, y, z, bx, by, bz) / D;
+        const t = det(px, py, pz, ax, ay, az, x, y, z) / D;
+        const mn = Math.min(u, v, t);
+        if (mn > bestMin) { bestMin = mn; const sm = u + v + t; wa = u / sm; wb = v / sm; wc = t / sm; k0 = a; k1 = b; }
+        if (mn >= 0) break;
+      }
+      const lin = wa * S.cellH[c] + wb * S.cornerH[k0] + wc * S.cornerH[k1];
+      out.h = S.bump(c, x, y, z, lin);
+      out.cell = c;
+      const hasWater = S.vLevel[c] > 0;
+      out.water = hasWater ? wa * S.vLevel[c] + wb * S.cornerLevel[k0] + wc * S.cornerLevel[k1] : -1;
+      out.lake = hasWater && S.vLake[c] === 1;
+      // Lake shores wander through the cell (buildSmooth add()).
+      if (out.lake && w.water[c] !== WATER_OCEAN) {
+        const lvl = out.water, h = out.h, lf = S.lf, tint = S.tint;
+        const near = h > lvl - 0.0006 ? Math.max(0, 1 - Math.abs(h - lvl) / 0.0016) : 0;
+        out.h = h + near * 0.0011 * (tint(x * lf + 3.3, y * lf, z * lf) + 0.45 * tint(x * lf * 2.7, y * lf * 2.7 + 8.1, z * lf * 2.7));
+      }
+      return out;
+    },
+  };
+}
+export type PlanetGround = ReturnType<typeof planetGround>;

@@ -6,6 +6,7 @@
 import { chromium } from 'playwright-core';
 import { PNG } from 'pngjs';
 import fs from 'node:fs';
+import { planetValleys, giveValleys } from './planetvalleys.mjs';
 const [base, out, ...targets] = process.argv.slice(2);
 const seed = process.env.SEED ?? '1', dist = Number(process.env.DIST ?? 0.035);
 const browser = await chromium.launch({ channel: process.env.BROWSER ?? 'msedge', args: ['--use-angle=d3d11', '--enable-gpu'] });
@@ -16,6 +17,7 @@ await planet.goto(`${base}#seed=${seed}`);
 await planet.waitForFunction(() => window.mundi?.world, null, { timeout: 180000 });
 await planet.evaluate(() => window.mundi.ready());
 await planet.evaluate(() => window.mundi.capture(true));
+const valleys = process.env.NOVALLEYS ? null : await planetValleys(browser, base, seed);
 for (const t of targets) {
   const cell = /^\d+$/.test(t) ? Number(t) : await planet.evaluate((s) => window.mundi.findSpot ? window.mundi.findSpot(s) : -1, t);
   // Camera above the cell; the view tilts itself near the ground. Read back where it ended up.
@@ -52,8 +54,9 @@ for (const t of targets) {
   }, [cell, dist]);
   await planet.screenshot({ path: `${out}/_planet.png` });
   await hex.goto('about:blank');
-  await hex.goto(`${base}hex.html#seed=${seed}&cell=${cell}`);
+  await hex.goto(`${base}hex.html#seed=${seed}&cell=${cell}${process.env.HEXQ ? "&" + process.env.HEXQ : ""}`);
   await hex.waitForFunction(() => window.hex?.map && !window.hex.busy, null, { timeout: 120000 });
+  if (valleys) await giveValleys(hex, valleys);
   await hex.evaluate(([p]) => { window.hex.capture(true); window.hex.pose(p.dist, p.tilt, p.fov, p.e, p.n); }, [pose]);
   await hex.waitForTimeout(1200);
   await hex.screenshot({ path: `${out}/_hex.png` });

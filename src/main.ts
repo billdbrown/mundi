@@ -1,7 +1,7 @@
 import { PlanetView, DEFAULT_VIEW, REBUILD_KEYS, type ViewMode, type TerrainStyle, type ViewOptions } from './render.ts';
 import { DEFAULT_PARAMS, WATER_OCEAN, WATER_LAKE, type World, type WorldParams } from './world.ts';
 import { BIOMES } from './biomes.ts';
-import { flyTo, orbit, type Spot } from './debug.ts';
+import { findSpot, flyTo, orbit, type Spot } from './debug.ts';
 import type { BuildRequest, BuildResult, BuildStage } from './worker.ts';
 import { mountLoader, type Loader } from './loader.ts';
 import type { HistoryRequest, HistoryResult } from './historyWorker.ts';
@@ -393,6 +393,7 @@ addEventListener('message', (e) => {
     hexReady = true;
     if (hexPending) { hexSend({ type: 'mundi-hex-open', hash: hexPending }); hexPending = null; }
     else hexSend({ type: 'mundi-hex-warm', hash: hexHash() });
+    sendValleys();
   }
   if (e.data.type === 'mundi-hex-back') closeHex();
 });
@@ -401,11 +402,23 @@ view.renderer.domElement.addEventListener('dblclick', (e) => {
   if (!world) return;
   openHex(view.pick(e.clientX, e.clientY));
 });
+let valleysSent: World | null = null, valleysWait = 0;
+/** The planet's valleys to the hex view (once they are worked out, a few seconds in), so its
+ * ground is carved like the planet's. Once per world. */
+function sendValleys() {
+  clearTimeout(valleysWait);
+  if (!hexReady || !world || valleysSent === world) return;
+  const vc = view.valleyCarve();
+  if (!vc) { valleysWait = window.setTimeout(sendValleys, 1000); return; }
+  valleysSent = world;
+  hexFrame?.contentWindow?.postMessage({ type: 'mundi-hex-valleys', hash: hexHash(), n: vc.n, half: vc.half }, location.origin, [vc.half.buffer]);
+}
 /** Once a world is drawn, get the hex view ready for it (after the planet has settled). */
 function warmHex() {
   void loaderGone.then(() => setTimeout(() => {
     if (!hexFrame) ensureHexFrame();
     else if (hexReady && !hexOpen) hexSend({ type: 'mundi-hex-warm', hash: hexHash() });
+    sendValleys();
   }, 2500));
 }
 
@@ -420,6 +433,8 @@ function warmHex() {
   freeze: (t: number | null) => view.freeze(t),
   orbit: (lon: number, lat: number, dist: number) => orbit(view, lon, lat, dist),
   flyTo: (spot: Spot, alt: number) => flyTo(view, world, spot, alt),
+  /** The cell a named spot picks (scripts/hexcompare.mjs). */
+  findSpot: (spot: Spot) => (world ? findSpot(world, spot) : -1),
   /** Swap in a world from a hash string ("seed=7&ocean=0.5") with view options reset; resolves once drawn. */
   load: (hash: string, opts: Partial<ViewOptions> = {}): Promise<void> => {
     history.replaceState(null, '', '#' + hash);

@@ -3,6 +3,7 @@
  * Usage: [CELL=12010] [STYLE=golden] [HOURS=5.5,6.3,...] [W=1280 H=800] node scripts/hexday.mjs <base url> <outdir>
  */
 import { chromium } from 'playwright-core';
+import { planetValleys, giveValleys } from './planetvalleys.mjs';
 const [base = 'http://localhost:5173/', out = '.'] = process.argv.slice(2);
 const cell = process.env.CELL ?? '12010', style = process.env.STYLE ?? 'golden';
 const hours = (process.env.HOURS ?? '5.5,6.3,9,12,16,17.6,18.2,19,23').split(',').map(Number);
@@ -12,6 +13,7 @@ const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 await page.goto(`${base}hex.html#seed=1&cell=${cell}&style=${style}`);
 await page.waitForFunction(() => window.hex?.map && !window.hex.busy, null, { timeout: 180000 });
+await giveValleys(page, await planetValleys(browser, base));
 await page.waitForFunction(() => window.hex.scene.getObjectByName('context'), null, { timeout: 60000 }).catch(() => {});
 await page.evaluate(() => window.hex.capture(true));
 for (const hr of hours) {

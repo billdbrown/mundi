@@ -1,14 +1,17 @@
 /**
  * Every gallery hex, from the view's own camera (and at eye level with EYE=1), plus an HTML page
  * laying them out with the frame rate. AROUND=0 shoots without the neighbouring hexes.
+ * The hexes are carved with the planet's valleys, taken from the planet first (planetvalleys.mjs).
  * Usage: [CELLS=12010,15979] [EYE=1] [AROUND=0] node scripts/hexgallery.mjs <base url> <outdir>
  */
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
+import { planetValleys, giveValleys } from './planetvalleys.mjs';
 const [base = 'http://localhost:5173/', out = '.'] = process.argv.slice(2);
 const cells = (process.env.CELLS ?? '12010,15979,11783,5602,35274').split(',');
 const names = { 12010: 'River', 15979: 'Forest', 11783: 'Coast', 5602: 'Mountain', 35274: 'Desert' };
 const browser = await chromium.launch({ channel: process.env.BROWSER ?? 'msedge', args: ['--use-angle=d3d11', '--enable-gpu'] });
+const valleys = await planetValleys(browser, base);
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
@@ -24,6 +27,8 @@ const allStyles = ['golden-earth'];
 for (const cell of cells) {
   await page.goto('about:blank');
   await page.goto(`${base}hex.html#seed=1&cell=${cell}${process.env.AROUND === '0' ? '&around=0' : ''}`);
+  await settle();
+  await giveValleys(page, valleys);
   await settle();
   const row = { cell, shots: [] };
   for (const st of allStyles) {
