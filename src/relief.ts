@@ -84,9 +84,10 @@ export function hills(px: number, py: number, pz: number, ux: number, uy: number
   out[3] = (t1z * (h1 - h0) + t2z * (h2 - h0)) * k;
 }
 
-/** erosionSplit() with foot 0: the height of the octaves a grid of spacing sp carries (geoH). */
-export function erosionGeoH(px: number, py: number, pz: number, ux: number, uy: number, uz: number, mx: number, my: number, mz: number, sp: number): number {
-  let gx = 0, gy = 0, gz = 0, geoH = 0, lambda = ERO_L0, amp = 1;
+/** erosionSplit() with foot 0: the height of the octaves a grid of spacing sp carries (geoH);
+ * their gradient (geo) goes in geo[0..2] if given. */
+export function erosionGeoH(px: number, py: number, pz: number, ux: number, uy: number, uz: number, mx: number, my: number, mz: number, sp: number, geo?: number[]): number {
+  let gx = 0, gy = 0, gz = 0, geoH = 0, lambda = ERO_L0, amp = 1, qx = 0, qy = 0, qz = 0;
   for (let i = 0; i < ERO_OCT; i++) {
     // across = normalize(cross(up, macro + g * COUPLE))
     const sx = mx + gx * ERO_COUPLE, sy = my + gy * ERO_COUPLE, sz = mz + gz * ERO_COUPLE;
@@ -104,16 +105,22 @@ export function erosionGeoH(px: number, py: number, pz: number, ux: number, uy: 
     gx += d * ax; gy += d * ay; gz += d * az;
     const gw = sp > 0 ? smoothstep(2.5 * sp, 4 * sp, lambda) : 0;
     geoH += gw * k * ERO_STEEP * lambda / 6.2831853 * (prof - 0.5);
+    qx += gw * d * ax; qy += gw * d * ay; qz += gw * d * az;
     amp *= ERO_GAIN;
     lambda *= 0.5;
   }
+  if (geo) { geo[0] = qx; geo[1] = qy; geo[2] = qz; }
   return geoH;
 }
 
 // --- valleys.ts ---
 
-/** The planet's carved valleys (valleys.ts): carving per texel of a six-face cube, radians. */
-export interface ValleyField { n: number; carve: Float32Array }
+/**
+ * The planet's carved valleys (valleys.ts): per texel of a six-face cube, radians, the carving
+ * (the texture's r: snow counts it) and the cut the close-up patch makes (r less b, its local
+ * average: groundCut), so the land keeps the plain terrain's height on average.
+ */
+export interface ValleyField { n: number; carve: Float32Array; cut: Float32Array }
 
 /** Half floats (valleys.ts texture data) to floats. */
 export function halfToFloat(h: Uint16Array): Float32Array {
@@ -125,8 +132,8 @@ export function halfToFloat(h: Uint16Array): Float32Array {
   return out;
 }
 
-/** Carving at direction (x, y, z), bilinear (the shader's texture filter). */
-export function carveAt(v: ValleyField, x: number, y: number, z: number): number {
+/** A valley field channel at direction (x, y, z), bilinear (the shader's texture filter). */
+export function carveAt(v: ValleyField, x: number, y: number, z: number, c: Float32Array = v.carve): number {
   const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z), n = v.n;
   let u: number, w: number, f: number;
   if (ax >= ay && ax >= az) { u = y / ax; w = z / ax; f = x < 0 ? 1 : 0; }
@@ -135,7 +142,6 @@ export function carveAt(v: ValleyField, x: number, y: number, z: number): number
   const fx = Math.max(0, Math.min(n - 1.001, (u * 0.5 + 0.5) * n - 0.5));
   const fy = Math.max(0, Math.min(n - 1.001, (w * 0.5 + 0.5) * n - 0.5));
   const i = Math.floor(fx), j = Math.floor(fy), tx = fx - i, ty = fy - j, o = f * n * n;
-  const c = v.carve;
   const a = c[o + j * n + i], b = c[o + j * n + i + 1], d = c[o + (j + 1) * n + i], e = c[o + (j + 1) * n + i + 1];
   return (a * (1 - tx) + b * tx) * (1 - ty) + (d * (1 - tx) + e * tx) * ty;
 }
@@ -146,22 +152,50 @@ export const sandSea = (x: number, y: number, z: number) => smoothstep(-0.55, 0.
 // --- dunes.ts PATCH_BAKE_GLSL (the parts that are not dunes or river channels) ---
 const MTN_CARVE = 0.8;
 const UERO_R = 512 / 768;   // valleys.ts: uEroR = 512 / VALLEY_N
+const CRAG_BAND = 0.00028, CRAG_INV = 1 / 0.0003, CRAG_AMP = 0.0001;
+/** One texel of the patch's river mask (dunes.ts CAPTURE_SIZE over 2 PATCH_R), radians. */
+const TEXEL = 0.1 / 512;
+const fract = (v: number) => v - Math.floor(v);
+
+/** cragCells: distance to the nearest wall of a 3D Voronoi pattern (about F2 - F1), and a random
+ * 0..1 for the nearest cell, into out[0..1]. */
+function cragCells(x: number, y: number, z: number, out: number[]) {
+  const cx = Math.floor(x), cy = Math.floor(y), cz = Math.floor(z);
+  let f1 = 9, f2 = 9, id = 0;
+  for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (let k = -1; k <= 1; k++) {
+    const gx = cx + i, gy = cy + j, gz = cz + k;
+    const ox = eroHash(gx + 1.3, gy + 1.3, gz + 1.3), oy = eroHash(gx + 71.9, gy + 71.9, gz + 71.9), oz = eroHash(gx + 143.7, gy + 143.7, gz + 143.7);
+    const d = Math.hypot(gx + ox - x, gy + oy - y, gz + oz - z);
+    if (d < f1) { f2 = f1; f1 = d; id = eroHash(gx + 211.1, gy + 211.1, gz + 211.1); } else if (d < f2) f2 = d;
+  }
+  out[0] = f2 - f1; out[1] = id;
+}
+const cc2 = [0, 0], geo3 = [0, 0, 0];
+/** cragBlocks: each block stands a little proud or sunk, with a crack between them. */
+export function cragBlocks(x: number, y: number, z: number): number {
+  cragCells(x * CRAG_INV, y * CRAG_INV, z * CRAG_INV, cc2);
+  return (cc2[1] - 0.5) - 0.8 * (1 - smoothstep(0, 0.18, cc2[0])) + 0.2;
+}
 
 export interface ReliefInput {
   /** The point (unit direction) and the ground's height above the sea there (radians). */
   x: number; y: number; z: number; hAbove: number;
   /** The planet mesh's slope there: uphill gradient, tangent (radians per radian). */
   mx: number; my: number; mz: number;
-  /** 0..1: sand desert (no gullies), ice (no relief), near a river (flat floors). */
-  sand: number; ice: number; river: number;
+  /** 0..1: sand desert (no gullies), ice (no relief). */
+  sand: number; ice: number;
+  /** Distance to the nearest drawn river or stream, radians (Infinity for none): the relief
+   * fades out toward it, so rivers run on flat floors. */
+  river: number;
   /** Grid spacing, radians: octaves too fine for it stay out. */
   sp: number;
 }
 
 /**
  * How far the planet's patch raises (or lowers) the ground at a point, radians: the carved
- * valleys (if given) and the hills and gullies. As the bake, at full strength (camera close).
- * tmp[4] is set to the valleys' carving there (radians, 0 without them), which snow needs.
+ * valleys (if given), the hills and gullies, and the crags (cliff bands, rock blocks) on steep
+ * high ground. As the bake, at full strength (camera close).
+ * tmp[4] is set to the valleys' carving there (radians, 0 without them), which snow counts.
  */
 export function patchLift(r: ReliefInput, valleys: ValleyField | null, tmp: number[]): number {
   const { x, y, z, hAbove } = r;
@@ -172,26 +206,31 @@ export function patchLift(r: ReliefInput, valleys: ValleyField | null, tmp: numb
   let ex = z, ez = -x; const el = Math.hypot(ex, ez) || 1; ex /= el; ez /= el;
   const nx = y * ez, ny = z * ex - x * ez, nz = -y * ex;
 
+  // Valleys: cut relative to the carving's local average (so the land keeps the plain terrain's
+  // height on average), deeper in the mountains, never below the sea.
   let liftC = 0, gCx = 0, gCy = 0, gCz = 0;
   tmp[4] = 0;
   if (valleys && hAbove > 0) {
     const e = UERO_R * 2 / 512;
-    const c0 = carveAt(valleys, bx, by, bz);
-    const c1 = carveAt(valleys, bx + ex * e, by, bz + ez * e);
-    const c2 = carveAt(valleys, bx + nx * e, by + ny * e, bz + nz * e);
-    liftC = -c0 * (1 + MTN_CARVE * highland);
-    tmp[4] = c0;
-    gCx = -(ex * (c1 - c0) + nx * (c2 - c0)) / e;
-    gCy = -(ny * (c2 - c0)) / e;
-    gCz = -(ez * (c1 - c0) + nz * (c2 - c0)) / e;
+    const c0 = carveAt(valleys, bx, by, bz, valleys.cut);
+    const c1 = carveAt(valleys, bx + ex * e, by, bz + ez * e, valleys.cut);
+    const c2 = carveAt(valleys, bx + nx * e, by + ny * e, bz + nz * e, valleys.cut);
+    tmp[4] = carveAt(valleys, bx, by, bz);
+    const full = c0 * (1 + MTN_CARVE * highland), cut = Math.min(full, 0.9 * hAbove);
+    liftC = -cut;
+    const sc = full > 0 ? cut / full : 1;
+    gCx = -(ex * (c1 - c0) + nx * (c2 - c0)) / e * sc;
+    gCy = -(ny * (c2 - c0)) / e * sc;
+    gCz = -(ez * (c1 - c0) + nz * (c2 - c0)) / e * sc;
     const gl = Math.hypot(gCx, gCy, gCz), k = Math.min(1, 0.35 / Math.max(gl, 1e-6));
     gCx *= k; gCy *= k; gCz *= k;
   }
 
-  let liftEro = 0;
-  let eroFar = 1 - r.river;
+  // Hills and gullies, fading out toward rivers and streams (2 to 12 texels of the river mask).
+  let liftEro = 0, eGx = 0, eGy = 0, eGz = 0;
+  let eroFar = smoothstep(2, 12, r.river / TEXEL);
+  const iceK = r.ice;
   if (eroFar > 0) {
-    const iceK = r.ice;
     const sandE = r.sand * (1 - highland);
     if (sandE > 0) eroFar *= 1 - sandE * (0.6 + 0.4 * smoothstep(0.2, 0.5, sandSea(bx, by, bz)));
     eroFar *= smoothstep(0.0001, 0.001, hAbove + 0.0004 * snoise3(bx * 150, by * 150, bz * 150));
@@ -203,7 +242,31 @@ export function patchLift(r: ReliefInput, valleys: ValleyField | null, tmp: numb
       const mx = r.mx + tmp[1] * hk + gCx, my = r.my + tmp[2] * hk + gCy, mz = r.mz + tmp[3] * hk + gCz;
       const eroK = smoothstep(0, 0.07, Math.hypot(mx, my, mz)) * (1 - iceK) * eroFar;
       liftEro += tmp[0] * hk * eroFar;
-      if (eroK > 0) liftEro += erosionGeoH(bx, by, bz, x, y, z, mx, my, mz, r.sp) * eroK;
+      eGx += tmp[1] * hk * eroFar; eGy += tmp[2] * hk * eroFar; eGz += tmp[3] * hk * eroFar;
+      if (eroK > 0) {
+        liftEro += erosionGeoH(bx, by, bz, x, y, z, mx, my, mz, r.sp, geo3) * eroK;
+        eGx += geo3[0] * eroK; eGy += geo3[1] * eroK; eGz += geo3[2] * eroK;
+      }
+    }
+  }
+
+  // Crags: cliff bands (the height terraced into ledges and risers) and rock blocks split by
+  // cracks, on steep high ground. Both average out to nothing, so ranges keep their height.
+  if (eroFar >= 0.01 && hAbove > 0) {
+    const Gx = r.mx + gCx + eGx, Gy = r.my + gCy + eGy, Gz = r.mz + gCz + eGz;
+    const steep = Math.hypot(Gx, Gy, Gz);
+    const k = smoothstep(0.28, 0.55, steep) * smoothstep(0.15, 0.5, hAbove / RELIEF) * eroFar * (1 - 0.6 * iceK);
+    if (k > 0) {
+      const layered = smoothstep(-0.3, 0.3, snoise3(bx * 14 + 5, by * 14 + 5, bz * 14 + 5));
+      const runs = smoothstep(-0.15, 0.45, snoise3(bx * 1200 + 2, by * 1200 + 2, bz * 1200 + 2) + 0.35 * snoise3(bx * 4000 + 8, by * 4000 + 8, bz * 4000 + 8));
+      const bandsK = layered * runs * (1 - smoothstep(CRAG_BAND / 7, CRAG_BAND / 3.5, r.sp * steep));
+      if (bandsK > 0) {
+        const H = hAbove + liftC + liftEro + CRAG_BAND * (0.6 * snoise3(bx * 400 + 9, by * 400 + 9, bz * 400 + 9) + 0.25 * snoise3(bx * 2500 + 4, by * 2500 + 4, bz * 2500 + 4));
+        const t = H / CRAG_BAND, u = Math.min(1, Math.max(0, (fract(t) - 0.55) / 0.45));
+        liftEro += (Math.floor(t) + u * u * (3 - 2 * u) - t + 0.275) * CRAG_BAND * k * bandsK;
+      }
+      const blocksK = smoothstep(0.3, 0.6, steep) * (1 - smoothstep(0.25 / CRAG_INV, 0.5 / CRAG_INV, r.sp)) * (1 - 0.5 * layered);
+      if (blocksK > 0) liftEro += cragBlocks(bx, by, bz) * CRAG_AMP * k * blocksK;
     }
   }
   return liftC + liftEro;

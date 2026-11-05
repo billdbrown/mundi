@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { baseOf } from './ecology.ts';
-import { isDelta } from './deltas.ts';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -189,9 +188,8 @@ export class PlanetView {
       Promise.all(low).catch(() => {}).finally(() => {
         if (run !== this.gateRun) return;
         this.lowReady = true;
-        this.mapGate ??= this.compileMap();
-        // Then the other look's shaders (photo or map), so the first switch of layer is quick.
-        this.mapGate.then(() => this.compileOtherLook(run));
+        // The map's and the other look's shaders only once wanted (compileOthers).
+        if (this.wantOthers) this.compileOthers();
       });
     });
   }
@@ -351,7 +349,22 @@ export class PlanetView {
   private movedAt = 0;
   private lastView = new THREE.Vector4();
   private hurry = false;
-  hurryCompiles() { this.hurry = true; }
+  /**
+   * The flat map's and the other look's shaders compile only once wanted: a pointer over the layer
+   * or projection buttons (shell.ts), or a switch. Compiled straight after loading, they kept the
+   * GPU busy ~70 s more, and closing the tab mid-compile froze all of Chrome for up to ~18 s (the
+   * driver can't abandon a compile; 2026-11-04, scripts/closefreeze2.mjs).
+   */
+  private wantOthers = false;
+  private othersRun = 0;
+  private compileOthers() {
+    this.wantOthers = true;
+    if (!this.lowReady || this.othersRun === this.gateRun) return;
+    const run = this.othersRun = this.gateRun;
+    this.mapGate ??= this.compileMap();
+    this.mapGate.then(() => this.compileOtherLook(run));
+  }
+  hurryCompiles() { this.hurry = true; this.compileOthers(); }
   private settled(): Promise<void> {
     return new Promise((res) => {
       const check = () => (this.hurry || this.pendingMap || performance.now() - this.movedAt > 1500 ? res() : setTimeout(check, 100));
@@ -363,14 +376,14 @@ export class PlanetView {
   /** The whole planet's carved valleys (valleys.ts), on by default. */
   setValleys(on: boolean) { this.terrainShadow.setValleys(on); }
   /**
-   * The whole planet's carved valleys once worked out (valleys.ts), for the hex view: the carving
-   * channel alone, half floats, six faces of n x n. Null until they are in.
+   * The whole planet's carved valleys once worked out (valleys.ts), for the hex view: per texel
+   * the carving (r) and its local average (b), half floats, six faces of n x n. Null until in.
    */
   valleyCarve(): { n: number; half: Uint16Array } | null {
     const v = this.terrainShadow.valleys;
     if (!v.ready) return null;
-    const src = v.tex.image.data as Uint16Array, n = v.tex.image.width, half = new Uint16Array(6 * n * n);
-    for (let i = 0; i < half.length; i++) half[i] = src[i * 2];
+    const src = v.tex.image.data as Uint16Array, n = v.tex.image.width, half = new Uint16Array(6 * n * n * 2);
+    for (let i = 0; i < 6 * n * n; i++) { half[i * 2] = src[i * 4]; half[i * 2 + 1] = src[i * 4 + 2]; }
     return { n, half };
   }
   /** Resolves once the view draws for real (not the stand-in): the gate's first stage. */
@@ -666,14 +679,20 @@ export class PlanetView {
     return (this.groundCell = c);
   }
 
+  /** The ground as the patch draws it in direction p: the plain terrain less the valleys' carving. */
+  private drawnGround(p: THREE.Vector3) {
+    const l = p.length(), x = p.x / l, y = p.y / l, z = p.z / l, h = this.probe!.heightAt(x, y, z, SEA);
+    return Math.max(SEA, h - this.terrainShadow.valleys.carveAt(x, y, z, h - SEA));
+  }
+
   private applyTilt(d: number) {
     const s = (a: number, b: number) => THREE.MathUtils.smoothstep(d, a, b);
     // Keep a little clearance over the ground below, so you can skim valleys but not enter hills.
     const c = this.cellBelow();
     if (c >= 0 && this.surface) {
       const cp = this.virtualPos;   // (the carved valleys lower the ground: you can go down into them)
-      const carve = this.terrainShadow.valleys.carveAt(cp.x, cp.y, cp.z);
-      this.controls.minDistance = Math.max(SEA + this.floor + 0.001, Math.max(this.surface.centerH(c) - carve, SEA) + this.floor);
+      const top = this.surface.centerH(c), carve = this.terrainShadow.valleys.carveAt(cp.x, cp.y, cp.z, top - SEA);
+      this.controls.minDistance = Math.max(SEA + this.floor + 0.001, Math.max(top - carve, SEA) + this.floor);
     }
     // Tilt grows smoothly all the way down from 1.5 radii, most of it near the ground, up to
     // ~66°. The view pivots about the ground point at the middle of the screen, which stays put:
@@ -685,7 +704,7 @@ export class PlanetView {
     if (this.tiltActive) {
       const up = this.camera.position.clone().normalize();
       // (The ground as drawn: less the valleys' carving, which the patch carries as relief.)
-      const ground = this.probe ? Math.max(SEA, this.probe.heightAt(up.x, up.y, up.z, SEA) - this.terrainShadow.valleys.carveAt(up.x, up.y, up.z)) : SEA;
+      const ground = this.probe ? this.drawnGround(up) : SEA;
       const target = up.clone().multiplyScalar(ground);
       let north = new THREE.Vector3(0, 1, 0).addScaledVector(up, -up.y);
       if (north.lengthSq() < 1e-6) north = new THREE.Vector3(0, 0, -1).addScaledVector(up, up.z);
@@ -696,7 +715,7 @@ export class PlanetView {
         .addScaledVector(north, -Math.sin(this.tilt) * dist);
       // Keep clear of hills between the camera and its target.
       const l = pos.length();
-      const under = this.probe ? Math.max(SEA, this.probe.heightAt(pos.x, pos.y, pos.z, SEA) - this.terrainShadow.valleys.carveAt(pos.x, pos.y, pos.z)) : SEA;
+      const under = this.probe ? this.drawnGround(pos) : SEA;
       const clear = Math.min(0.0025, this.floor * 0.35);
       if (l < under + clear) pos.multiplyScalar((under + clear) / l);
       this.camera.position.copy(pos);
@@ -1195,6 +1214,7 @@ export class PlanetView {
     for (const f of this.forest) { this.planet.remove(f); f.dispose(); }
     this.terrain = this.water = this.gridLines = this.rivers = this.streams = undefined;
     this.dunePatch?.setTerrain(null);
+    this.dunePatch?.setSea(undefined);
     this.terrainShadow?.setTerrain(null);
     this.dunePatch?.setRivers([]);
     this.forest = [];
@@ -1224,6 +1244,7 @@ export class PlanetView {
       this.water = new THREE.Mesh(toGeometry(data.water), this.waterMat);
       this.water.renderOrder = 1;
       this.planet.add(this.water);
+      this.dunePatch.setSea(this.water);
     }
 
     this.forest = buildForest(data.trees);
@@ -1415,10 +1436,10 @@ export class PlanetView {
         // the water: 2026-11-03, Bill: the ribbon must not float over the ocean).
         if (this.probe && o.f <= 0.95) {
           const g0 = this.probe.heightAt(d[0], d[1], d[2], h);
-          h = Math.max(g0 + 0.0002, SEA + 0.00002);
+          h = Math.max(g0 + 0.0002, SEA + 0.0002);   // (the patch sinks it RIVER_SINK: at the sea's level)
         } else if (this.probe && this.probe.heightAt(d[0], d[1], d[2], h) < SEA + 0.0001) {
           // Ground at or under the sea (an estuary): on the sea's surface, still drawn.
-          h = SEA + 0.00002;
+          h = SEA + 0.0002;
         } else if (this.probe && o.h >= SEA && o.f > 0.5) {
           const hw = o.w;
           const g0 = this.probe.heightAt(d[0], d[1], d[2], h);
@@ -1548,52 +1569,6 @@ export class PlanetView {
       }
       cells.reverse();                       // source first, mouth (or junction) last
       drawPath(cells, junction);
-    }
-
-    // Deltas (deltas.ts): a fan of distributaries (2026-11-03; Bill: D was "a step in the right
-    // direction"). From a point on the landward side of each delta cell, channels fork two or three
-    // times as they run seaward, wandering a little, narrower at each fork, and end where the
-    // delta's ground goes under the sea (emit drops what is past the shore), each at its own mouth.
-    for (let x = 0; x < N; x++) {
-      if (!isDelta(w.water, w.elevation, x)) continue;
-      const ctr = center(x);
-      // Seaward: toward the sea neighbours, on the ground's tangent plane.
-      let sx = 0, sy = 0, sz = 0;
-      for (const n of g.neighbors[x]) if (w.water[n] === WATER_OCEAN) { sx += P[n * 3] - ctr[0]; sy += P[n * 3 + 1] - ctr[1]; sz += P[n * 3 + 2] - ctr[2]; }
-      const su = sx * ctr[0] + sy * ctr[1] + sz * ctr[2];
-      sx -= ctr[0] * su; sy -= ctr[1] * su; sz -= ctr[2] * su;
-      const sl = Math.hypot(sx, sy, sz);
-      if (sl < 1e-9) continue;
-      const S = [sx / sl, sy / sl, sz / sl];
-      const R = [ctr[1] * S[2] - ctr[2] * S[1], ctr[2] * S[0] - ctr[0] * S[2], ctr[0] * S[1] - ctr[1] * S[0]];
-      const at = (u: number, v: number) => unit(ctr[0] + S[0] * u + R[0] * v, ctr[1] + S[1] * u + R[1] * v, ctr[2] + S[2] * u + R[2] * v);
-      const main = w.river[x] === 2, h0 = s.centerH(x);
-      const levels = main ? 3 : 2;
-      const branch = (u: number, v: number, ang: number, len: number, lvl: number, wid: number, dep: number, key: number) => {
-        const cps: CP[] = [{ p: at(u, v), h: h0, w: wid, d: dep, river: true, cell: x }];
-        const STEPS = 3;
-        for (let i = 1; i <= STEPS; i++) {
-          ang += (hash01(key * 31 + i) - 0.5) * 0.6;
-          u += Math.cos(ang) * len / STEPS; v += Math.sin(ang) * len / STEPS;
-          cps.push({ p: at(u, v), h: h0, w: wid, d: dep, river: true, cell: x });
-        }
-        if (lvl + 1 < levels) {
-          emit(cps);
-          // Fork: two narrower channels, splayed either side.
-          const spread = 0.35 + 0.3 * hash01(key * 17 + 5);
-          branch(u, v, ang - spread, len * 0.7, lvl + 1, wid * 0.72, dep * 0.85, key * 2 + 1);
-          branch(u, v, ang + spread, len * 0.7, lvl + 1, wid * 0.72, dep * 0.85, key * 2 + 2);
-        } else {
-          // On out past the shore, fading into the sea.
-          u += Math.cos(ang) * len * 0.8; v += Math.sin(ang) * len * 0.8;
-          cps.push({ p: at(u, v), h: SEA - LIFT + 0.0002, w: wid * 1.3, d: MOUTH_DEPTH, river: true, cell: -1, f: 0 });
-          emit(cps);
-        }
-      };
-      const wid = widthOf(w.flow[x]) * 0.55, dep = depthOf(w.flow[x]) * 0.7;
-      const L = spacing * (main ? 0.2 : 0.24);
-      // Two first channels either side of seaward (the main river runs down the middle).
-      for (const side of [-1, 1]) branch(-spacing * 0.22, 0, side * (0.3 + 0.25 * hash01(x * 3 + side + 7)), L, 0, wid, dep, x * 8 + side + 3);
     }
 
     const mesh = (b: Buf) => {

@@ -14,6 +14,8 @@
  * its edge as the sea, so their valleys there were different ones.)
  */
 import * as THREE from 'three';
+import { MTN_CARVE } from './dunes.ts';
+import { RELIEF } from './surface.ts';
 import type { ValleyRequest, ValleyResult } from './valleyworker.ts';
 
 /**
@@ -44,6 +46,21 @@ export const VALLEY_GLSL = /* glsl */`
     else if (q.y >= q.z) { t = p.zx / q.y; f = p.y < 0.0 ? 3.0 : 2.0; }
     else { t = p.xy / q.z; f = p.z < 0.0 ? 5.0 : 4.0; }
     return vec3(texture(uValleys, vec3(t * 0.5 + 0.5, f)).rg, uEroOn);
+  }
+  /**
+   * The carving less its local average (valleyworker.ts): what the close-up patch cuts into the
+   * ground, so that on average the land stays at the plain terrain's height. Negative on ridges,
+   * which stand up a little where the valleys beside them go down.
+   */
+  float groundCut(vec3 p) {
+    if (uEroOn <= 0.0) return 0.0;
+    vec3 q = abs(p);
+    vec2 t; float f;
+    if (q.x >= q.y && q.x >= q.z) { t = p.yz / q.x; f = p.x < 0.0 ? 1.0 : 0.0; }
+    else if (q.y >= q.z) { t = p.zx / q.y; f = p.y < 0.0 ? 3.0 : 2.0; }
+    else { t = p.xy / q.z; f = p.z < 0.0 ? 5.0 : 4.0; }
+    vec4 v = texture(uValleys, vec3(t * 0.5 + 0.5, f));
+    return v.r - v.b;
   }
 `;
 
@@ -82,8 +99,8 @@ export class Valleys {
   constructor(u: { uValleys: { value: THREE.Texture | null }; uEroOn: { value: number }; uEroR: { value: number } }) {
     this.u = u;
     const n = VALLEY_N;
-    this.tex = new THREE.DataArrayTexture(new Uint16Array(n * n * 2 * 6), n, n, 6);
-    this.tex.format = THREE.RGFormat;
+    this.tex = new THREE.DataArrayTexture(new Uint16Array(n * n * 4 * 6), n, n, 6);
+    this.tex.format = THREE.RGBAFormat;
     this.tex.type = THREE.HalfFloatType;
     this.tex.minFilter = this.tex.magFilter = THREE.LinearFilter;
     this.tex.needsUpdate = true;
@@ -175,12 +192,15 @@ export class Valleys {
   }
 
   /**
-   * How far the valleys lower the ground at direction (x, y, z), as drawn now (0 until they have
-   * arrived): for the camera, which keeps its height above the ground it looks at. Nearest texel.
+   * How far the close-up patch lowers the ground at direction (x, y, z), hAbove its height above
+   * the sea on the plain terrain, as drawn now (0 until the valleys have arrived): for the camera,
+   * which keeps its height above the ground it looks at. Negative where the patch raises a ridge.
+   * As dunes.ts PATCH_BAKE_GLSL has it: the carving less its local average, deeper in the
+   * mountains, never below the sea. Nearest texel.
    */
-  carveAt(x: number, y: number, z: number): number {
+  carveAt(x: number, y: number, z: number, hAbove: number): number {
     const on = this.u.uEroOn.value;
-    if (on <= 0) return 0;
+    if (on <= 0 || hAbove <= 0) return 0;
     const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z), n = VALLEY_N;
     let u: number, v: number, f: number;
     if (ax >= ay && ax >= az) { u = y / ax; v = z / ax; f = x < 0 ? 1 : 0; }
@@ -188,7 +208,10 @@ export class Valleys {
     else { u = x / az; v = y / az; f = z < 0 ? 5 : 4; }
     const px = Math.min(n - 1, Math.max(0, Math.floor((u * 0.5 + 0.5) * n)));
     const py = Math.min(n - 1, Math.max(0, Math.floor((v * 0.5 + 0.5) * n)));
-    return THREE.DataUtils.fromHalfFloat((this.tex.image.data as Uint16Array)[((f * n + py) * n + px) * 2]) * on;
+    const d = this.tex.image.data as Uint16Array, i = ((f * n + py) * n + px) * 4;
+    const cut = THREE.DataUtils.fromHalfFloat(d[i]) - THREE.DataUtils.fromHalfFloat(d[i + 2]);
+    const t = Math.min(1, Math.max(0, (hAbove / RELIEF - 0.12) / 0.73)), highland = t * t * (3 - 2 * t);
+    return Math.min(cut * (1 + MTN_CARVE * highland), 0.9 * hAbove) * on;
   }
 
   /** Each frame: fade the whole planet's valleys in, once, over 1.5 s. */

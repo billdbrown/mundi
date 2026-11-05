@@ -14,6 +14,19 @@
  * forest; rabbits on open ground and forest edges; camels in desert; flocks of birds over
  * wetlands, grassland and coasts.
  *
+ * Birds (2026-11-04, Bill: "lone eagles around mountains, more flocks, more sizes and
+ * varieties"). Five shapes (songbird, raptor, gull, crane, goose) and three ways of flying:
+ * flocks that swirl (songbirds, parrots, egrets, flamingos, gulls); soaring, wide slow banked
+ * circles, mostly gliding (eagles over mountains and peaks, vultures circling together over
+ * savanna and desert, a lone hawk over open country); and skeins, a V that travels, its wingbeat
+ * rippling down the line (geese, cranes).
+ *
+ * Sea life (2026-11-04). Whales anywhere at sea, most in shallow water by coasts and islands and
+ * most of all along the hotspot chains: every ~30 s one comes up, rolls its back along the surface,
+ * blows and dives flukes-up, or now and then breaches, leaping half out. Dolphins in pods in warmer
+ * coastal water, each leaping in a low arc every couple of seconds. Seals hauled out on cold
+ * shores, penguin colonies on the coldest southern ones, set on the last dry ground before the sea.
+ *
  * Movement is a function of time, not state: a group's centre wanders along a sum of slow sines
  * about its home, and each animal keeps its place in the group, so nothing is simulated and
  * nothing drifts. Herds graze along; deer walk and stop; rabbits hop in bursts; flocks circle
@@ -52,6 +65,16 @@ function merge(parts: THREE.BufferGeometry[]) {
   g.computeVertexNormals();
   return g;
 }
+/** A flat polygon (a fan from its first point), seen from both sides. */
+function plate(pts: number[][]) {
+  const v: number[] = [];
+  for (let i = 1; i < pts.length - 1; i++) for (const k of [0, i, i + 1, 0, i + 1, i]) v.push(...pts[k]);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+  return g;
+}
+/** A wing (outline on the +x side) and its mirror. */
+const wings = (pts: number[][]) => [plate(pts), plate(pts.map(([x, y, z]) => [-x, y, z]))];
 /** A four-legged animal. */
 function quadruped(o: { leg: number; girth: number; neck: number; neckUp: number; hump?: number; antlers?: number; horns?: boolean; long?: number }) {
   const L = o.long ?? 1, top = o.leg + 0.12 * o.girth;   // (the body's middle: its belly just above the legs)
@@ -83,20 +106,78 @@ const SHAPES = {
     box(0.05, 0.34, 0.06, -0.055, 0.6, 0.17), box(0.05, 0.34, 0.06, 0.055, 0.6, 0.17),
     egg(0.07, 0.07, 0.07, 0, 0.24, -0.36),
   ]),
-  // A bird: body and two wings in a shallow V (flapping scales the V's height, see update).
-  bird: () => {
-    const wing = (s: number) => {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0.15, s * 0.5, 0.18, -0.05, 0, 0, -0.12, 0, 0, -0.12, s * 0.5, 0.18, -0.05, 0, 0, 0.15], 3));
-      return g;
-    };
-    return merge([egg(0.05, 0.05, 0.2, 0, 0, 0), wing(1), wing(-1)]);
-  },
+  // Birds: a body and wings raised in a shallow V (flapping scales the V's height, see update).
+  bird: () => merge([egg(0.05, 0.05, 0.2, 0, 0, 0), ...wings([[0, 0, 0.15], [0.5, 0.18, -0.05], [0, 0, -0.12]])]),
+  songbird: () => merge([egg(0.05, 0.05, 0.14, 0, 0, 0.02), ...wings([[0, 0, 0.07], [0.3, 0.1, 0.0], [0.28, 0.1, -0.06], [0, 0, -0.07]]), plate([[0, 0, -0.08], [0.05, 0, -0.22], [-0.05, 0, -0.22]])]),
+  // Broad wings with fingered tips and a fan tail: eagles, vultures, hawks.
+  raptor: () => merge([
+    egg(0.065, 0.055, 0.2, 0, 0, 0), egg(0.035, 0.035, 0.055, 0, 0.01, 0.21),
+    ...wings([[0, 0, 0.1], [0.42, 0.06, 0.08], [0.52, 0.07, 0.04], [0.54, 0.07, -0.06], [0.46, 0.06, -0.11], [0, 0, -0.1]]),
+    ...wings([[0.52, 0.07, 0.04], [0.66, 0.08, 0.04], [0.54, 0.07, 0.0]]),
+    ...wings([[0.54, 0.07, 0.0], [0.67, 0.08, -0.03], [0.54, 0.07, -0.04]]),
+    ...wings([[0.54, 0.07, -0.04], [0.63, 0.08, -0.08], [0.53, 0.07, -0.07]]),
+    plate([[0, 0, -0.12], [0.1, 0, -0.32], [-0.1, 0, -0.32]]),
+  ]),
+  // Long narrow wings bent in an M.
+  gull: () => merge([
+    egg(0.045, 0.045, 0.18, 0, 0, 0.02),
+    ...wings([[0, 0, 0.07], [0.24, 0.1, 0.05], [0.24, 0.1, -0.05], [0, 0, -0.07]]),
+    ...wings([[0.24, 0.1, 0.05], [0.62, 0.0, -0.1], [0.24, 0.1, -0.05]]),
+    plate([[0, 0, -0.1], [0.05, 0, -0.2], [-0.05, 0, -0.2]]),
+  ]),
+  // Neck out, legs trailing: cranes, egrets, flamingos.
+  heron: () => merge([
+    egg(0.06, 0.055, 0.17, 0, 0, 0),
+    limb([0, 0, 0.14], [0, 0.02, 0.42], 0.016), egg(0.028, 0.028, 0.05, 0, 0.02, 0.45), limb([0, 0.02, 0.48], [0, 0.015, 0.58], 0.008),
+    limb([-0.02, -0.01, -0.12], [-0.02, -0.02, -0.5], 0.009), limb([0.02, -0.01, -0.12], [0.02, -0.02, -0.5], 0.009),
+    ...wings([[0, 0, 0.1], [0.5, 0.06, 0.06], [0.6, 0.06, -0.03], [0.5, 0.06, -0.1], [0, 0, -0.1]]),
+  ]),
+  goose: () => merge([
+    egg(0.07, 0.06, 0.2, 0, 0, 0), limb([0, 0, 0.16], [0, 0.01, 0.36], 0.022), egg(0.032, 0.03, 0.06, 0, 0.01, 0.39),
+    ...wings([[0, 0, 0.09], [0.45, 0.07, 0.01], [0.48, 0.07, -0.05], [0, 0, -0.09]]),
+    plate([[0, 0, -0.14], [0.06, 0, -0.24], [-0.06, 0, -0.24]]),
+  ]),
+  // Sea life (2026-11-04). Swimmers are centred on the body (y = 0 is the middle, not the feet):
+  // they ride at and under the water's surface.
+  whale: () => merge([
+    egg(0.13, 0.11, 0.42, 0, 0, 0.06, 1), egg(0.1, 0.08, 0.2, 0, -0.005, 0.38, 1), limb([0, 0, -0.3], [0, 0.01, -0.52], 0.045),
+    ...wings([[0.04, 0, -0.5], [0.2, 0.02, -0.6], [0.12, 0.02, -0.53], [0, 0, -0.55]]),   // flukes
+    ...wings([[0.1, -0.05, 0.2], [0.3, -0.1, 0.06], [0.1, -0.05, 0.12]]),               // flippers
+    plate([[0, 0.09, -0.12], [0, 0.15, -0.2], [0, 0.08, -0.22]]),                        // dorsal fin
+  ]),
+  dolphin: () => merge([
+    egg(0.075, 0.075, 0.36, 0, 0, 0, 1), limb([0, -0.01, 0.34], [0, -0.02, 0.46], 0.025),
+    plate([[0, 0.06, 0.04], [0, 0.18, -0.1], [0, 0.06, -0.08]]),
+    ...wings([[0, 0, -0.34], [0.13, 0.01, -0.46], [0.05, 0.01, -0.4], [0, 0, -0.42]]),
+    ...wings([[0.05, -0.04, 0.12], [0.16, -0.08, 0.02], [0.05, -0.04, 0.06]]),
+  ]),
+  // A whale's blow: a column of spray, feet at the water.
+  spout: () => merge([egg(0.03, 0.22, 0.03, 0, 0.22, 0, 1), egg(0.13, 0.08, 0.13, 0, 0.44, 0, 1), egg(0.08, 0.06, 0.08, 0.07, 0.38, 0.03, 1), egg(0.08, 0.06, 0.08, -0.06, 0.39, -0.04, 1)]),
+  // Lying on the shore, head up a little.
+  seal: () => merge([
+    egg(0.14, 0.1, 0.42, 0, 0.1, 0, 1), egg(0.08, 0.075, 0.09, 0, 0.17, 0.44, 1),
+    ...wings([[0.03, 0.04, -0.38], [0.14, 0.02, -0.52], [0.02, 0.03, -0.46]]),
+    ...wings([[0.12, 0.05, 0.16], [0.22, 0.0, 0.08], [0.12, 0.04, 0.06]]),
+  ]),
+  // Standing: a tall body, head, beak, flippers held out a little.
+  penguin: () => merge([
+    egg(0.15, 0.34, 0.13, 0, 0.34, 0, 1), egg(0.085, 0.085, 0.09, 0, 0.74, 0.02, 1), limb([0, 0.73, 0.08], [0, 0.71, 0.17], 0.018),
+    ...wings([[0.14, 0.55, 0], [0.24, 0.25, 0.02], [0.15, 0.35, -0.02]]),
+    box(0.1, 0.03, 0.12, -0.06, 0.015, 0.05), box(0.1, 0.03, 0.12, 0.06, 0.015, 0.05),
+  ]),
 } as const;
 type Shape = keyof typeof SHAPES;
 
-type Behaviour = 'herd' | 'wander' | 'hop' | 'flock';
-interface Species { shape: Shape | Shape[]; colour: number; metres: number; act: Behaviour; group: [number, number] }
+type Behaviour = 'herd' | 'wander' | 'hop' | 'flock' | 'soar' | 'skein' | 'swim' | 'porpoise' | 'rest';
+interface Species {
+  shape: Shape | Shape[]; metres: number; act: Behaviour; group: [number, number];
+  /** One colour, or several: a group takes one (or, mixed, each bird its own). */
+  colour: number | number[]; mixed?: boolean;
+  /** Fliers: height over the ground, in body lengths. */
+  alt?: number;
+  /** Fliers: drawn this much bigger again (the big birds; height and range keep to the plain size). */
+  scale?: number;
+}
 const SPECIES = {
   deer:       { shape: ['deer', 'buck'], colour: 0x8a5a35, metres: 1.8, act: 'wander', group: [1, 3] },
   antelope:   { shape: ['deer', 'buck'], colour: 0xc29563, metres: 1.5, act: 'herd', group: [8, 24] },
@@ -108,13 +189,29 @@ const SPECIES = {
   rabbit:     { shape: 'rabbit', colour: 0xa3825c, metres: 0.8, act: 'hop', group: [2, 5] },
   hare:       { shape: 'rabbit', colour: 0xe6e6e2, metres: 0.9, act: 'hop', group: [1, 3] },
   bird:       { shape: 'bird', colour: 0x7a6e60, metres: 1.2, act: 'flock', group: [14, 40] },
-  gull:       { shape: 'bird', colour: 0xeeeeea, metres: 1.2, act: 'flock', group: [8, 24] },
+  gull:       { shape: 'gull', colour: [0xeeeeea, 0xd8dade], metres: 1.4, act: 'flock', group: [8, 24] },
+  songbird:   { shape: 'songbird', colour: [0x5a4a3a, 0x3a3836, 0x7a6244, 0x4a4a52], metres: 0.8, act: 'flock', group: [16, 44], alt: 14, scale: 1.2 },
+  parrot:     { shape: 'songbird', colour: [0xc8302a, 0x2f9a3e, 0x2a6fc0, 0xe2b020], mixed: true, metres: 1.4, act: 'flock', group: [5, 16], alt: 14, scale: 1.4 },
+  egret:      { shape: 'heron', colour: 0xf2f2ee, metres: 1.6, act: 'flock', group: [3, 10], alt: 10 },
+  flamingo:   { shape: 'heron', colour: [0xf08c8c, 0xf2a0a0], metres: 2.0, act: 'flock', group: [16, 44], alt: 9, scale: 1.3 },
+  eagle:      { shape: 'raptor', colour: [0x3f3126, 0x4d3c2c], metres: 3.6, act: 'soar', group: [1, 2], alt: 13, scale: 2 },
+  vulture:    { shape: 'raptor', colour: [0x2e2a27, 0x5a4a3c], metres: 3.2, act: 'soar', group: [3, 9], alt: 13, scale: 1.7 },
+  hawk:       { shape: 'raptor', colour: [0xa88a66, 0xbfa27c, 0x8e6c4a], metres: 1.6, act: 'soar', group: [1, 1], alt: 16, scale: 1.7 },
+  goose:      { shape: 'goose', colour: [0x6b655c, 0x8a8578], metres: 2.2, act: 'skein', group: [9, 25], alt: 14, scale: 1.4 },
+  crane:      { shape: 'heron', colour: [0x9c9c9a, 0xb8b8b4], metres: 2.6, act: 'skein', group: [5, 13], alt: 13, scale: 1.6 },
+  // Sea life. (scale: as for the big birds, drawn bigger again: at the plain size a whale showed as
+  // a sliver of back a few pixels long, and a leaping dolphin not at all. A whale is ~10 deer long.)
+  whale:      { shape: 'whale', colour: [0x3c4652, 0x4a4f57, 0x2f3740], metres: 15, act: 'swim', group: [1, 3], scale: 4 },
+  dolphin:    { shape: 'dolphin', colour: [0x6a7682, 0x7d8894], metres: 2.5, act: 'porpoise', group: [5, 14], scale: 3.5 },
+  seal:       { shape: 'seal', colour: [0x6b6258, 0x857a6c, 0x4f4a44], mixed: true, metres: 2.0, act: 'rest', group: [6, 20], scale: 1.5 },
+  penguin:    { shape: 'penguin', colour: [0x26292e, 0x30343a], metres: 1.0, act: 'rest', group: [20, 60], scale: 1.7 },
 } satisfies Record<string, Species>;
 type Kind = keyof typeof SPECIES;
 
 /** Groups a cell of this (base) biome may hold: [species, groups per cell (mean)]. */
-function residents(b: number, coast: boolean): [Kind, number][] {
-  const out: [Kind, number][] = [];
+function residents(raw: number, coast: boolean, temp: number, south: boolean): [Kind, number][] {
+  const warm = temp > 0.55;
+  const out: [Kind, number][] = [], b = baseOf(raw);
   switch (b) {
     case B.GRASSLAND: case B.PRAIRIE: out.push(['bison', 1.6], ['rabbit', 5], ['bird', 0.8], ['deer', 1]); break;
     case B.STEPPE: out.push(['bison', 0.8], ['antelope', 1], ['rabbit', 3], ['bird', 0.4]); break;
@@ -129,17 +226,57 @@ function residents(b: number, coast: boolean): [Kind, number][] {
     case B.SWAMP: case B.MARSH: case B.BOG: case B.FLOODPLAIN: case B.SALT_MARSH: case B.MANGROVE:
       out.push(['bird', 2], ['deer', 1.5]); break;
   }
+  // Birds, by the broad biome...
+  switch (b) {
+    case B.GRASSLAND: out.push(['songbird', 0.8], ['hawk', 0.4], ['goose', 0.15]); break;
+    case B.STEPPE: out.push(['songbird', 0.4], ['hawk', 0.4], ['eagle', 0.12]); break;
+    case B.SAVANNA: out.push(['songbird', 0.6], ['vulture', 0.5], ['hawk', 0.2]); break;
+    case B.TUNDRA: out.push(['goose', 0.5], ['crane', 0.2]); break;
+    case B.TAIGA: out.push(['songbird', 0.3], ['eagle', 0.08]); break;
+    case B.FOREST: case B.TEMPERATE_RAIN: out.push(['songbird', 0.6], ['hawk', 0.2]); break;
+    case B.DRY_FOREST: out.push(['songbird', 0.5], ['hawk', 0.3]); break;
+    case B.RAINFOREST: out.push(['parrot', 1.2], ['songbird', 0.5], ['hawk', 0.12]); break;
+    case B.DESERT: out.push(['vulture', 0.3], ['hawk', 0.2]); break;
+    case B.MOUNTAIN: out.push(['eagle', 0.5], ['vulture', 0.12]); break;
+    case B.PEAK: case B.ICE: out.push(['eagle', 0.3]); break;
+  }
+  // ...and the finer ones.
+  switch (raw) {
+    case B.SWAMP: case B.MARSH: case B.FLOODPLAIN: out.push(['egret', 1], ['crane', 0.4], ['goose', 0.5]); break;
+    case B.BOG: case B.SALT_MARSH: out.push(['goose', 0.6], ['crane', 0.3]); break;
+    case B.MANGROVE: out.push(['egret', 1], ['parrot', 0.5]); break;
+    case B.CANYONS: case B.BADLANDS: out.push(['vulture', 0.4], ['eagle', 0.2]); break;
+    case B.MONTANE_FOREST: out.push(['eagle', 0.25]); break;
+  }
+  if (warm && (raw === B.SALT_FLAT || raw === B.SALT_MARSH || raw === B.MANGROVE)) out.push(['flamingo', 0.5]);
   if (coast) out.push(['gull', 1.2]);
+  // Hauled out on cold shores: seals, and penguin colonies on the coldest southern ones.
+  if (coast && temp < 0.35) out.push(['seal', 0.7]);
+  if (coast && temp < 0.1 && south) out.push(['penguin', 0.8]);
+
+  return out;
+}
+
+/**
+ * Groups an ocean cell may hold. Whales anywhere, most in shallow water by coasts and islands,
+ * and most of all along the hotspot island chains; pods of dolphins in warmer coastal water.
+ */
+function seaResidents(raw: number, shore: boolean, hot: boolean, temp: number): [Kind, number][] {
+  if (raw === B.SEA_ICE) return [['whale', 0.04]];
+  const out: [Kind, number][] = [['whale', 0.06 + (shore ? 0.15 : 0) + (hot ? 0.5 : 0)]];
+  if (temp > 0.4 && (shore || hot)) out.push(['dolphin', 0.5]);
   return out;
 }
 
 interface Group {
   kind: Kind; shapes: Shape[]; n: number; size: number; colour: THREE.Color;
+  /** Fliers: the size their height and range go by (size less the species scale). */
+  lift: number;
   home: THREE.Vector3; e: THREE.Vector3; nth: THREE.Vector3;
   /** Wander: amplitudes and rates of the path's sines, phases. */
   amp: number; w1: number; w2: number; p: number[];
   /** Per animal: place in the group (x, z in body lengths), phase, size, shade, shape index. */
-  members: { x: number; z: number; ph: number; s: number; shade: number; shape: number }[];
+  members: { x: number; z: number; ph: number; s: number; shade: number; shape: number; col?: THREE.Color; rank: number }[];
   /** Where its middle was last drawn (for tests and tools). */
   at?: THREE.Vector3;
 }
@@ -152,7 +289,8 @@ export class Fauna {
   private cells = new Map<number, Group[]>();
   private near: number[] = [];
   private nearKey = -1;
-  private size = 8;
+  private hot = new Set<number>();
+  private size = 6;   // times their proportion with the trees (Bill picked 6x, 2026-11-03)
 
   constructor() {
     for (const s of Object.keys(SHAPES) as Shape[]) {
@@ -171,6 +309,17 @@ export class Fauna {
   setWorld(w: World | undefined, heightAt: ((x: number, y: number, z: number) => number) | null) {
     this.world = w;
     this.heightAt = heightAt;
+    // Ocean cells within two of a hotspot chain's volcanoes (whales gather there).
+    this.hot.clear();
+    if (w) {
+      let ring = w.hotspots.volcanoes.map((v) => v.cell);
+      for (const c of ring) this.hot.add(c);
+      for (let k = 0; k < 2; k++) {
+        const next: number[] = [];
+        for (const c of ring) for (const n of w.grid.neighbors[c]) if (!this.hot.has(n)) { this.hot.add(n); next.push(n); }
+        ring = next;
+      }
+    }
     this.cells.clear();
     this.nearKey = -1;
   }
@@ -185,7 +334,9 @@ export class Fauna {
     if (hit) return hit;
     const w = this.world!, g = w.grid, P = g.centers, out: Group[] = [];
     this.cells.set(c, out);
-    if (w.water[c] !== WATER_LAND || w.biome[c] === B.ICE || w.biome[c] === B.PEAK) return out;
+    const sea = w.water[c] === WATER_OCEAN;
+    if (!sea && w.water[c] !== WATER_LAND) return out;
+    const bare = w.biome[c] === B.ICE || w.biome[c] === B.PEAK;   // (only birds, over ice and peaks)
     const rng = makeRng(w.params.seed * 977 + c * 131 + 5);
     const coast = g.neighbors[c].some((n) => w.water[n] === WATER_OCEAN);
     const spacing = Math.sqrt((4 * Math.PI) / g.count);
@@ -194,26 +345,49 @@ export class Fauna {
     if (e.lengthSq() < 1e-8) e.set(1, 0, 0);
     e.normalize();
     const nth = new THREE.Vector3().crossVectors(centre, e);
-    for (const [kind, mean] of residents(baseOf(w.biome[c]), coast)) {
+    const shallow = (b: number) => b === B.SHALLOWS || b === B.REEF || b === B.LAGOON || b === B.KELP;
+    const list = sea
+      ? seaResidents(w.biome[c], shallow(w.biome[c]) || g.neighbors[c].some((n) => w.water[n] === WATER_LAND), this.hot.has(c), w.temperature[c])
+      : residents(w.biome[c], coast, w.temperature[c], centre.y < 0);
+    for (const [kind, mean] of list) {
       const sp: Species = SPECIES[kind];
+      if (bare && sp.act !== 'soar' && sp.act !== 'rest') continue;
+      if (coast && (kind === 'songbird' || kind === 'parrot')) continue;   // (land birds: their flocks would wander out to sea)
       const groups = Math.floor(mean + rng());
       for (let k = 0; k < groups; k++) {
         const shapes = Array.isArray(sp.shape) ? sp.shape : [sp.shape];
-        const home = centre.clone().addScaledVector(e, (rng() - 0.5) * spacing * 0.9).addScaledVector(nth, (rng() - 0.5) * spacing * 0.9).normalize();
+        let home = centre.clone().addScaledVector(e, (rng() - 0.5) * spacing * 0.9).addScaledVector(nth, (rng() - 0.5) * spacing * 0.9).normalize();
+        // Shore animals: on the beach, the last dry ground on the way to a neighbouring sea cell.
+        if (sp.act === 'rest' && this.heightAt) {
+          const seas = g.neighbors[c].filter((n) => w.water[n] === WATER_OCEAN);
+          const n = seas[Math.floor(rng() * seas.length)], to = new THREE.Vector3(P[n * 3], P[n * 3 + 1], P[n * 3 + 2]), q = new THREE.Vector3();
+          for (let k = 0; k <= 32; k++) {
+            q.copy(home).lerp(to, k / 32).normalize();
+            if (this.heightAt(q.x, q.y, q.z) <= SEA + 2e-5) break;
+            if (k > 0) home = q.clone();
+          }
+        }
         const n = sp.group[0] + Math.floor(rng() * (sp.group[1] - sp.group[0] + 1));
         // Sizes drawn closer together than life (as the square root, about a deer's 1.8 m), so
         // rabbits can be seen and bison aren't giants beside them.
         const size = Math.sqrt(sp.metres * 1.8) * METRE * this.size;
-        const spread = sp.act === 'flock' ? 2.2 : sp.act === 'herd' ? 1.4 : 3;
+        const spread = sp.act === 'flock' ? 2.2 : sp.act === 'herd' ? 1.4 : sp.act === 'rest' ? 1.1 : sp.act === 'porpoise' ? 1.6 : 3;
+        const cols = Array.isArray(sp.colour) ? sp.colour : [sp.colour];
+        const groupCol = cols[Math.floor(rng() * cols.length)];
         const members = Array.from({ length: n }, (_, i) => {
-          // Herds and flocks: packed round the middle; others: scattered a little.
-          const r = Math.sqrt(rng()) * Math.sqrt(n) * spread, a = rng() * Math.PI * 2;
-          return { x: r * Math.cos(a), z: r * Math.sin(a), ph: rng() * 100, s: 0.85 + 0.3 * rng(), shade: 0.8 + 0.35 * rng(), shape: i === 0 || rng() < 0.3 ? shapes.length - 1 : 0 };
+          // Herds and flocks: packed round the middle; others: scattered a little. A skein flies
+          // in a V behind its leader.
+          const r = Math.sqrt(rng()) * Math.sqrt(n) * spread, a = rng() * Math.PI * 2, k = Math.ceil(i / 2);
+          const [x, z] = sp.act === 'skein' ? [(i % 2 ? -1 : 1) * k * 1.2, -k * 1.0] : [r * Math.cos(a), r * Math.sin(a)];
+          return {
+            x, z, ph: rng() * 100, s: 0.85 + 0.3 * rng(), shade: 0.8 + 0.35 * rng(), shape: i === 0 || rng() < 0.3 ? shapes.length - 1 : 0,
+            col: sp.mixed ? new THREE.Color(cols[Math.floor(rng() * cols.length)]) : undefined, rank: k,
+          };
         });
         out.push({
-          kind, shapes: [...shapes], n, size, colour: new THREE.Color(sp.colour), home, e, nth,
-          // Range: herds and deer ~30 body lengths; flocks circle wider, higher up.
-          amp: (sp.act === 'flock' ? 40 : sp.act === 'hop' ? 12 : 30) * size,
+          kind, shapes: [...shapes], n, size: size * (sp.scale ?? 1), lift: size, colour: new THREE.Color(groupCol), home, e, nth,
+          // Range: herds and deer ~30 body lengths; flocks circle wider, higher up; skeins travel.
+          amp: (sp.act === 'flock' ? 40 : sp.act === 'hop' ? 12 : sp.act === 'skein' ? 90 : sp.act === 'soar' ? 25 : sp.act === 'swim' ? 60 : sp.act === 'porpoise' ? 50 : sp.act === 'rest' ? 0 : 30) * size,
           w1: 0.004 + 0.006 * rng(), w2: 0.011 + 0.01 * rng(), p: [rng() * 6.3, rng() * 6.3, rng() * 6.3, rng() * 6.3],
           members,
         });
@@ -256,7 +430,7 @@ export class Fauna {
     for (const cellId of this.near) {
       for (const g of this.groupsOf(cellId)) {
         if (g.home.dot(ground) < cosView) continue;
-        const act = SPECIES[g.kind].act;
+        const sp: Species = SPECIES[g.kind], act = sp.act, flier = act === 'flock' || act === 'soar' || act === 'skein';
         // The group's path: where its middle is at time s, and which way it is going.
         const path = (s: number, out: THREE.Vector3) => {
           const a = g.amp, x = a * (Math.sin(g.w1 * s + g.p[0]) + 0.6 * Math.sin(g.w2 * s + g.p[1])),
@@ -264,7 +438,7 @@ export class Fauna {
           return out.copy(g.home).addScaledVector(g.e, x).addScaledVector(g.nth, z);
         };
         // Deer and camels walk and stop; others keep going (flocks fly faster).
-        const pace = act === 'flock' ? 12 : act === 'wander' ? 2.5 : 1.6;
+        const pace = act === 'flock' ? 12 : act === 'skein' ? 18 : act === 'soar' ? 3 : act === 'wander' ? 2.5 : act === 'swim' ? 1.5 : act === 'porpoise' ? 9 : act === 'rest' ? 0 : 1.6;
         let s = t * pace;
         if (act === 'wander') { const T = 40, k = Math.floor(t / T), f = (t / T) - k; s = (k + smooth(0.55, 1, f)) * T * pace; }
         path(s, centre);
@@ -286,32 +460,108 @@ export class Fauna {
             hop = moving && f < 0.6 ? Math.abs(Math.sin(Math.PI * (hopF - hk))) * 0.55 : 0;
           }
           // Where this one is: the group's middle plus its place, turned to the heading.
-          const mid = act === 'hop' ? path(ms + a.ph * 7, pos).clone() : centre;
-          const heading = act === 'hop' ? path(ms + a.ph * 7 + 0.5, fwd).sub(mid) : vel.clone();
+          let mid = act === 'hop' ? path(ms + a.ph * 7, pos).clone() : centre;
+          let heading = act === 'hop' ? path(ms + a.ph * 7 + 0.5, fwd).sub(mid) : vel.clone();
+          let ring: THREE.Vector3 | null = null;
+          if (act === 'soar') {
+            // Its own circle round the group's drifting middle: wide, slow, the same way round.
+            const R = 9 + 7 * hash01(a.ph * 13.1), ang = (t * 2.2) / R + a.ph;
+            ring = centre;
+            mid = centre.clone().addScaledVector(g.e, Math.cos(ang) * R * g.lift).addScaledVector(g.nth, Math.sin(ang) * R * g.lift);
+            heading = g.e.clone().multiplyScalar(-Math.sin(ang)).addScaledVector(g.nth, Math.cos(ang));
+          }
           up.copy(mid).normalize();
           heading.addScaledVector(up, -heading.dot(up));
           if (heading.lengthSq() < 1e-24) heading.copy(g.e);
           heading.normalize();
           side.crossVectors(up, heading);
           // Each animal's own small drift and heading wobble (grazing animals face every way).
-          const wob = act === 'flock' ? 0.15 : act === 'herd' ? 0.6 : 0.25;
-          const yaw = wob * Math.sin(t * 0.05 + a.ph);
-          const dx = (act === 'hop' ? 0 : a.x) + 0.6 * Math.sin(t * 0.1 + a.ph), dz = (act === 'hop' ? 0 : a.z) + 0.6 * Math.cos(t * 0.08 + a.ph * 1.3);
+          const wob = act === 'flock' ? 0.15 : act === 'herd' ? 0.6 : act === 'soar' || act === 'swim' ? 0 : act === 'skein' || act === 'porpoise' ? 0.04 : 0.25;
+          // (Resting animals face every way and keep to it.)
+          const yaw = act === 'rest' ? a.ph : wob * Math.sin(t * 0.05 + a.ph);
+          const own = act === 'hop' || act === 'soar' ? 0 : 1;
+          const drift = act === 'skein' ? 0.15 : act === 'rest' ? (g.kind === 'penguin' ? 0.3 : 0) : act === 'swim' ? 0 : 0.6;
+          let dx = own * a.x + drift * Math.sin(t * 0.1 + a.ph), dz = own * a.z + drift * Math.cos(t * 0.08 + a.ph * 1.3);
+          // Flocks swirl and stretch about their middle (songbirds the most: a murmuration).
+          if (act === 'flock') {
+            const sw = g.kind === 'songbird' ? 2.5 : 1.2;
+            dx += sw * Math.sin(t * 0.6 + a.ph + a.z * 0.15);
+            dz += sw * Math.cos(t * 0.5 + a.ph * 1.7 + a.x * 0.15);
+          }
           pos.copy(mid).addScaledVector(side, dx * g.size).addScaledVector(heading, dz * g.size).normalize();
           fwd.copy(heading).multiplyScalar(Math.cos(yaw)).addScaledVector(side, Math.sin(yaw));
           side.crossVectors(up.copy(pos), fwd).normalize();
           fwd.crossVectors(side, up).normalize();
           let r = h(pos.x, pos.y, pos.z);
-          if (r <= SEA + 1e-5 && act !== 'flock') continue;     // nothing walks on water
-          if (act === 'flock') {
-            r = Math.max(r, SEA) + g.size * (26 + 6 * Math.sin(t * 0.3 + a.ph));
-            flap = Math.cos(t * (9 + 3 * hash01(i)) + a.ph);
+          const swimmer = act === 'swim' || act === 'porpoise';
+          if (swimmer) {
+            if (r > SEA) continue;                      // nothing swims on land
+            // Height of the body's middle against the water (body lengths) and its pitch (nose up +).
+            let y = -1, pitch = 0, blow = 0;
+            if (act === 'swim') {
+              // Every ~30 s a whale comes up: its back rolls along the surface, it blows, then
+              // dives with its flukes raised. Now and then it breaches instead, leaping half out.
+              const T = 28, tt = t + a.ph * 3, k = Math.floor(tt / T), u = (tt / T - k) / 0.4;
+              if (u < 1.15) {
+                if (hash01(k * 13 + a.ph) < 0.3) {
+                  if (u < 1) { y = -0.35 + 1.15 * Math.sin(Math.PI * u); pitch = 1.2 * Math.cos(Math.PI * u); }
+                } else {
+                  y = 0.02 - 0.34 * (1 - smooth(0, 0.25, u)) - 0.1 * smooth(0.8, 1, u) - 0.4 * smooth(1, 1.15, u);
+                  pitch = 0.15 * (1 - smooth(0, 0.3, u)) - 0.7 * smooth(0.7, 1, u);
+                  if (u > 0.15 && u < 0.45) blow = Math.sin((Math.PI * (u - 0.15)) / 0.3);
+                }
+              }
+            } else {
+              // Dolphins: each leaps clear in a low arc every couple of seconds.
+              const T = 2.6, tt = t + a.ph, v = (tt / T - Math.floor(tt / T)) / 0.5;
+              if (v < 1) { y = -0.2 + 0.65 * Math.sin(Math.PI * v); pitch = 0.9 * Math.cos(Math.PI * v); }
+            }
+            // Nothing above the water: not drawn (the flukes count, raised by a nose-down pitch).
+            if (y + 0.55 * Math.max(0, -Math.sin(pitch)) + 0.5 * Math.max(0, Math.sin(pitch)) < -0.12) continue;
+            if (blow > 0) {
+              const sm = this.meshes.get('spout')!, sj = counts.get('spout') ?? 0;
+              if (sj < MAX_PER_SHAPE) {
+                const head = pos.clone().addScaledVector(fwd, 0.3 * L).normalize(), Ls = L * 0.9;
+                const sUp = head.clone(), sSide = new THREE.Vector3().crossVectors(sUp, fwd).normalize(), sFwd = new THREE.Vector3().crossVectors(sSide, sUp);
+                m.makeBasis(sSide.multiplyScalar(Ls * (0.6 + 0.4 * blow)), sUp.multiplyScalar(Ls * blow), sFwd.multiplyScalar(Ls * (0.6 + 0.4 * blow)));
+                m.setPosition(head.multiplyScalar(SEA));
+                sm.setMatrixAt(sj, m);
+                sm.setColorAt(sj, c.setRGB(0.92, 0.94, 0.96));
+                counts.set('spout', sj + 1);
+              }
+            }
+            if (pitch !== 0) {
+              const cp = Math.cos(pitch), sn = Math.sin(pitch), f2 = fwd.clone().multiplyScalar(cp).addScaledVector(up, sn);
+              up.multiplyScalar(cp).addScaledVector(fwd, -sn);
+              fwd.copy(f2);
+            }
+            r = SEA + y * L;
+          } else if (r <= SEA + 1e-5 && !flier) continue;     // nothing walks on water
+          if (flier) {
+            const alt = sp.alt ?? 26;
+            // (A skein rises and falls together, so the V holds.)
+            r = Math.max(r, SEA) + g.lift * alt * (1 + 0.2 * Math.sin(t * (act === 'soar' ? 0.08 : 0.3) + (act === 'skein' ? g.p[0] : a.ph)));
+            if (act === 'soar') {
+              // Mostly gliding, wings set; now and then a few slow beats.
+              const T = 9, k = Math.floor((t + a.ph) / T), f = (t + a.ph) / T - k;
+              flap = hash01(k * 17 + a.ph) < 0.3 && f < 0.25 ? Math.cos((f / 0.25) * Math.PI * 6) : 1;
+              // Banked into the turn.
+              if (ring) {
+                const inward = ring.clone().sub(pos);
+                inward.addScaledVector(up, -inward.dot(up)).normalize();
+                up.addScaledVector(inward, 0.4).normalize();
+                side.crossVectors(up, fwd).normalize();
+                fwd.crossVectors(side, up).normalize();
+              }
+            } else if (act === 'skein') flap = Math.cos(t * 4.5 - a.rank * 0.7);   // the beat runs down the V
+            else flap = Math.cos(t * ((g.kind === 'songbird' || g.kind === 'parrot' ? 15 : 9) + 4 * hash01(i)) + a.ph);
           } else r += hop * L;
           pos.multiplyScalar(r);
           m.makeBasis(side.multiplyScalar(L), up.multiplyScalar(L * flap), fwd.multiplyScalar(L));
           m.setPosition(pos);
           mesh.setMatrixAt(j, m);
-          c.copy(g.colour).multiplyScalar(a.shade);
+          // (Birds keep their colour nearer: a flamingo or parrot shaded 0.8 turns muddy.)
+          c.copy(a.col ?? g.colour).multiplyScalar(flier && g.kind !== 'bird' ? 0.9 + 0.3 * (a.shade - 0.8) : a.shade);
           mesh.setColorAt(j, c);
           counts.set(shape, j + 1);
         }

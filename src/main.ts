@@ -8,6 +8,7 @@ import type { HistoryRequest, HistoryResult } from './historyWorker.ts';
 import type { History } from './civ.ts';
 import { gameData, exportJSON, RESOURCE_NAMES, type GameData } from './gamedata.ts';
 import { kindLabel, kindOf, mountShell, planetName, PRESETS, type Lens } from './shell.ts';
+import { NAME_DECIDES, paramsOf, findName, dialsOfParams } from './namedworld.ts';
 import { nameSeed, parseSeed, randomName } from './seedname.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -15,11 +16,26 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const view = new PlanetView($('view'));
 /** The planet's name, which is also its seed in the URL. Null for a world given by number. */
 let worldName: string | null = randomName();
-let params: WorldParams = { ...DEFAULT_PARAMS, seed: nameSeed(worldName) };
+/** The settings a name gives: its own under the name-decides trial (namedworld.ts), else the defaults. */
+const named = (name: string | null, seed: number): WorldParams =>
+  name && NAME_DECIDES ? { ...paramsOf(name), seed } : { ...DEFAULT_PARAMS, seed };
+let params: WorldParams = named(worldName, nameSeed(worldName));
 /** A new named world, optionally with other settings. */
 function newWorld(p: Partial<WorldParams> = {}) {
+  if (NAME_DECIDES) {
+    // A kind: a name that lands near it. Plain New world: near the kind on screen, if it is one.
+    const kind = Object.keys(p).length ? { ...DEFAULT_PARAMS, ...p } : kindOf(params) ? params : null;
+    worldName = findName(kind ? dialsOfParams(kind) : null, 0.1);
+    params = named(worldName, nameSeed(worldName));
+    return;
+  }
   worldName = randomName();
   params = { ...params, ...p, seed: nameSeed(worldName) };
+}
+/** Create a world (name-decides trial): a name whose dials match these. */
+function createWorld(dials: number[]) {
+  worldName = findName(dials, 0.06);
+  params = named(worldName, nameSeed(worldName));
 }
 const displayName = () => worldName ?? planetName(params.seed);
 let viewOpts: ViewOptions = { ...DEFAULT_VIEW };
@@ -32,8 +48,6 @@ let timings = { gen: 0, mesh: 0, clouds: 0 };
  * life and trees ~5x, where at Earth's 6,371 km peaks were 83 km and trees 1-2 km.
  */
 let radiusKm = 640;
-/** The link as opened, before the world's own settings rewrite it (the animal trials read it). */
-const openedHash = new URLSearchParams(location.hash.slice(1));
 let game: GameData | null = null;
 /** Site name per cell, for the hover readout. */
 let siteAt = new Map<number, string>();
@@ -160,7 +174,8 @@ const DEFAULT_LENS: Lens = 'earth', DEFAULT_RADIUS = 640;
 function readHash() {
   const h = new URLSearchParams(location.hash.slice(1));
   const s = parseSeed(h.get('seed') ?? '');
-  if (s) { worldName = s.name; params.seed = s.seed; }
+  if (s) { worldName = s.name; params = NAME_DECIDES ? named(s.name, s.seed) : { ...params, seed: s.seed }; }
+  // (Settings spelled out in the link still win: older links and claims keep their planet.)
   const kind = PRESETS.find((p) => p.id === h.get('kind'));
   if (kind) params = { ...params, ...kind.p };
   for (const k of SETTINGS) {
@@ -178,9 +193,12 @@ const same = (a: number, b: number) => Math.abs(a - b) < 1e-9;
 function writeHash() {
   const h = new URLSearchParams();
   h.set('seed', worldName ? worldName.toLowerCase() : String(params.seed));
-  if (SETTINGS.some((k) => !same(params[k], DEFAULT_PARAMS[k]))) {
+  // Under the name-decides trial, settings are written only where they differ from the name's own.
+  const base = named(worldName, params.seed);
+  if (NAME_DECIDES && SETTINGS.every((k) => same(params[k], base[k]))) { /* the name says it all */ }
+  else if (SETTINGS.some((k) => !same(params[k], DEFAULT_PARAMS[k]))) {
     // Earthlike is the defaults; any other kind is named rather than spelled out.
-    const kind = kindOf(params);
+    const kind = kindOf(params, true);
     if (kind) h.set('kind', kind.id);
     else for (const k of SETTINGS) if (!same(params[k], DEFAULT_PARAMS[k])) h.set(k, String(+params[k].toFixed(4)));
   }
@@ -232,7 +250,7 @@ for (const [k, fmt] of sliders) {
 }
 $<HTMLInputElement>('seed').addEventListener('change', (e) => {
   const s = parseSeed((e.target as HTMLInputElement).value);
-  if (s) { worldName = s.name; params.seed = s.seed; }
+  if (s) { worldName = s.name; params = NAME_DECIDES ? named(s.name, s.seed) : { ...params, seed: s.seed }; }
   syncInputs();
   if (s) request();
 });
@@ -458,6 +476,7 @@ const shell = mountShell({
   params: () => params,
   setParams: (p) => { params = { ...params, ...p }; syncInputs(); request(); },
   newWorld: (p) => { newWorld(p); syncInputs(); request(); },
+  create: (dials) => { createWorld(dials); syncInputs(); request(); },
   name: displayName,
   view: () => viewOpts,
   setView: (o) => { const r = setView(o); syncInputs(); return r; },
@@ -482,7 +501,7 @@ request();
 // writes use replaceState, which doesn't fire this.)
 window.addEventListener('hashchange', () => {
   worldName = randomName();
-  params = { ...DEFAULT_PARAMS, seed: nameSeed(worldName) };
+  params = named(worldName, nameSeed(worldName));
   readHash();
   syncInputs();
   shell.applyLens(lens, false);
@@ -490,38 +509,8 @@ window.addEventListener('hashchange', () => {
 });
 
 // (Trial switches, 2026-11-02: B finer biomes, D river deltas, S peak snow and V whole-planet
-// valleys were all locked in; the keys and their label are gone. &ecology=0 / &deltas=0 still work.)
+// valleys were all locked in; the keys and their label are gone. &ecology=0 still works. River deltas
+// were dropped 2026-11-04: every mouth ends the same way, render.ts drawPath.)
 
-// TEMPORARY (2026-11-03): animal trials, judged by eye. A: animal size, times their proportion
-// with the trees (fauna.ts; 0 hides them). G: how low the camera comes. Kept in the link
-// (&fauna=, &floor=). Remove once decided.
-{
-  const SIZES = [4, 6, 8, 12, 16, 0];
-  const FLOORS: [number, string][] = [[0.007, 'high (as now)'], [0.0025, 'low'], [0.0008, 'ground']];
-  const label = document.createElement('div');
-  label.className = 'ui';   // hidden in screenshots (body.capture .ui)
-  label.style.cssText = 'position:fixed;right:16px;top:84px;padding:6px 10px;border-radius:8px;background:rgba(10,14,22,.78);color:#dfe6ef;font:12px/1.5 system-ui;pointer-events:none;z-index:50;white-space:pre';
-  document.body.appendChild(label);
-  const state = { fauna: openedHash.has('fauna') ? Number(openedHash.get('fauna')) : 8, floor: Number(openedHash.get('floor')) || 0.007 };
-  const apply = () => {
-    const { fauna: size, floor } = state;
-    view.fauna.setSize(size);
-    view.setFloor(floor);
-    const fl = FLOORS.find(([f]) => f === floor)?.[1] ?? String(floor);
-    label.textContent = ['Trials (press the key):', `A  Animal size: ${size ? size + 'x' : 'off'}`, `G  Camera floor: ${fl}`].join(String.fromCharCode(10));
-  };
-  const set = (k: 'fauna' | 'floor', v: number) => {
-    state[k] = v;
-    const h = new URLSearchParams(location.hash.slice(1));
-    h.set(k, String(v));
-    history.replaceState(null, '', '#' + h.toString());
-    apply();
-  };
-  apply();
-  window.addEventListener('keydown', (e) => {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.ctrlKey || e.metaKey || e.altKey) return;
-    const k = e.key.toLowerCase();
-    if (k === 'a') set('fauna', SIZES[(SIZES.indexOf(view.fauna.getSize()) + 1) % SIZES.length]);
-    else if (k === 'g') set('floor', FLOORS[(FLOORS.findIndex(([f]) => f === view.getFloor()) + 1) % FLOORS.length][0]);
-  });
-}
+// (Animal trials, 2026-11-03: Bill picked size 6x and the high camera floor, 0.007; the A and G
+// keys and their label are gone.)

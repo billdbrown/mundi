@@ -12,7 +12,8 @@ import { gameData } from './gamedata.ts';
 import { halfToFloat } from './relief.ts';
 import type { ValleyField } from './relief.ts';
 
-/** The planet's carved valleys for a world (relief.ts), sent once they are worked out. */
+/** The planet's carved valleys for a world (relief.ts), sent once they are worked out: per
+ * texel the carving and its local average, half floats (render.ts valleyCarve). */
 export interface ValleyJob { kind: 'valleys'; params: WorldParams; n: number; half: Uint16Array }
 
 export interface HexJob {
@@ -39,7 +40,9 @@ const buffers = (m: LocalMap) => [m.heights.buffer, m.colors.buffer, m.base.buff
 self.onmessage = (e: MessageEvent<HexJob | ValleyJob>) => {
   if (e.data.kind === 'valleys') {
     valleyKey = JSON.stringify(e.data.params);
-    valleys = { n: e.data.n, carve: halfToFloat(e.data.half) };
+    const f = halfToFloat(e.data.half), T = f.length / 2, carve = new Float32Array(T), cut = new Float32Array(T);
+    for (let i = 0; i < T; i++) { carve[i] = f[i * 2]; cut[i] = f[i * 2] - f[i * 2 + 1]; }
+    valleys = { n: e.data.n, carve, cut };
     kept.clear();   // prefetched hexes were built without them
     return;
   }

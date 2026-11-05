@@ -118,8 +118,8 @@ export function mountClaims(app: App, share: HTMLElement, toast: (msg: string) =
   const panel = document.createElement('div');
   panel.className = 'share-panel';
   panel.hidden = true;
+  // Claiming first, then the link (2026-11-04, Bill: the button should be claim-forward).
   panel.innerHTML = `
-    <button class="sp-copy" id="sp-copy">⧉ Copy link to this planet</button>
     <section class="sp-claim">
       <h4 id="sp-title"></h4>
       <p class="sp-status" id="sp-status"></p>
@@ -130,6 +130,7 @@ export function mountClaims(app: App, share: HTMLElement, toast: (msg: string) =
       <div class="sp-ts" id="sp-ts"></div>
       <div class="sp-acts" id="sp-acts"></div>
     </section>
+    <button class="sp-copy" id="sp-copy">⧉ Copy link to this planet</button>
     <section class="sp-feed">
       <h4>Recently claimed</h4>
       <div class="sp-grid" id="sp-grid"><p class="sp-quiet">…</p></div>
@@ -175,7 +176,11 @@ export function mountClaims(app: App, share: HTMLElement, toast: (msg: string) =
     $('sp-title').textContent = name;
     const form = $('sp-form'), status = $('sp-status'), acts = $('sp-acts');
     acts.replaceChildren();
-    badge.hidden = !current;
+    // The tag beside the kind of world, and the button: both say whether it can be claimed.
+    badge.hidden = current === undefined;
+    badge.classList.toggle('unclaimed', current === null);
+    const yours = !!current && current.tag === mine;
+    share.textContent = current === null ? '☆ Claim this world' : yours ? '★ Yours' : '⤴ Share';
     if (current === undefined) {
       form.hidden = true;
       status.textContent = world ? 'Claims are unavailable right now.' : '';
@@ -183,11 +188,12 @@ export function mountClaims(app: App, share: HTMLElement, toast: (msg: string) =
     }
     if (current === null) {
       form.hidden = false;
+      badge.textContent = '☆ Unclaimed';
+      badge.title = 'Nobody has claimed this world yet: claim it';
       status.textContent = 'Nobody has claimed this world. Claim it to make it yours and add it to the list below.';
       return;
     }
     form.hidden = true;
-    const yours = current.tag === mine;
     const same = current.link === worldLink();
     badge.textContent = `★ Claimed by ${current.owner}`;
     badge.title = same ? `Claimed ${ago(current.at)}` : `${current.owner} claimed this name with other settings`;

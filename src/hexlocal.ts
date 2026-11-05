@@ -376,10 +376,12 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   const owner = new Int16Array(N);
   const oceanW = new Float32Array(N);
   const groundR = new Float32Array(N), waterR = new Float32Array(N), lakeAt = new Uint8Array(N), iceV = new Float32Array(N);
-  /** What snow judges height by, less the ground (radians): the planet's sky.ts takes the valleys'
-   * carving back off and counts only VALLEY_SNOW (0.45) of it, so a carved range keeps its snow. */
-  const snowAdj = new Float32Array(N);
-  const snowTrue = new Float32Array(N);
+  /** What snow judges height by, less the ground drawn (radians). The planet (sky.ts) goes by the
+   * plain terrain, before the close-up relief, less VALLEY_SNOW (0.45) of the valleys' carving;
+   * judged by the relief, ranges lost most of their snow up close. plainAdj: the plain terrain,
+   * less the ground drawn (glaciers go by it). meshSlope: the plain terrain's slope. */
+  const snowAdj = new Float32Array(N), plainAdj = new Float32Array(N), meshSlope = new Float32Array(N);
+  const snowTrue = new Float32Array(N), plainTrue = new Float32Array(N);
   // The planet's ground and relief are worked out every S samples and filled in between: on the
   // hex's fine grid (~36 m real a sample) every other one is plenty for its finest gullies (~100 m)
   // and takes a quarter of the time.
@@ -491,11 +493,12 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
           ri.mx = ge * ex + gn * nx; ri.my = ge * ey + gn * ny; ri.mz = ge * ez + gn * nz;
           ri.sand = smooth(0.24, 0.12, moistV[v]) * smooth(0.4, 0.55, tempV[v]);
           ri.ice = iceV[v];
-          ri.river = segs.length ? smooth(700, 300, riverD(x, y) * o.mag) : 0;
+          ri.river = segs.length ? riverD(x, y) * radPerLocal : Infinity;
           const lift = patchLift(ri, valleys, tmp), carve = tmp[4];
-          const hl = smooth(0.12, 0.85, (gh - SEA) / RELIEF_RADII);
           groundR[v] = gh + lift;
-          snowAdj[v] = carve * (1 + 0.8 * hl) - 0.45 * carve;
+          snowAdj[v] = -lift - 0.45 * carve;
+          plainAdj[v] = -lift;
+          meshSlope[v] = Math.hypot(ge, gn);
         }
       }
     }
@@ -509,7 +512,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
           const a = j0 * res + i0, b2 = a + S, c2 = a + S * res, d2 = c2 + S;
           groundR[v] = (groundR[a] * (1 - tx) + groundR[b2] * tx) * (1 - ty) + (groundR[c2] * (1 - tx) + groundR[d2] * tx) * ty;
           waterR[v] = (waterR[a] * (1 - tx) + waterR[b2] * tx) * (1 - ty) + (waterR[c2] * (1 - tx) + waterR[d2] * tx) * ty;
-          snowAdj[v] = (snowAdj[a] * (1 - tx) + snowAdj[b2] * tx) * (1 - ty) + (snowAdj[c2] * (1 - tx) + snowAdj[d2] * tx) * ty;
+          for (const f of [snowAdj, plainAdj, meshSlope]) f[v] = (f[a] * (1 - tx) + f[b2] * tx) * (1 - ty) + (f[c2] * (1 - tx) + f[d2] * tx) * ty;
           lakeAt[v] = lakeAt[(tx < 0.5 ? (ty < 0.5 ? a : c2) : (ty < 0.5 ? b2 : d2))];
         }
       }
@@ -519,6 +522,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
         const x = -half + i * step, y = -half + j * step, v = j * res + i;
         const ht = radToTrue(groundR[v]);
         snowTrue[v] = radToTrue(groundR[v] + snowAdj[v]);
+        plainTrue[v] = radToTrue(groundR[v] + plainAdj[v]);
         let h = toLocal(ht);
         const sea = waterR[v] > 0 && !lakeAt[v] ? 1 : 0;
         // Ground below the sea with no water drawn over it on the planet stays dry here.
@@ -784,25 +788,29 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       let snow = smooth(0.19, 0.09, latT - 0.5 * eS + edge);
       snow = Math.max(snow, smooth(0.6, 0.75, eS) * smooth(0.21, -0.05, latT - 0.62 * eS + edge));
       const streak = 0.5 + 0.5 * (noise(x / 40, y / 40, 119) * 0.6 + noise(x / 13, y / 13, 121) * 0.4);
-      const lie = (1 - 0.9 * smooth(0.08, 0.3, slopeP)) * smooth(0.25, 0.65, streak + snow * 0.35);
+      // (Mostly the plain terrain's slope, as the planet's patch: its relief is steep nearly
+      // everywhere and snow shed off all but flat tops.)
+      const slopeS = (1 - 1 / Math.sqrt(1 + meshSlope[v] * meshSlope[v])) * 0.45 + slopeP * 0.55;
+      const lie = (1 - 0.9 * smooth(0.08, 0.3, slopeS)) * smooth(0.25, 0.65, streak + snow * 0.35);
       // Glaciers (sky.ts): ice fills the high valleys where it is cold, down past the snow line.
       // A valley is ground lower than the ring around it, ~1 km and ~3 km out (real metres).
       let glacier = 0;
-      const stG = latT - 0.5 * eS;
-      if (stG < 0.28 && eS > 0.15) {
+      // (By the plain terrain, before the close-up relief, as the planet's patch.)
+      const stG = latT - 0.5 * eS, eG = plainTrue[v] / reliefM + 0.09;
+      if (stG < 0.28 && eG > 0.15) {
         const ringAt = (rTrue: number) => {
           const rr = rTrue / o.mag / step;
           let sum = 0;
           for (let k = 0; k < 6; k++) {
             const ii = Math.max(0, Math.min(res - 1, Math.round(i + Math.cos(k * 1.0472) * rr)));
             const jj = Math.max(0, Math.min(res - 1, Math.round(j + Math.sin(k * 1.0472) * rr)));
-            sum += snowTrue[jj * res + ii];
+            sum += plainTrue[jj * res + ii];
           }
-          return sum / 6 - snowTrue[v];
+          return sum / 6 - plainTrue[v];
         };
         const valleyG = Math.max(smooth(60, 300, ringAt(960)), smooth(190, 960, ringAt(2900)));
         const iceZone = smooth(0.28, 0.18, stG + edge * 0.5);
-        glacier = smooth(0.05, 0.4, valleyG * iceZone * smooth(0.15, 0.3, eS)) * 0.92;
+        glacier = smooth(0.05, 0.4, valleyG * iceZone * smooth(0.15, 0.3, eG)) * 0.92;
       }
       const white = Math.max(Math.min(1, snow * lie), glacier);
       mix(v, SNOW, white * 0.95);

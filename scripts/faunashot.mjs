@@ -2,11 +2,12 @@
  * Animals (fauna.ts): low shots over a few kinds of group, at a few sizes.
  *
  *   node scripts/faunashot.mjs <outdir> [seed=77] [sizes=1,4,8] [alt=1.009] [kinds=bison,deer,rabbit,bird]
+ *   SEQ=n: n shots of each, SEQ_MS apart (default 2500), for things that come and go (whales).
  */
 import { chromium } from 'playwright-core';
 const [out, seed = '77', sizes = '1,4,8', alt = '1.009', kinds = 'bison,deer,rabbit,bird,wildebeest,caribou'] = process.argv.slice(2);
 const browser = await chromium.launch({ channel: 'msedge', args: ['--use-angle=d3d11', '--enable-gpu'] });
-const page = await (await browser.newContext({ viewport: { width: 900, height: 600 } })).newPage();
+const page = await (await browser.newContext({ viewport: { width: Number(process.env.VW ?? 900), height: Number(process.env.VH ?? 600) } })).newPage();
 const errors = [];
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text().slice(0, 400)); });
 page.on('pageerror', (e) => errors.push(String(e).slice(0, 400)));
@@ -35,7 +36,11 @@ for (const size of sizes.split(',').map(Number)) {
     // Then over where the group is now (it wanders round its home).
     await page.evaluate(([c, k, h]) => { const g = window.mundi.view.fauna.groupsOf(c).find((x) => x.kind === k); const p = g.at ?? g.home; window.mundi.orbit(Math.atan2(p.x, p.z) * 57.2958, Math.asin(p.y) * 57.2958, h); }, [s.cell, s.kind, Number(alt)]);
     await page.waitForTimeout(1200);
-    await page.screenshot({ path: `${out}/fauna-${s.kind}-x${size}.png` });
+    const seq = Number(process.env.SEQ ?? 1);
+    for (let i = 0; i < seq; i++) {
+      if (i) await page.waitForTimeout(Number(process.env.SEQ_MS ?? 2500));
+      await page.screenshot({ path: `${out}/fauna-${s.kind}-x${size}${seq > 1 ? '-' + i : ''}.png` });
+    }
   }
 }
 if (errors.length) console.log('errors:\n' + [...new Set(errors)].join('\n'));

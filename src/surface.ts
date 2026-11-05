@@ -9,7 +9,6 @@
 import * as THREE from 'three';
 import { baseOf } from './ecology.ts';
 import { B } from './biomes.ts';
-import { isDelta } from './deltas.ts';
 import { WATER_LAND, WATER_LAKE, WATER_OCEAN, type World } from './world.ts';
 import { makeRng } from './rng.ts';
 import { makeSimplex, type Noise3 } from './noise.ts';
@@ -494,22 +493,6 @@ export function terrainShape(w: World, reliefMul: number, tint: Noise3, rough: N
   const bump = (owner: number, dx: number, dy: number, dz: number, h0: number) => {
     const h = smoothH(owner, dx, dy, dz, h0);
     const n = rough(dx * freq, dy * freq, dz * freq);
-    // Delta land (deltas.ts): flat, barely above the water, whatever the land behind it does.
-    if (isDelta(w.water, w.elevation, owner)) {
-      // Highest at the old coast, sinking toward the sea it grew into, with a ragged edge, so the
-      // shore wanders across the cell in lobes instead of following its sides.
-      let sea = 0;
-      const cx = P[owner * 3], cy = P[owner * 3 + 1], cz = P[owner * 3 + 2];
-      for (const nb of g.neighbors[owner]) {
-        if (w.water[nb] !== WATER_OCEAN) continue;
-        const ax = P[nb * 3] - cx, ay = P[nb * 3 + 1] - cy, az = P[nb * 3 + 2] - cz, al = Math.hypot(ax, ay, az);
-        sea = Math.max(sea, ((dx - cx) * ax + (dy - cy) * ay + (dz - cz) * az) / (al * al * 0.5));
-      }
-      const wob = tint(dx * lf * 1.7 + 2.1, dy * lf * 1.7, dz * lf * 1.7) * 0.45 + tint(dx * lf * 4.3, dy * lf * 4.3 + 5.5, dz * lf * 4.3) * 0.2;
-      // (Shore at ~0.75 of the way to the sea edge, was ~0.5: room for the channel fan, render.ts.)
-      const k = Math.min(1, Math.max(0, (sea + wob - 0.05) / 0.75));
-      return SEA + 0.0005 - 0.0011 * k * k * (3 - 2 * k) + 0.00006 * n;
-    }
     if (h <= SEA + 0.0005) return h + 0.0003 * n;
     const e = Math.min(1, (h - SEA) / Math.max(1e-6, relief));
     const gentle = (0.0004 + 0.0015 * e) * n;
