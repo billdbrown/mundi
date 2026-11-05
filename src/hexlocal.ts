@@ -22,7 +22,7 @@
  * Local coordinates are metres: x east, y north, h up, origin at the cell's centre.
  */
 import type { World } from './world.ts';
-import { WATER_LAKE, WATER_OCEAN } from './world.ts';
+import { WATER_LAKE, WATER_LAND, WATER_OCEAN } from './world.ts';
 import { B, BIOMES } from './biomes.ts';
 import { makeSimplex, type Noise3 } from './noise.ts';
 import { makeRng, hash01 } from './rng.ts';
@@ -289,6 +289,25 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     }
     return null;
   };
+  /** Where water crosses from cell a into b, as the planet's rivers do (render.ts buildRivers):
+   * a fixed point along the shared edge, 30-70% of the way from its lower-numbered corner. */
+  const edgeCross = (a: number, b: number): [number, number] | null => {
+    const nb = g.neighbors[a];
+    for (let k = 0; k < nb.length; k++) {
+      if (nb[k] !== b) continue;
+      let q0 = g.corners[a][k], q1 = g.corners[a][(k + 1) % nb.length];
+      if (q0 > q1) [q0, q1] = [q1, q0];
+      const t = 0.3 + 0.4 * hash01(q0 * 7919 + q1);
+      const tmp = new Float32Array(2);
+      proj(K[q0 * 3] + (K[q1 * 3] - K[q0 * 3]) * t, K[q0 * 3 + 1] + (K[q1 * 3 + 1] - K[q0 * 3 + 1]) * t, K[q0 * 3 + 2] + (K[q1 * 3 + 2] - K[q0 * 3 + 2]) * t, tmp, 0);
+      return [tmp[0], tmp[1]];
+    }
+    return null;
+  };
+  /** Water the planet draws through a cell: rivers, and streams down to 0.35 of a river's flow
+   * on unfrozen land (render.ts buildRivers), which it shows up close. */
+  const STREAM = 0.35 * w.riverThreshold;
+  const flows = (c: number) => w.water[c] !== WATER_OCEAN && (w.river[c] === 1 || (w.water[c] === WATER_LAND && w.temperature[c] > 0.12 && w.flow[c] >= STREAM));
   const spacing = apothem * 2;                     // centre to centre
   const sigma2 = (0.5 * spacing) ** 2;
 
@@ -357,6 +376,10 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   const owner = new Int16Array(N);
   const oceanW = new Float32Array(N);
   const groundR = new Float32Array(N), waterR = new Float32Array(N), lakeAt = new Uint8Array(N), iceV = new Float32Array(N);
+  /** What snow judges height by, less the ground (radians): the planet's sky.ts takes the valleys'
+   * carving back off and counts only VALLEY_SNOW (0.45) of it, so a carved range keeps its snow. */
+  const snowAdj = new Float32Array(N);
+  const snowTrue = new Float32Array(N);
   // The planet's ground and relief are worked out every S samples and filled in between: on the
   // hex's fine grid (~36 m real a sample) every other one is plenty for its finest gullies (~100 m)
   // and takes a quarter of the time.
@@ -433,13 +456,13 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       const tx = fx - a, ty = fy - b;
       return (f[b * side + a] * (1 - tx) + f[b * side + a + 1] * tx) * (1 - ty) + (f[(b + 1) * side + a] * (1 - tx) + f[(b + 1) * side + a + 1] * tx) * ty;
     };
-    // Planet rivers as the planet runs them (centre, edge middle, next centre): its relief keeps
-    // off them, so they flow on flat floors.
+    // Planet rivers and streams as the planet runs them (centre, edge crossing, next centre): its
+    // relief keeps off them, so they flow on flat floors.
     const segs: number[] = [];
     for (const c of cellList) {
       const d = w.downstream[c];
-      if (!w.river[c] || d < 0 || !indexOf.has(d) || w.water[c] === WATER_OCEAN) continue;
-      const mid = edgeMid(c, d);
+      if (!flows(c) || d < 0 || !indexOf.has(d)) continue;
+      const mid = edgeCross(c, d);
       if (!mid) continue;
       const a = indexOf.get(c)!, b2 = indexOf.get(d)!;
       segs.push(cellXY[a * 2], cellXY[a * 2 + 1], mid[0], mid[1], mid[0], mid[1], cellXY[b2 * 2], cellXY[b2 * 2 + 1]);
@@ -453,7 +476,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       }
       return best;
     };
-    const tmp = [0, 0, 0, 0];
+    const tmp = [0, 0, 0, 0, 0];
     const ri: ReliefInput = { x: 0, y: 0, z: 0, hAbove: 0, mx: 0, my: 0, mz: 0, sand: 0, ice: 0, river: 0, sp };
     for (let j = 0; j < res; j += S) {
       for (let i = 0; i < res; i += S) {
@@ -469,7 +492,10 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
           ri.sand = smooth(0.24, 0.12, moistV[v]) * smooth(0.4, 0.55, tempV[v]);
           ri.ice = iceV[v];
           ri.river = segs.length ? smooth(700, 300, riverD(x, y) * o.mag) : 0;
-          groundR[v] = gh + patchLift(ri, valleys, tmp);
+          const lift = patchLift(ri, valleys, tmp), carve = tmp[4];
+          const hl = smooth(0.12, 0.85, (gh - SEA) / RELIEF_RADII);
+          groundR[v] = gh + lift;
+          snowAdj[v] = carve * (1 + 0.8 * hl) - 0.45 * carve;
         }
       }
     }
@@ -483,6 +509,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
           const a = j0 * res + i0, b2 = a + S, c2 = a + S * res, d2 = c2 + S;
           groundR[v] = (groundR[a] * (1 - tx) + groundR[b2] * tx) * (1 - ty) + (groundR[c2] * (1 - tx) + groundR[d2] * tx) * ty;
           waterR[v] = (waterR[a] * (1 - tx) + waterR[b2] * tx) * (1 - ty) + (waterR[c2] * (1 - tx) + waterR[d2] * tx) * ty;
+          snowAdj[v] = (snowAdj[a] * (1 - tx) + snowAdj[b2] * tx) * (1 - ty) + (snowAdj[c2] * (1 - tx) + snowAdj[d2] * tx) * ty;
           lakeAt[v] = lakeAt[(tx < 0.5 ? (ty < 0.5 ? a : c2) : (ty < 0.5 ? b2 : d2))];
         }
       }
@@ -491,6 +518,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       for (let i = 0; i < res; i++) {
         const x = -half + i * step, y = -half + j * step, v = j * res + i;
         const ht = radToTrue(groundR[v]);
+        snowTrue[v] = radToTrue(groundR[v] + snowAdj[v]);
         let h = toLocal(ht);
         const sea = waterR[v] > 0 && !lakeAt[v] ? 1 : 0;
         // Ground below the sea with no water drawn over it on the planet stays dry here.
@@ -567,7 +595,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     return o.riverMode === 'scaled' ? wt / o.mag : Math.min(Math.max(6, wt * 0.8), baseSize * 0.05);
   };
 
-  const riverCells = cellList.filter((c) => w.river[c] && w.water[c] !== WATER_OCEAN);
+  const riverCells = cellList.filter(flows);
   riverCells.sort((a, b) => w.flow[a] - w.flow[b]);         // upstream before downstream
   const levelIn = new Map<number, number>();
   const rivers: LocalRiver[] = [];
@@ -578,11 +606,11 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     if (d < 0 || !indexOf.has(d)) continue;
     if (w.water[c] === WATER_LAKE && w.water[d] === WATER_LAKE) continue;
     const i0 = indexOf.get(c)!, i1 = indexOf.get(d)!;
-    const mid = edgeMid(c, d);
+    const mid = edgeCross(c, d);
     if (!mid) continue;
     if (c === cell || d === cell) { riversHere++; if (c === cell) riverWidthsM.push(Math.round(trueRiverWidth(w, c))); }
     const ax = cellXY[i0 * 2], ay = cellXY[i0 * 2 + 1], bx = cellXY[i1 * 2], by = cellXY[i1 * 2 + 1];
-    // Quadratic through centre, edge middle, next centre (control point solved so it passes mid).
+    // Quadratic through centre, edge crossing, next centre (control point solved so it passes it).
     const qx = 2 * mid[0] - (ax + bx) / 2, qy = 2 * mid[1] - (ay + by) / 2;
     const len = Math.hypot(mid[0] - ax, mid[1] - ay) + Math.hypot(bx - mid[0], by - mid[1]);
     const n = 2 * Math.max(4, Math.ceil(len / Math.max(3, step * 2) / 2));   // even: t = 0.5 is a point
@@ -751,14 +779,36 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       // Snow, by the shader's model: a line from latitude and height, peaks colder still, shed
       // off steep faces and lying in streaks.
       const edge = noise(x / L(25), y / L(25), 113) * 0.06 + noise(x / L(110), y / L(110), 115) * 0.03 + noise(x / L(420), y / L(420), 117) * 0.015;
-      let snow = smooth(0.19, 0.09, latT - 0.5 * e + edge);
-      snow = Math.max(snow, smooth(0.6, 0.75, e) * smooth(0.21, -0.05, latT - 0.62 * e + edge));
+      // (Judged by the planet's snow height: the valleys' carving mostly taken back off.)
+      const eS = Math.max(0, snowTrue[v] + (h - baseLocal[v]) * o.vScale) / reliefM + 0.09;
+      let snow = smooth(0.19, 0.09, latT - 0.5 * eS + edge);
+      snow = Math.max(snow, smooth(0.6, 0.75, eS) * smooth(0.21, -0.05, latT - 0.62 * eS + edge));
       const streak = 0.5 + 0.5 * (noise(x / 40, y / 40, 119) * 0.6 + noise(x / 13, y / 13, 121) * 0.4);
       const lie = (1 - 0.9 * smooth(0.08, 0.3, slopeP)) * smooth(0.25, 0.65, streak + snow * 0.35);
-      mix(v, SNOW, Math.min(1, snow * lie) * 0.95);
-      lay(v, L_SNOW, Math.min(1, snow * lie));
+      // Glaciers (sky.ts): ice fills the high valleys where it is cold, down past the snow line.
+      // A valley is ground lower than the ring around it, ~1 km and ~3 km out (real metres).
+      let glacier = 0;
+      const stG = latT - 0.5 * eS;
+      if (stG < 0.28 && eS > 0.15) {
+        const ringAt = (rTrue: number) => {
+          const rr = rTrue / o.mag / step;
+          let sum = 0;
+          for (let k = 0; k < 6; k++) {
+            const ii = Math.max(0, Math.min(res - 1, Math.round(i + Math.cos(k * 1.0472) * rr)));
+            const jj = Math.max(0, Math.min(res - 1, Math.round(j + Math.sin(k * 1.0472) * rr)));
+            sum += snowTrue[jj * res + ii];
+          }
+          return sum / 6 - snowTrue[v];
+        };
+        const valleyG = Math.max(smooth(60, 300, ringAt(960)), smooth(190, 960, ringAt(2900)));
+        const iceZone = smooth(0.28, 0.18, stG + edge * 0.5);
+        glacier = smooth(0.05, 0.4, valleyG * iceZone * smooth(0.15, 0.3, eS)) * 0.92;
+      }
+      const white = Math.max(Math.min(1, snow * lie), glacier);
+      mix(v, SNOW, white * 0.95);
+      lay(v, L_SNOW, white);
       // Where plants grow: not on rock, snow, the water's edge, or (trees) above the tree line.
-      grow[v] = (1 - rock) * (1 - Math.min(1, snow * lie * 1.5)) * (riverNear[v] < 1.3 ? 0 : 1) * (h < 0.3 ? 0 : 1);
+      grow[v] = (1 - rock) * (1 - Math.min(1, white * 1.5)) * (riverNear[v] < 1.3 ? 0 : 1) * (h < 0.3 ? 0 : 1);
       treeLine[v] = smooth(0.2, 0.3, tv + an * 0.05);
     }
   }
@@ -767,7 +817,9 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   {
     let lo = Infinity, hi = -Infinity;
     for (let v = 0; v < N; v++) if (heights[v] > 0.3 && layers[v * LAYERS + L_DEPTH] === 0) { lo = Math.min(lo, heights[v]); hi = Math.max(hi, heights[v]); }
-    const mtn = smooth(120, 500, hi - lo);
+    // (In real metres as at vScale 2, where it was tuned: at true scale the map's own heights are
+    // 5x smaller and no range counted as one, so Golden Earth's peaks lost their snow caps.)
+    const mtn = smooth(120, 500, (hi - lo) * o.vScale / 2);
     // By rank, not by height: 0.9 means higher than 90% of the land, so a style's snow caps cover
     // the top tenth of a range rather than everything above the lowest valley.
     const sample: number[] = [];
@@ -841,8 +893,8 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   const planetRivers: number[] = [];
   for (const c of cellList) {
     const d = w.downstream[c];
-    if (!w.river[c] || d < 0 || !indexOf.has(d) || w.water[c] === WATER_OCEAN) continue;
-    const mid = edgeMid(c, d);
+    if (!flows(c) || d < 0 || !indexOf.has(d)) continue;
+    const mid = edgeCross(c, d);
     if (!mid) continue;
     const a = indexOf.get(c)!, b = indexOf.get(d)!;
     planetRivers.push(cellXY[a * 2], cellXY[a * 2 + 1], mid[0], mid[1], cellXY[b * 2], cellXY[b * 2 + 1]);
@@ -868,7 +920,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   };
 }
 
-/** Where a river piece crosses the hex edge: its point at t = 0.5 (tests check it is the edge middle). */
+/** Where a river piece crosses the hex edge: its point at t = 0.5 (tests check it is the planet's crossing). */
 export function riverCrossings(m: LocalMap): [number, number][] {
   return m.rivers.map((r) => {
     const s = (r.pts.length / 4 - 1) / 2;

@@ -153,7 +153,9 @@ export function paintGround(m: LocalMap, st: HexStyle): Float32Array {
       mix(C.rock, ly(L_ROCK) * 0.9);
       mix(C.alpine, ly(L_ALPINE) * 0.6);
       mix(C.sand, ly(L_SAND));
-      mix(C.snow, ly(L_SNOW) * 0.95);
+      // Snow decisively: the planet's partial snow (often ~0.4 on its peaks) reads white-grey over its
+      // grey rock, but over this palette's warm tan it read as more tan. Past half cover, it's white.
+      mix(C.snow, smooth01(0.08, 0.42, ly(L_SNOW)) * 0.97);
       if (p.peaks > 0 && ly(L_ELEV) > 0.3) {
         const e = ly(L_ELEV) + (hash(v * 7 + 1) - 0.5) * 0.04;
         mix(C.alpine, smooth01(0.45, 0.65, e) * 0.8 * p.peaks);

@@ -15,7 +15,7 @@ test('a hex map is the same every time', () => {
   assert.ok(a.heights.every(Number.isFinite));
 });
 
-test('rivers cross each hex edge at the middle of the edge the planet says', () => {
+test('rivers cross each hex edge on the edge the planet says, 30-70% along it as the planet draws them', () => {
   const settings: [string, Partial<LocalOptions>][] = [['default', {}], ['plain shrink 20x', { mag: 20, vScale: 20, vSoft: 0, riverMode: 'scaled', crags: false }]];
   for (const [name, o] of settings) {
     const v = { id: name };
@@ -27,7 +27,8 @@ test('rivers cross each hex edge at the middle of the edge the planet says', () 
     const onEdge = ([x, y]: [number, number]) => {
       for (let k = 0; k < n; k++) {
         const ax = H[k * 2], ay = H[k * 2 + 1], bx = H[((k + 1) % n) * 2], by = H[((k + 1) % n) * 2 + 1];
-        if (Math.hypot(x - (ax + bx) / 2, y - (ay + by) / 2) < 1e-3 * m.size) return true;
+        const ex2 = bx - ax, ey2 = by - ay, t = ((x - ax) * ex2 + (y - ay) * ey2) / (ex2 * ex2 + ey2 * ey2);
+        if (t >= 0.29 && t <= 0.71 && Math.hypot(x - ax - ex2 * t, y - ay - ey2 * t) < 1e-3 * m.size) return true;
       }
       return false;
     };
@@ -37,7 +38,7 @@ test('rivers cross each hex edge at the middle of the edge the planet says', () 
       return atCentre(p[0], p[1]) || atCentre(p[last * 4], p[last * 4 + 1]);
     });
     assert.ok(touching.length > 0);
-    for (const r of touching) assert.ok(onEdge(riverCrossings({ ...m, rivers: [r] })[0]), `${v.id}: crossing on an edge middle`);
+    for (const r of touching) assert.ok(onEdge(riverCrossings({ ...m, rivers: [r] })[0]), `${v.id}: crossing on an edge`);
   }
 });
 

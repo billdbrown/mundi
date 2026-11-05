@@ -161,6 +161,7 @@ export interface ReliefInput {
 /**
  * How far the planet's patch raises (or lowers) the ground at a point, radians: the carved
  * valleys (if given) and the hills and gullies. As the bake, at full strength (camera close).
+ * tmp[4] is set to the valleys' carving there (radians, 0 without them), which snow needs.
  */
 export function patchLift(r: ReliefInput, valleys: ValleyField | null, tmp: number[]): number {
   const { x, y, z, hAbove } = r;
@@ -172,12 +173,14 @@ export function patchLift(r: ReliefInput, valleys: ValleyField | null, tmp: numb
   const nx = y * ez, ny = z * ex - x * ez, nz = -y * ex;
 
   let liftC = 0, gCx = 0, gCy = 0, gCz = 0;
+  tmp[4] = 0;
   if (valleys && hAbove > 0) {
     const e = UERO_R * 2 / 512;
     const c0 = carveAt(valleys, bx, by, bz);
     const c1 = carveAt(valleys, bx + ex * e, by, bz + ez * e);
     const c2 = carveAt(valleys, bx + nx * e, by + ny * e, bz + nz * e);
     liftC = -c0 * (1 + MTN_CARVE * highland);
+    tmp[4] = c0;
     gCx = -(ex * (c1 - c0) + nx * (c2 - c0)) / e;
     gCy = -(ny * (c2 - c0)) / e;
     gCz = -(ez * (c1 - c0) + nz * (c2 - c0)) / e;
@@ -193,7 +196,9 @@ export function patchLift(r: ReliefInput, valleys: ValleyField | null, tmp: numb
     if (sandE > 0) eroFar *= 1 - sandE * (0.6 + 0.4 * smoothstep(0.2, 0.5, sandSea(bx, by, bz)));
     eroFar *= smoothstep(0.0001, 0.001, hAbove + 0.0004 * snoise3(bx * 150, by * 150, bz * 150));
     if (eroFar >= 0.01 && iceK < 0.99) {
+      const keep = tmp[4];
       hills(bx, by, bz, x, y, z, smoothstep(0.02, 0.3, hAbove / RELIEF), tmp);
+      tmp[4] = keep;
       const hk = 1 - iceK;
       const mx = r.mx + tmp[1] * hk + gCx, my = r.my + tmp[2] * hk + gCy, mz = r.mz + tmp[3] * hk + gCz;
       const eroK = smoothstep(0, 0.07, Math.hypot(mx, my, mz)) * (1 - iceK) * eroFar;

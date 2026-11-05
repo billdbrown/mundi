@@ -13,6 +13,8 @@ const browser = await chromium.launch({ channel: process.env.BROWSER ?? 'msedge'
 const W = 960, H = 640;
 const planet = await browser.newPage({ viewport: { width: W, height: H } });
 const hex = await browser.newPage({ viewport: { width: W, height: H } });
+// Generous: on a shared GPU (other sessions rendering) a frame can take a while.
+for (const pg of [planet, hex]) pg.setDefaultTimeout(180000);
 await planet.goto(`${base}#seed=${seed}`);
 await planet.waitForFunction(() => window.mundi?.world, null, { timeout: 180000 });
 await planet.evaluate(() => window.mundi.ready());

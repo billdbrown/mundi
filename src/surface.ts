@@ -970,6 +970,62 @@ export function planetGround(w: World, reliefMul = 1) {
   };
   const det = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number) =>
     ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+  const k = S.k, cornerOwner = (kk: number) => Math.min(...S.cornerCells[kk]);
+  /** buildSmooth add()'s lake-shore wobble, for a vertex with this owner, water level and lake flag. */
+  const shore = (owner: number, x: number, y: number, z: number, h: number, lvl: number, lake: boolean) => {
+    if (!lake || w.water[owner] === WATER_OCEAN) return h;
+    const lf = S.lf, tint = S.tint;
+    const near = h > lvl - 0.0006 ? Math.max(0, 1 - Math.abs(h - lvl) / 0.0016) : 0;
+    return h + near * 0.0011 * (tint(x * lf + 3.3, y * lf, z * lf) + 0.45 * tint(x * lf * 2.7, y * lf * 2.7 + 8.1, z * lf * 2.7));
+  };
+  const cellLvl = (c: number) => (S.vLevel[c] > 0 ? S.vLevel[c] : SEA);
+  const cache = new Map<string, number>();
+  /**
+   * Height of the mesh vertex a steps toward corner ks[fan] and bb toward the next corner, in cell
+   * c's fan triangle: the same point, owner and rule buildSmooth uses, so it is the mesh's value.
+   */
+  const vert = (c: number, fan: number, a: number, bb: number): number => {
+    const ks = g.corners[c], m = ks.length, k0 = ks[fan], k1 = ks[(fan + 1) % m];
+    let key: string;
+    if (a === 0 && bb === 0) key = 'c' + c;
+    else if (bb === 0 && a === k) key = 'k' + k0;
+    else if (a === 0 && bb === k) key = 'k' + k1;
+    else if (bb === 0) key = `s${c},${k0},${a}`;
+    else if (a === 0) key = `s${c},${k1},${bb}`;
+    else if (a + bb === k) key = k0 < k1 ? `e${k0},${k1},${bb}` : `e${k1},${k0},${a}`;
+    else key = `i${c},${fan},${a},${bb}`;
+    const got = cache.get(key);
+    if (got !== undefined) return got;
+    const px = P[c * 3], py = P[c * 3 + 1], pz = P[c * 3 + 2];
+    let h: number;
+    if (key[0] === 'c') {
+      h = shore(c, px, py, pz, S.smoothH(c, px, py, pz, S.cellH[c]), cellLvl(c), S.vLake[c] === 1);
+    } else if (key[0] === 'k') {
+      const kk = bb === 0 ? k0 : k1, o = cornerOwner(kk), cx = C[kk * 3], cy = C[kk * 3 + 1], cz = C[kk * 3 + 2];
+      h = shore(o, cx, cy, cz, S.smoothH(o, cx, cy, cz, S.cornerH[kk]), S.cornerLevel[kk], S.cornerLake[kk] === 1);
+    } else if (key[0] === 's') {
+      const kk = bb === 0 ? k0 : k1, t = (bb === 0 ? a : bb) / k;
+      let dx = px * (1 - t) + C[kk * 3] * t, dy = py * (1 - t) + C[kk * 3 + 1] * t, dz = pz * (1 - t) + C[kk * 3 + 2] * t;
+      const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
+      h = shore(c, dx, dy, dz, S.bump(c, dx, dy, dz, S.cellH[c] * (1 - t) + S.cornerH[kk] * t), cellLvl(c), S.vLake[c] === 1);
+    } else if (key[0] === 'e') {
+      // An edge point belongs to whichever of the two cells built it first: the lower-numbered.
+      const o = Math.min(c, g.neighbors[c][fan]);
+      const lo = Math.min(k0, k1), hi = Math.max(k0, k1), t = (k0 < k1 ? bb : a) / k;
+      let dx = C[lo * 3] * (1 - t) + C[hi * 3] * t, dy = C[lo * 3 + 1] * (1 - t) + C[hi * 3 + 1] * t, dz = C[lo * 3 + 2] * (1 - t) + C[hi * 3 + 2] * t;
+      const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
+      h = shore(o, dx, dy, dz, S.bump(o, dx, dy, dz, S.cornerH[lo] * (1 - t) + S.cornerH[hi] * t),
+        Math.max(S.cornerLevel[lo], S.cornerLevel[hi]), S.cornerLake[lo] === 1 || S.cornerLake[hi] === 1);
+    } else {
+      const wa = 1 - (a + bb) / k, wb = a / k, wc = bb / k;
+      let dx = wa * px + wb * C[k0 * 3] + wc * C[k1 * 3], dy = wa * py + wb * C[k0 * 3 + 1] + wc * C[k1 * 3 + 1], dz = wa * pz + wb * C[k0 * 3 + 2] + wc * C[k1 * 3 + 2];
+      const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
+      h = shore(c, dx, dy, dz, S.bump(c, dx, dy, dz, wa * S.cellH[c] + wb * S.cornerH[k0] + wc * S.cornerH[k1]), cellLvl(c), S.vLake[c] === 1);
+    }
+    if (cache.size > 200000) cache.clear();
+    cache.set(key, h);
+    return h;
+  };
   return {
     shape: S,
     /** The ground along a direction (any length). */
@@ -991,18 +1047,26 @@ export function planetGround(w: World, reliefMul = 1) {
         if (mn > bestMin) { bestMin = mn; const sm = u + v + t; wa = u / sm; wb = v / sm; wc = t / sm; k0 = a; k1 = b; }
         if (mn >= 0) break;
       }
-      const lin = wa * S.cellH[c] + wb * S.cornerH[k0] + wc * S.cornerH[k1];
-      out.h = S.bump(c, x, y, z, lin);
+      // The mesh's own vertices around the point, as buildSmooth makes them, and straight between
+      // them: the formula itself depends a little on which cell a point is taken as part of (its
+      // smoothing looks at that cell's neighbours; ice damps the ridges), so read point by point
+      // it stepped by hundreds of metres along some cell edges, where the mesh shares one vertex.
+      const fan = ks.indexOf(k0);
+      const u = wb * k, v = wc * k;
+      let ia = Math.min(Math.floor(u), k - 1), ib = Math.min(Math.floor(v), k - 1 - ia);
+      if (ia < 0) ia = 0; if (ib < 0) ib = 0;
+      const fu = u - ia, fv = v - ib;
+      let h: number;
+      if (fu + fv > 1 && ia + ib < k - 1) {
+        h = (fu + fv - 1) * vert(c, fan, ia + 1, ib + 1) + (1 - fu) * vert(c, fan, ia, ib + 1) + (1 - fv) * vert(c, fan, ia + 1, ib);
+      } else {
+        h = (1 - fu - fv) * vert(c, fan, ia, ib) + fu * vert(c, fan, ia + 1, ib) + fv * vert(c, fan, ia, ib + 1);
+      }
+      out.h = h;
       out.cell = c;
       const hasWater = S.vLevel[c] > 0;
       out.water = hasWater ? wa * S.vLevel[c] + wb * S.cornerLevel[k0] + wc * S.cornerLevel[k1] : -1;
       out.lake = hasWater && S.vLake[c] === 1;
-      // Lake shores wander through the cell (buildSmooth add()).
-      if (out.lake && w.water[c] !== WATER_OCEAN) {
-        const lvl = out.water, h = out.h, lf = S.lf, tint = S.tint;
-        const near = h > lvl - 0.0006 ? Math.max(0, 1 - Math.abs(h - lvl) / 0.0016) : 0;
-        out.h = h + near * 0.0011 * (tint(x * lf + 3.3, y * lf, z * lf) + 0.45 * tint(x * lf * 2.7, y * lf * 2.7 + 8.1, z * lf * 2.7));
-      }
       return out;
     },
   };
