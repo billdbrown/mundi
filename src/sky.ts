@@ -383,14 +383,19 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           float a = mu / (sqrt(s2) * sqrt(1.0 - mu * mu));
           return a >= 1.6 ? 1.0 : (3.535 * a + 2.181 * a * a) / (1.0 + 2.276 * a + 2.577 * a * a);
         }
-        vec3 geoRock(vec3 p, vec3 fallback) {
+        // geoRockC(vCloudP), computed once in main: geoRock was written out at three places, and
+        // the D3D compiler inlines every call, so each was another copy to compile (~5 s of the
+        // close-up shader's ~30, 2026-11-05).
+        vec3 geoC;
+        vec3 geoRock(vec3 fallback) { return mix(fallback, geoC, 0.85); }
+        vec3 geoRockC(vec3 p) {
           float a = snoise(p * 7.0 + 31.0) + 0.4 * snoise(p * 19.0 + 7.0);
           float b = snoise(p * 6.0 + 77.0) + 0.4 * snoise(p * 17.0 + 3.0);
           vec3 sandstone = vec3(0.46, 0.25, 0.15), basalt = vec3(0.13, 0.12, 0.12);
           vec3 limestone = vec3(0.6, 0.57, 0.5), granite = vec3(0.4, 0.37, 0.36);
           vec3 c = mix(mix(granite, sandstone, smoothstep(0.0, 0.5, a)), mix(limestone, basalt, smoothstep(0.0, 0.5, a)), smoothstep(-0.1, 0.4, b));
           float mott = 0.85 + 0.3 * snoise01(p * 900.0);
-          return mix(fallback, c * mott, 0.85);
+          return c * mott;
         }
         /** Near a volcano: 0..1 (1 at the cone), for dark lava and ash on the ground round it. */
         float volcanic(vec3 p) {
@@ -435,7 +440,23 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         #endif
         float detailFade = 1.0 - smoothstep(0.25, 1.4, camDist);
         float highland = smoothstep(0.12, 0.85, hAbove / uRelief);
-        float rn = rockNoise(vCloudP);
+        // Noise read at a point and two steps along the ground (for its slope) goes through a loop:
+        // the D3D compiler inlines every call, and three written-out calls were three copies to
+        // compile; a loop body is compiled once (2026-11-05). The slope samples only where drawn.
+        vec3 gUp = normalize(vCloudP);
+        vec3 gT1 = normalize(cross(gUp, abs(gUp.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
+        vec3 gT2 = cross(gUp, gT1);
+        // (Summed as it goes, not kept in an array: D3D puts arrays indexed in a loop in slow
+        // indexable registers, and that cost ~5 ms a frame from orbit.)
+        float rn = 0.0;
+        vec3 rnG = vec3(0.0);
+        for (int k = 0; k < (detailFade > 0.0 && hAbove > 0.0 ? 3 : 1); k++) {
+          vec3 t = k == 1 ? gT1 : gT2;
+          float v = rockNoise(vCloudP + (k == 0 ? vec3(0.0) : t * 0.0003));
+          if (k == 0) rn = v; else rnG += t * (v - rn);
+        }
+        geoC = vec3(0.0);
+        if (hAbove > -0.0003) geoC = geoRockC(vCloudP);
         // Ice sheets (white ground) are smooth: little rock grain, a faint blue in their shading.
         float iceK = smoothstep(0.6, 0.8, min(diffuseColor.r, min(diffuseColor.g, diffuseColor.b)));
         diffuseColor.rgb *= mix(1.0, 0.82 + 0.36 * rn, (0.35 + 0.65 * highland) * detailFade * (1.0 - 0.8 * iceK));
@@ -460,7 +481,13 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           // On the patch the valleys are geometry (PATCH_BAKE_GLSL): no shading on top.
           carveW = 0.0;
         #endif
-        float ln = landNoise(vCloudP);
+        float ln = 0.0;
+        vec3 lnG = vec3(0.0);
+        for (int k = 0; k < (farFade > 0.0 ? 3 : 1); k++) {
+          vec3 t = k == 1 ? gT1 : gT2;
+          float v = landNoise(vCloudP + (k == 0 ? vec3(0.0) : t * 0.002));
+          if (k == 0) ln = v; else lnG += t * (v - ln);
+        }
         diffuseColor.rgb *= mix(1.0, 0.74 + 0.52 * ln, (0.45 + 0.55 * highland) * farFade * (1.0 - 0.75 * iceK));
         float foot = length(fwidth(vCloudP));
         float desertW = 0.0;
@@ -560,7 +587,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               // Desert pavement keeps the desert's own colour; regional rock only tints it (at full
               // strength whole deserts went grey).
               vec3 rock0 = base * vec3(0.62, 0.5, 0.42) * (0.9 + 0.2 * snoise(vCloudP * 220.0));
-              vec3 rock = mix(rock0, geoRock(vCloudP, rock0), 0.25);
+              vec3 rock = mix(rock0, geoRock(rock0), 0.25);
               vec3 surf = mix(reg, erg, seaMask);
               surf = mix(surf, rock, hamada);
               diffuseColor.rgb = mix(base, surf, aridW);
@@ -753,7 +780,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
                 float km = 0.0005 / (2.0 * uShR);   // ~3 km in uv
                 float hIn = texture(uShH, uv + inland * km * 2.0).r / 50.0;
                 float cliff = smoothstep(0.0016, 0.0035, hIn + 0.0006 * snoise(vCloudP * 200.0));
-                vec3 rockC = geoRock(vCloudP, vec3(0.3, 0.28, 0.25) * (0.85 + 0.3 * snoise01(vCloudP * 2400.0)));
+                vec3 rockC = geoRock(vec3(0.3, 0.28, 0.25) * (0.85 + 0.3 * snoise01(vCloudP * 2400.0)));
                 vec3 sand = vec3(0.69, 0.58, 0.33);
                 diffuseColor.rgb = mix(diffuseColor.rgb, mix(sand, rockC, cliff), shore * mix(0.75 * warmB, 0.85, cliff));
               }
@@ -914,11 +941,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         // the detail normal is mostly noise at that scale and turned rock and snow to speckle.
         vec3 geoN = normal;
         if (detailFade > 0.0 && hAbove > 0.0) {
-          vec3 up = normalize(vCloudP);
-          vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
-          vec3 t2 = cross(up, t1);
-          float e = 0.0003;
-          vec3 grad = t1 * (rockNoise(vCloudP + t1 * e) - rn) + t2 * (rockNoise(vCloudP + t2 * e) - rn);
+          vec3 grad = rnG;
           float amp = (0.15 + 0.6 * highland) * detailFade * (1.0 - 0.7 * iceK) * (1.0 - 0.75 * eroK * (1.0 - 0.6 * highland));
           normal = normalize(normal - TOVIEW(grad * amp));
         }
@@ -958,11 +981,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         }
         #endif
         if (farFade > 0.0) {
-          vec3 up = normalize(vCloudP);
-          vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
-          vec3 t2 = cross(up, t1);
-          float e = 0.002;
-          vec3 grad = t1 * (landNoise(vCloudP + t1 * e) - ln) + t2 * (landNoise(vCloudP + t2 * e) - ln);
+          vec3 grad = lnG;
           float amp = (1.0 + 3.0 * highland) * farFade * (1.0 - 0.6 * iceK) * (1.0 - 0.7 * carveW);
           normal = normalize(normal - TOVIEW(grad * amp));
         }
@@ -998,7 +1017,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           #endif
           float hiK = smoothstep(0.15, 0.55, hAbove / uRelief);
           float rockK = smoothstep(0.16, 0.34, rslope + 0.08 * hiK) * smoothstep(0.1, 0.35, hAbove / uRelief);
-          vec3 rock = geoRock(vCloudP, vec3(0.30, 0.28, 0.25) * (0.85 + 0.3 * rn));
+          vec3 rock = geoRock(vec3(0.30, 0.28, 0.25) * (0.85 + 0.3 * rn));
           diffuseColor.rgb = mix(diffuseColor.rgb, rock, clamp(rockK * (0.55 + 0.45 * hiK), 0.0, 0.9));
         }
         // Snow, per pixel: where it is cold enough for the height, latitude and season. Done

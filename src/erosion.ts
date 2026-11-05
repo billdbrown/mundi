@@ -76,9 +76,17 @@ export const EROSION_GLSL = /* glsl */`
     const float E = 0.0006;
     // The warp is broad next to E, so the three samples share it: 9 noise lookups, not 15.
     vec3 w = 0.004 * vec3(snoise(p * 60.0 + 11.0), snoise(p * 60.0 + 23.0), snoise(p * 60.0 + 37.0));
-    float h0 = eroHills(p + w, p), h1 = eroHills(p + t1 * E + w, p + t1 * E), h2 = eroHills(p + t2 * E + w, p + t2 * E);
+    // Through a loop, so the compiler (D3D inlines every call) compiles eroHills once, not thrice.
+    // (Summed as it goes: an array indexed in a loop is slow on D3D.)
+    float h0 = 0.0;
+    vec3 hG = vec3(0.0);
+    for (int k = 0; k < 3; k++) {
+      vec3 t = k == 1 ? t1 : t2, o = k == 0 ? vec3(0.0) : t * E;
+      float h = eroHills(p + o + w, p + o);
+      if (k == 0) h0 = h; else hG += t * (h - h0);
+    }
     // Scaled to slopes of about 0.3.
-    return vec4((h0 - 0.6) * 0.00045 * a, (t1 * (h1 - h0) + t2 * (h2 - h0)) / E * 0.00045 * a);
+    return vec4((h0 - 0.6) * 0.00045 * a, hG / E * 0.00045 * a);
   }
   vec3 hillGrad(vec3 p, vec3 up, float hilly) { return hills(p, up, hilly).yzw; }
   /**

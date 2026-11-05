@@ -57,10 +57,28 @@ await page.evaluate(async ({ top }) => {
   window.__prof = { progs, time, stub };
 }, { top });
 const n = await page.evaluate(() => window.__prof.progs.length);
+// DUMP=dir writes each program's shaders there (p0.vs, p0.fs, ...).
+if (process.env.DUMP) {
+  const fsm = await import('node:fs');
+  fsm.mkdirSync(process.env.DUMP, { recursive: true });
+  for (let i = 0; i < n; i++) {
+    const [vs, fs, name] = await page.evaluate((i) => { const p = window.__prof.progs[i]; return [p.vs, p.fs, p.key]; }, i);
+    fsm.writeFileSync(`${process.env.DUMP}/p${i}.vs`, vs); fsm.writeFileSync(`${process.env.DUMP}/p${i}.fs`, fs);
+    console.log(`p${i}: ${name}`);
+  }
+}
 for (let i = 0; i < n; i++) {
   const head = await page.evaluate(async (i) => { const { progs, time } = window.__prof, p = progs[i]; const b = Math.min(await time(p.vs, p.fs), await time(p.vs, p.fs)); return `${p.name} [${p.key}] fs ${(p.len / 1024).toFixed(0)} KB: ${b.toFixed(0)} ms`; }, i);
   console.log(head);
   for (const fn of fns) {
+    // FILE:path times that fragment shader source instead (with this program's vertex shader):
+    // variants made from a DUMP, timed in the same run as the original.
+    if (fn.startsWith('FILE:')) {
+      const fsrc = (await import('node:fs')).readFileSync(fn.slice(5), 'utf8');
+      const ms = await page.evaluate(async ([i, fsrc]) => { const { progs, time } = window.__prof; return (await time(progs[i].vs, fsrc)).toFixed(0); }, [i, fsrc]);
+      console.log(`    ${fn.replace(/.*[\\/]/, '')}: ${ms} ms`);
+      continue;
+    }
     const ms = await page.evaluate(async ([i, fn]) => {
       const { progs, time, stub } = window.__prof, p = progs[i];
       // Special cases: TRIVIAL_FS / TRIVIAL_VS replace one stage with a minimal one (same
