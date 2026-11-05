@@ -18,6 +18,9 @@ await page.addInitScript(() => {
   const tick = () => { const t = performance.now(); window.__gaps.push(t - last); if (t - last > window.__worst[0]) window.__worst = [t - last, t]; last = t; requestAnimationFrame(tick); };
   requestAnimationFrame(tick);
 });
+// UNTIL=low: stop once the low-altitude shaders are in (the map's and other look's compile only
+// when wanted, so otherwise this waits out the 400 s limit).
+if (process.env.UNTIL === 'low') await page.addInitScript(() => { window.__untilLow = true; });
 const t0 = Date.now();
 await page.goto(url + '#seed=77', { timeout: 240000 });
 await page.waitForFunction(() => window.mundi?.view, null, { timeout: 240000 });
@@ -30,7 +33,7 @@ const stages = await page.evaluate(() => new Promise((res) => {
   const check = () => {
     spin();
     for (const k of ['gateReady', 'lowReady', 'mapReady', 'otherLookReady']) if (v[k] && !(k in out)) out[k] = (performance.now() - t) / 1000;
-    if ('otherLookReady' in out || performance.now() - t > 400000) res(out);
+    if ('otherLookReady' in out || (window.__untilLow && 'lowReady' in out) || performance.now() - t > 400000) res(out);
     else requestAnimationFrame(check);
   };
   check();

@@ -266,8 +266,11 @@ const CLOUD_GLSL = /* glsl */`
  * bends the normal so slopes catch light like rock and scree, stronger on high ground, and
  * the same noise breaks up colour. Both fade out with distance, where they would only shimmer.
  */
-export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: PatchUniforms): THREE.MeshStandardMaterial {
+export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: PatchUniforms, orbit = false): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+  // The view from orbit only (render.ts orbitTerrainOk): the close-up detail compiled out, so it
+  // compiles in about half the time and the first view comes up sooner.
+  if (orbit) mat.defines = { ...mat.defines, ORBIT: '' };
   // Ground patterns need the per-vertex climate (natural colours, smooth style only).
   if (climate) mat.defines = { ...mat.defines, USE_CLIMATE: '' };
   // The dune patch (dunepatch.ts): the same ground shading on a fine grid that carries the dunes.
@@ -478,6 +481,9 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         float eroH = 0.0, eroK = 0.0;
         vec3 eroGrad = vec3(0.0);
         float poolK = 0.0;   // standing water in marshes: shiny (roughness, below)
+        // (ORBIT: the terrain seen only from ~1 radius up or higher, render.ts. Everything that has
+        // faded out by then is compiled out of it: about half the code, and of the compile time.)
+        #ifndef ORBIT
         if (uErosion > 0.0 && eroHA > 0.0001 && camDist < 0.22 && iceK < 0.99) {
           #if defined(DUNE_PATCH)
             vec3 wN = normalize(vTerrN);
@@ -528,6 +534,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
             #endif
           }
         }
+        #endif
         #ifdef USE_CLIMATE
           if (hAbove > 0.0004) {
             float moist = vClim.x, temp = vClim.y;
@@ -564,6 +571,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               float pn = 0.6 * snoise(vCloudP * 9.0) + 0.3 * snoise(vCloudP * 31.0 + 4.0) + 0.1 * snoise(vCloudP * 140.0);
               float pan = smoothstep(0.42, 0.5, pn) * (1.0 - smoothstep(0.03, 0.09, hAbove / uRelief));
               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.80, 0.77, 0.70), pan * desertW * 0.85);
+              #ifndef ORBIT
               // Which dunes where (dunes.ts).
               vec4 dw = duneWeights(vCloudP, moist, desertW, seaMask, duneRaw);
               duneK = duneRaw * aaFade(DUNE * 0.6, foot);
@@ -575,41 +583,54 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
                 vec3 sand = mix(diffuseColor.rgb * vec3(1.0, 0.97, 0.92), diffuseColor.rgb * vec3(1.12, 1.0, 0.82), duneS.x);
                 diffuseColor.rgb = mix(diffuseColor.rgb, sand * (0.88 + 0.22 * duneS.x) * (1.0 - 0.3 * duneS.y), duneK);
               }
+              #endif
             }
             // Grass and steppe: mottled, sun-bleached patches over a few kilometres.
             float grassW = smoothstep(0.12, 0.25, moist) * smoothstep(0.62, 0.42, moist) * smoothstep(0.25, 0.4, temp) * lowland;
+            #ifndef ORBIT
             if (grassW > 0.0) {
               float m = snoise01(vCloudP * 900.0) * 0.55 + snoise01(vCloudP * 2600.0) * 0.3 + snoise01(vCloudP * 7000.0) * 0.15;
               float k = grassW * aaFade(0.0006, foot);
               diffuseColor.rgb *= mix(1.0, 0.76 + 0.48 * m, k);
               diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.12, 1.04, 0.8), smoothstep(0.55, 0.8, m) * k * 0.6);
             }
+            #endif
             // Forest: dense canopy in the groves, with lumpy crowns up close, and paler, yellower
             // clearings between. Open country gets the odd dark grove. The trees placed near the
             // camera follow the same pattern (groves.ts), so canopy and trees agree.
             // Forest is where it's moist enough and warmer than tundra (by climate: a test on the
             // ground colour missed dark taiga, which then read as bare hills past the trees).
             float forestW = smoothstep(0.3, 0.45, moist) * smoothstep(0.17, 0.24, temp) * lowland;
-            float gv = groveField(vCloudP);
+            #ifdef ORBIT
+              float gv = 0.0;
+            #else
+              float gv = groveField(vCloudP);
+            #endif
             if (forestW > 0.0) {
               // Fades out where groves are too small to resolve: from orbit the waves of the
               // grove pattern average into chevron stripes.
               // Groves only come in on descent; from orbit a broad, irregular canopy shade stands in
               // (the grove waves, seen together from afar, lined up into chevrons).
-              float groveNear = 1.0 - smoothstep(0.18, 0.45, camDist);
+              #ifdef ORBIT
+                float groveNear = 0.0;
+              #else
+                float groveNear = 1.0 - smoothstep(0.18, 0.45, camDist);
+              #endif
               float broad = smoothstep(-0.4, 0.5, snoise(vCloudP * 60.0) + 0.5 * snoise(vCloudP * 170.0 + 2.0));
               // Wetter forest has fewer clearings (matches the offsets in lodflora.ts).
               float closed = smoothstep(0.6, 0.72, moist) * mix(0.35, 0.5, smoothstep(0.65, 0.75, temp));
               float inGrove = mix(mix(0.45 + closed, 0.85 + closed * 0.3, broad), smoothstep(-0.35, 0.25, gv + closed), groveNear);
               canopyK = forestW * inGrove;
-              float crowns = snoise01(vCloudP * 3200.0) * 0.6 + snoise01(vCloudP * 9000.0) * 0.4;
               // Under the canopy the ground takes the trees' own colours (flora.ts), as forest looks
               // from the air: dark, bluer in the north. Past the drawn trees (plants are small, so
               // only drawn near the view) this is what carries the forest.
               vec3 canopy = mix(vec3(0.026, 0.066, 0.03), vec3(0.04, 0.12, 0.025), smoothstep(0.3, 0.7, temp));
               diffuseColor.rgb = mix(diffuseColor.rgb, canopy, forestW * inGrove * 0.6);
               diffuseColor.rgb *= mix(1.0, 0.85, forestW * inGrove);
-              diffuseColor.rgb *= mix(1.0, 0.75 + 0.35 * crowns, forestW * inGrove * aaFade(0.0003, foot));
+              #ifndef ORBIT
+                float crowns = snoise01(vCloudP * 3200.0) * 0.6 + snoise01(vCloudP * 9000.0) * 0.4;
+                diffuseColor.rgb *= mix(1.0, 0.75 + 0.35 * crowns, forestW * inGrove * aaFade(0.0003, foot));
+              #endif
               // Clearings: sun-bleached grass in warm forest, moss and bog in cold forest.
               vec3 glade = mix(vec3(0.82, 0.98, 0.8), vec3(1.18, 1.12, 0.82), smoothstep(0.35, 0.55, temp));
               diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * glade, forestW * (1.0 - inGrove) * 0.55);
@@ -651,8 +672,10 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               float pn2 = 0.6 * snoise(vCloudP * 25.0 + 3.0) + 0.3 * snoise(vCloudP * 80.0) + 0.1 * snoise(vCloudP * 300.0);
               float sk = 0.8 * vEco.y * smoothstep(-0.15, 0.1, pn2);
               vec3 salt = mix(vec3(0.52, 0.49, 0.43), vec3(0.7, 0.68, 0.62), smoothstep(-0.3, 0.6, snoise(vCloudP * 300.0)));
+              #ifndef ORBIT
               vec3 qs = vCloudP * 4000.0 + vec3(snoise01(vCloudP * 1500.0), snoise01(vCloudP * 1500.0 + 7.0), 0.0) * 1.2;
               salt *= 1.0 - 0.25 * (1.0 - smoothstep(0.0, 0.06, voronoiEdge(qs))) * aaFade(0.00025, foot);
+              #endif
               diffuseColor.rgb = mix(diffuseColor.rgb, salt, sk);
             }
             // Badlands and canyonlands: bands of red, buff and grey rock by height, so slopes
@@ -673,6 +696,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               diffuseColor.rgb = mix(diffuseColor.rgb, heath, tundraW);
               float lakesT = smoothstep(0.55, 0.62, snoise(vCloudP * 160.0) * 0.7 + snoise(vCloudP * 520.0 + 9.0) * 0.3) * smoothstep(0.3, 0.45, moist);
               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.08, 0.11), lakesT * tundraW * 0.85);
+              #ifndef ORBIT
               float k = tundraW * aaFade(0.0007, foot);
               // Warped, so the polygons are irregular rather than paving stones.
               vec3 q = vCloudP * 2200.0 + vec3(snoise01(vCloudP * 900.0), snoise01(vCloudP * 900.0 + 7.0), snoise01(vCloudP * 900.0 + 13.0)) * 1.2;
@@ -681,6 +705,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               diffuseColor.rgb *= mix(1.0, 1.0 - 0.18 * crack * (0.5 + snoise01(vCloudP * 600.0)), k);
               float pond = smoothstep(0.82, 0.86, snoise01(vCloudP * 3000.0)) * smoothstep(0.25, 0.5, moist);
               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.06, 0.1, 0.14), pond * k * 0.8);
+              #endif
             }
           }
         #endif
@@ -740,6 +765,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         #endif
         // Water gathers in the gullies: their floors are greener and darker, the spurs between
         // them barer and paler, most of all in dry country (as in the Ethiopian highlands).
+        #ifndef ORBIT
         if (eroK > 0.0) {
           #ifdef USE_CLIMATE
             float dryE = 1.0 - smoothstep(0.4, 0.75, vClim.x);
@@ -751,6 +777,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           diffuseColor.rgb *= mix(vec3(1.0), mix(vec3(0.78, 0.86, 0.74), vec3(0.5, 0.7, 0.42), dryE), floorK);
           diffuseColor.rgb *= mix(vec3(1.0), vec3(1.16, 1.07, 0.9), spurK * (0.3 + 0.7 * dryE));
         }
+        #endif
         // Carved valleys: water gathers on their floors, greener and darker; bare, paler spurs.
         if (carveW > 0.0) {
           #ifdef USE_CLIMATE
@@ -765,8 +792,12 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         // on the sea bed, seen through the shallows.
         #ifdef USE_CLIMATE
           if (vEco.w > 0.01 && hAbove < 0.0) {
-            float cn = snoise(vCloudP * 900.0) * 0.6 + snoise(vCloudP * 2600.0 + 4.0) * 0.4;
-            float head = smoothstep(0.1, 0.3, cn) * aaFade(0.0008, foot);
+            #ifdef ORBIT
+              float head = 0.0;
+            #else
+              float cn = snoise(vCloudP * 900.0) * 0.6 + snoise(vCloudP * 2600.0 + 4.0) * 0.4;
+              float head = smoothstep(0.1, 0.3, cn) * aaFade(0.0008, foot);
+            #endif
             vec3 reef = mix(vec3(0.62, 0.66, 0.56), vec3(0.18, 0.24, 0.2), head);
             diffuseColor.rgb = mix(diffuseColor.rgb, reef, vEco.w * 0.8);
           }
@@ -788,6 +819,11 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
             float lat = asin(clamp(n.y, -1.0, 1.0));
             vec2 geo = vec2(atan(n.x, n.z) * cos(lat), lat);
             if (farm > 0.0) {
+              // From afar, farmland is the land a little lighter and yellower, with a faint grain.
+              vec3 far = mix(diffuseColor.rgb, vec3(0.26, 0.25, 0.10), 0.45) * (0.85 + 0.3 * vnoise(vCloudP * 400.0));
+              #ifdef ORBIT
+                diffuseColor.rgb = mix(diffuseColor.rgb, far, farm * 0.75);
+              #else
               const float FIELD = 0.0011;     // ~7 km: exaggerated, like everything here
               float ang = vnoise(vCloudP * 25.0) * 3.14159;
               vec2 uv = mat2(cos(ang), sin(ang), -sin(ang), cos(ang)) * geo / FIELD;
@@ -798,11 +834,14 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
                         : rnd < 0.75 ? vec3(0.20, 0.14, 0.08) : vec3(0.07, 0.12, 0.03);
               float hedge = smoothstep(0.0, 0.07, min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y)));
               vec3 fields = mix(crop * 0.55, crop * (0.85 + 0.3 * vnoise(vCloudP * 4000.0)), hedge);
-              // From afar, farmland is the land a little lighter and yellower, with a faint grain.
-              vec3 far = mix(diffuseColor.rgb, vec3(0.26, 0.25, 0.10), 0.45) * (0.85 + 0.3 * vnoise(vCloudP * 400.0));
               diffuseColor.rgb = mix(diffuseColor.rgb, mix(far, fields, aaFade(FIELD * 0.3, foot)), farm * 0.75);
+              #endif
             }
             if (civTown > 0.0) {
+              vec3 far = vec3(0.27, 0.21, 0.17);
+              #ifdef ORBIT
+                diffuseColor.rgb = mix(diffuseColor.rgb, far, civTown * 0.8);
+              #else
               const float BLOCK = 0.0005;
               vec2 uv = geo / BLOCK;
               vec2 f = fract(uv), id = floor(uv);
@@ -810,8 +849,8 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               float street = 1.0 - smoothstep(0.0, 0.1, min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y)));
               vec3 roofs = mix(vec3(0.30, 0.13, 0.08), vec3(0.32, 0.30, 0.27), rnd);
               vec3 town = mix(roofs, vec3(0.42, 0.40, 0.36), street);
-              vec3 far = vec3(0.27, 0.21, 0.17);
               diffuseColor.rgb = mix(diffuseColor.rgb, mix(far, town, aaFade(BLOCK * 0.4, foot)), civTown * 0.8);
+              #endif
             }
           }
         #endif
@@ -883,7 +922,9 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           float amp = (0.15 + 0.6 * highland) * detailFade * (1.0 - 0.7 * iceK) * (1.0 - 0.75 * eroK * (1.0 - 0.6 * highland));
           normal = normalize(normal - TOVIEW(grad * amp));
         }
-        if (uErosion > 0.0) normal = normalize(normal - TOVIEW(eroGrad));
+        #ifndef ORBIT
+          if (uErosion > 0.0) normal = normalize(normal - TOVIEW(eroGrad));
+        #endif
         // Analytical erosion (analyticerosion.ts, via terrainshadow.ts): river valleys and ridges
         // carved into the land around the view, at the scale the mesh is too coarse for and the
         // close-up gullies too fine. Mostly a mid-zoom effect: up close the gullies take over.
@@ -895,13 +936,16 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
         #else
           float duneShade = 1.0;
         #endif
+        #ifndef ORBIT
         if (duneK * duneShade > 0.0) {
           vec3 up = normalize(vCloudP);
           vec3 east = normalize(vec3(up.z, 0.0, -up.x));
           vec3 north = cross(up, east);
           normal = normalize(normal - TOVIEW((east * duneS.z + north * duneS.w) * duneK * duneShade));
         }
+        #endif
         // Rock strata: bands across steep high ground, as layered rock shows in cliffs.
+        #ifndef ORBIT
         if (highland > 0.0 && hAbove > 0.0) {
           #ifdef MERCATOR
             float steep = 1.0 - normalize(mix(geoN, normal, detailFade)).z;
@@ -912,6 +956,7 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
           float k = smoothstep(0.04, 0.16, steep) * highland * aaFade(0.0005, foot);
           diffuseColor.rgb *= mix(1.0, 0.86 + 0.14 * band, k);
         }
+        #endif
         if (farFade > 0.0) {
           vec3 up = normalize(vCloudP);
           vec3 t1 = normalize(cross(up, abs(up.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0)));
@@ -933,7 +978,11 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
             float rug = max(smoothstep(0.0, 0.07, sqrt(max(1.0 - cz * cz, 0.0)) / cz), 0.5 * smoothstep(0.02, 0.3, hAbove / uRelief));
             rug *= (1.0 - iceK) * smoothstep(0.0001, 0.001, hAbove);
             float vAll = eroLostVar(1e9);
-            float s2 = max(rug - eroK, 0.0) * vAll + eroK * eroLostVar(foot);
+            #ifdef ORBIT
+              float s2 = rug * vAll;   // (no gullies drawn: eroK is 0)
+            #else
+              float s2 = max(rug - eroK, 0.0) * vAll + eroK * eroLostVar(foot);
+            #endif
             s2 += 0.045 * rug * smoothstep(0.08, 0.22, camDist);   // the rolling hills, once not drawn
             diffuseColor.rgb *= leanShadow(dot(lN, uCloudSun), s2 * 2.0);
           }
@@ -1041,9 +1090,11 @@ export function makeTerrainMaterial(u: CloudUniforms, climate = false, patch?: P
               vec3 across = cross(sn, down);
               float u = dot(vCloudP, across), v = dot(vCloudP, down);
               float flow = snoise(vec3(u * 2500.0, v * 180.0, 3.0)) * 0.6 + snoise(vec3(u * 7000.0, v * 500.0, 9.0)) * 0.4;
-              float moraine = 1.0 - smoothstep(0.03, 0.1, abs(sin(u * 1400.0 + snoise(vec3(u * 300.0, v * 60.0, 1.0)) * 2.0)));
               vec3 ice = vec3(0.78, 0.86, 0.93) * (0.9 + 0.12 * flow);
+              #ifndef ORBIT
+              float moraine = 1.0 - smoothstep(0.03, 0.1, abs(sin(u * 1400.0 + snoise(vec3(u * 300.0, v * 60.0, 1.0)) * 2.0)));
               ice = mix(ice, vec3(0.32, 0.3, 0.28), moraine * 0.55 * aaFade(0.0005, foot));
+              #endif
               diffuseColor.rgb = mix(diffuseColor.rgb, ice, smoothstep(0.05, 0.4, gl) * 0.92);
             }
           }

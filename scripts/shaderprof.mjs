@@ -68,6 +68,18 @@ for (let i = 0; i < n; i++) {
       const empty = (src) => src.replace(/void\s+main\s*\(\s*\)\s*\{[\s\S]*\}\s*$/, 'void main() { gl_Position = vec4(0.0); }');
       if (fn === 'TRIVIAL_FS') return (await time(p.vs, p.fs.replace(/void\s+main\s*\(\s*\)\s*\{[\s\S]*\}\s*$/, 'void main() { pc_fragColor = vec4(1.0); }'))).toFixed(0);
       if (fn === 'TRIVIAL_VS') return (await time(empty(p.vs), p.fs)).toFixed(0);
+      // DEFINE:NAME compiles the program with #define NAME (e.g. DEFINE:ORBIT, sky.ts).
+      if (fn.startsWith('DEFINE:')) return (await time(p.vs, p.fs.replace(/\n/, `\n#define ${fn.slice(7)}\n`))).toFixed(0);
+      // DYNLOOPS: every constant-bound loop's bound plus a uniform zero, so the compiler can't
+      // unroll it. DYNLOOPS:24|27 only the loops with those bounds.
+      if (fn.startsWith('DYNLOOPS')) {
+        const only = fn.includes(':') ? fn.split(':')[1].split('|') : null;
+        const fs = p.fs.replace(/for\s*\(\s*int\s+(\w+)\s*=\s*(-?\d+)\s*;\s*\1\s*(<=?)\s*([\w.]+)\s*;/g, (m, v, a, op, b) => {
+          if (only && !only.includes(b)) return m;
+          return `for (int ${v} = ${a}; ${v} ${op} (${b} + uDynZero);`;
+        }).replace(/\n/, '\nuniform highp int uDynZero;\n');
+        return (await time(p.vs, fs)).toFixed(0);
+      }
       let fs = p.fs;
       for (const f of fn.split('+')) { fs = stub(fs, f); if (!fs) return null; }
       return (await time(p.vs, fs)).toFixed(0);

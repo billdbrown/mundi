@@ -141,6 +141,16 @@ export class PlanetView {
    */
   private gateReady = false;
   private terrainMats = new Map<boolean, THREE.Material>();
+  /**
+   * The terrain from orbit (sky.ts ORBIT): the close-up detail compiled out, which halves its
+   * compile (~17 s against ~36 s on Windows), so the first view opens on it. The full terrain
+   * compiles with the low-altitude shaders and takes over coming down (orbitTerrainOk). Drawn
+   * the same wherever it is used: everything it leaves out has faded out by then. Never on the
+   * flat map.
+   */
+  private orbitMats = new Map<boolean, THREE.Material>();
+  private terrainFull?: THREE.Material;
+  private terrainOrbit?: THREE.Material;
   /** The low-altitude shaders (ground patch, terrain shadows) are ready too. */
   private lowReady = false;
   private gateRun = 0;
@@ -168,6 +178,7 @@ export class PlanetView {
     // In stages, so the view from orbit comes first: the scene (without the ground patch, needed
     // only low down) and the atmosphere; then the patch and the shadows; then the map's variants.
     this.lowReady = false;
+    this.useTerrain(!this.mapMode);
     this.planet.remove(this.dunePatch.mesh);
     const sceneProgs = this.programsOf(r.compile(this.scene, this.mapMode ? this.mapCam : this.camera));
     const atmoJob = this.atmo.prewarm(r);
@@ -183,7 +194,7 @@ export class PlanetView {
       if (this.pendingMap) this.mapGate ??= this.compileMap();   // asked for already: first
       const p0 = r.getRenderTarget();
       r.setRenderTarget(target);
-      const low = [this.dunePatch.prewarm(r, this.camera, this.scene, target), this.terrainShadow.prewarm(r)];
+      const low = [this.dunePatch.prewarm(r, this.camera, this.scene, target), this.terrainShadow.prewarm(r), this.prewarmFullTerrain()];
       r.setRenderTarget(p0);
       Promise.all(low).catch(() => {}).finally(() => {
         if (run !== this.gateRun) return;
@@ -253,6 +264,35 @@ export class PlanetView {
     }
     return out;
   }
+  /** Put the orbit or the full terrain material on the terrain mesh. */
+  private useTerrain(orbit: boolean) {
+    const m = orbit ? this.terrainOrbit : this.terrainFull;
+    if (this.terrain && m && this.terrain.material !== m) this.terrain.material = m;
+  }
+  /** Compile the full terrain (the gate compiled the orbit one), against the current target. */
+  private prewarmFullTerrain(): Promise<unknown> {
+    if (!this.terrain || !this.terrainFull || this.terrain.material === this.terrainFull) return Promise.resolve();
+    const own = this.terrain.material;
+    this.terrain.material = this.terrainFull;
+    try { return programsReady(this.programsOf(this.renderer.compile(this.terrain, this.camera, this.scene)), this.renderer); }
+    finally { this.terrain.material = own; }
+  }
+  /**
+   * The orbit terrain draws the same as the full one: the camera is high enough that everything
+   * left out of it has faded out. The groves (to 0.45 of distance) and the finest patterns, which
+   * fade out once a pixel covers ~0.45 of their spacing (aaFade, sky.ts: the coarsest left out,
+   * the reef heads, at 0.0008), with a margin. On a 1000-pixel-high view that is from ~0.65 radii
+   * up; on a 4K one, ~1.2.
+   */
+  private orbitTerrainOk(): boolean {
+    const alt = this.camera.position.length() - 1;
+    const h = this.renderer.getDrawingBufferSize(this.bufSize).y;
+    const pixel = (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)) / Math.max(1, h);
+    return alt > 0.6 && alt * pixel > 0.0008 * 0.45 * 1.3;
+  }
+  private bufSize = new THREE.Vector2();
+  /** Tests: draw the orbit or the full terrain whatever the height (null: by height). */
+  terrainOverride: 'orbit' | 'full' | null = null;
   /** The flat map's shader variants (MERCATOR), in the background. */
   private async compileMap(): Promise<void> {
     // (Started on the map, the gate compiled its variants already.)
@@ -268,6 +308,9 @@ export class PlanetView {
       const prev = r.getRenderTarget();
       r.setRenderTarget(this.opts.look === 'photo' && this.composer ? this.composer.readBuffer : null);
       this.updateMapCam();
+      // (The terrain on the map is always the full one.)
+      const own = (o as THREE.Mesh).material;
+      if (o === this.terrain && this.terrainFull) (o as THREE.Mesh).material = this.terrainFull;
       const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[];
       const mats = Array.isArray(m) ? m : [m];
       const had = mats.map((x) => 'MERCATOR' in ((x as THREE.ShaderMaterial).defines ??= {}));
@@ -277,6 +320,7 @@ export class PlanetView {
       const mine = this.programsOf(r.compile(o, this.mapCam, this.scene));
       progs.push(...mine);
       mats.forEach((x, i) => { if (!had[i]) delete (x as THREE.ShaderMaterial).defines!.MERCATOR; x.needsUpdate = true; });
+      (o as THREE.Mesh).material = own;
       r.setRenderTarget(prev);
       // One object's programs at a time (unless a switch to the map is waiting).
       if (!this.pendingMap) await programsReady(mine, r);
@@ -306,13 +350,22 @@ export class PlanetView {
     const objs: THREE.Object3D[] = [];
     // The whole scene (stars, clouds and sky too), less the ground patch (globe only, low down).
     this.scene.traverse((o) => { if ((o as THREE.Mesh).material && o !== this.dunePatch.mesh && o !== this.dunePatch.heightMesh) objs.push(o); });
+    // The terrain once more: once with each of its materials (orbit and full) on the globe.
+    if (this.terrain) objs.push(this.terrain);
     const progs: { isReady(): boolean }[] = [];
     // The globe's first (the usual switch), then the flat map's.
     for (const merc of [false, true]) {
+      let terrainSeen = false;
       for (const o of objs) {
         await this.settled();
         if (run !== this.gateRun) return;
         const mesh = o as THREE.Mesh, own = mesh.material, vis = o.visible;
+        if (o === this.terrain) {
+          const second = terrainSeen; terrainSeen = true;
+          if (merc && second) continue;   // the map has the full terrain only
+          const tm = merc || second ? this.terrainFull : this.terrainOrbit;
+          if (tm) mesh.material = tm;
+        }
         if (o === this.gridLines || o === this.siteMarks || o === this.terrain || o === this.water) o.visible = true;
         const m = mesh.material as THREE.Material | THREE.Material[];
         const mats = Array.isArray(m) ? m : [m];
@@ -747,13 +800,14 @@ export class PlanetView {
     this.civBorders = borders && year >= 0;
   }
   private buildCiv() {
-    const mat = this.terrain?.material as THREE.MeshStandardMaterial | undefined;
+    const mats = this.terrain ? [this.terrainFull, this.terrainOrbit] : [];
     const on = !!(this.history && this.terrain && this.world && this.surface && this.opts.style === 'smooth');
     if (on) this.civ.build(this.world!, this.history!, this.terrain!, this.faceCell, this.surface!);
     else this.civ.dispose();
     this.flora.setClearing(on ? this.civ.clearYear : null);
-    if (mat) {
-      const d = (mat.defines ??= {});
+    for (const mat of mats) {
+      if (!mat) continue;
+      const d = ((mat as THREE.MeshStandardMaterial).defines ??= {});
       if (on !== ('USE_CIV' in d)) {
         if (on) d.USE_CIV = ''; else delete d.USE_CIV;
         mat.needsUpdate = true;
@@ -795,6 +849,8 @@ export class PlanetView {
       this.camera.position.set(Math.cos(lat) * Math.sin(lon) * d, Math.sin(lat) * d, Math.cos(lat) * Math.cos(lon) * d);
       this.camera.lookAt(0, 0, 0);
     }
+    // The map draws the full terrain (never the orbit one): set before the map's define goes on.
+    this.useTerrain(false);
     setMercator(this.planet, on);
     this.controls.enabled = !on;
     this.applyLighting();
@@ -1155,6 +1211,9 @@ export class PlanetView {
     if (civOn) this.civ.setVisibility(this.mapMode ? 2 : d, this.civBorders);
     const cam = this.mapMode ? this.mapCam : this.camera;
     if (!this.gateReady) { this.renderStandIn(cam); return; }
+    // The orbit terrain while it draws the same, or while the full one is still compiling.
+    // (terrainOverride: for tests, which compare the two.)
+    this.useTerrain(!this.mapMode && (this.terrainOverride ? this.terrainOverride === 'orbit' : !this.lowReady || this.orbitTerrainOk()));
     // Sky, haze and reddened sunlight (atmosphere.ts); not on the flat map.
     this.atmo.update(this.renderer, this.camera, this.sunDir, !this.mapMode);
     if (this.opts.look === 'photo') {
@@ -1208,7 +1267,7 @@ export class PlanetView {
       if (!o) continue;
       this.planet.remove(o);
       o.geometry.dispose();
-      const keep = [this.waterMat, this.riverMat, this.streamMat, ...this.terrainMats.values()] as THREE.Material[];
+      const keep = [this.waterMat, this.riverMat, this.streamMat, ...this.terrainMats.values(), ...this.orbitMats.values()] as THREE.Material[];
       if (!keep.includes(o.material as THREE.Material)) (o.material as THREE.Material).dispose();
     }
     for (const f of this.forest) { this.planet.remove(f); f.dispose(); }
@@ -1234,7 +1293,10 @@ export class PlanetView {
     const climate = !!data.terrain.climate;
     let tmat = this.terrainMats.get(climate);
     if (!tmat) { tmat = makeTerrainMaterial(this.cloudU, climate); this.terrainMats.set(climate, tmat); }
-    this.terrain = new THREE.Mesh(toGeometry(data.terrain), tmat);
+    let omat = this.orbitMats.get(climate);
+    if (!omat) { omat = makeTerrainMaterial(this.cloudU, climate, undefined, true); this.orbitMats.set(climate, omat); }
+    this.terrainFull = tmat; this.terrainOrbit = omat;
+    this.terrain = new THREE.Mesh(toGeometry(data.terrain), this.mapMode ? tmat : omat);
     this.faceCell = data.faces;
     this.planet.add(this.terrain);
     this.dunePatch.setTerrain(data.style === 'smooth' ? this.terrain : null);
