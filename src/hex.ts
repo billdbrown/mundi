@@ -260,6 +260,13 @@ let world = new THREE.Group();
 scene.add(world);
 let outline: THREE.Line | null = null;
 
+/** The lake mask nearest (x, y) on the map. */
+function layerNear(m: LocalMap, x: number, y: number): number {
+  const { res, size } = m, step = size / (res - 1), half = size / 2;
+  const i = Math.max(0, Math.min(res - 1, Math.round((x + half) / step))), j = Math.max(0, Math.min(res - 1, Math.round((y + half) / step)));
+  return m.lakeMask[j * res + i];
+}
+
 /** Ground height under (x, y) in map metres (y north). */
 function groundAtMap(m: LocalMap, x: number, y: number): number {
   const { res, size, heights } = m, step = size / (res - 1), half = size / 2;
@@ -448,10 +455,13 @@ function addContext(aerial: boolean) {
   // The occluder: every triangle outside the hex (inside, it would fight the tile's own ground).
   if (ctxOccluder) { world.remove(ctxOccluder); ctxOccluder.geometry.dispose(); (ctxOccluder.material as THREE.Material).dispose(); }
   const shape = hexShape(map), oidx: number[] = [];
+  // Only triangles wholly outside: one straddling the edge (centre outside) reached into the tile,
+  // and over water, level with the tile's own, hid it in triangular teeth along the edge (Bill,
+  // 2026-11-06: a sawtooth on a coral reef).
   for (let t = 0; t < idx.length; t += 3) {
-    let cx = 0, cy = 0;
-    for (let k = 0; k < 3; k++) { cx += pos[idx[t + k] * 3]; cy -= pos[idx[t + k] * 3 + 2]; }
-    if (!shape.inside(cx / 3, cy / 3)) oidx.push(idx[t], idx[t + 1], idx[t + 2]);
+    let anyIn = false;
+    for (let k = 0; k < 3; k++) if (shape.inside(pos[idx[t + k] * 3], -pos[idx[t + k] * 3 + 2])) anyIn = true;
+    if (!anyIn) oidx.push(idx[t], idx[t + 1], idx[t + 2]);
   }
   const og = new THREE.BufferGeometry();
   og.setAttribute('position', geo.getAttribute('position'));
@@ -582,11 +592,22 @@ function build(m: LocalMap) {
   }
   const pos = new Float32Array(N * 3);
   for (let v = 0; v < N; v++) { pos[v * 3] = px[v]; pos[v * 3 + 1] = ph[v]; pos[v * 3 + 2] = -py[v]; }
+  // A grid square split in two, as triangles facing up. On the tile's slanted edges, squares with
+  // corners pulled onto the edge fold over: the usual diagonal can give a flipped triangle, which is
+  // culled, and flat water showed the gaps as a sawtooth (Bill, 2026-11-06). There, take the other
+  // diagonal, and drop any triangle still flipped (it has no area on the tile).
+  const area = (u: number, v: number, w: number) => (px[v] - px[u]) * (py[w] - py[u]) - (py[v] - py[u]) * (px[w] - px[u]);
+  const split = (a: number, b: number, c: number, d: number): number[] => {
+    if (!(out[a] || out[b] || out[c] || out[d])) return [a, b, c, b, d, c];
+    let t = [[a, b, c], [b, d, c]];
+    if (!(area(a, b, c) > 1e-6 && area(b, d, c) > 1e-6)) t = [[a, b, d], [a, d, c]];
+    return t.filter(([u, v, w]) => area(u, v, w) > 1e-6).flat();
+  };
   const idx: number[] = [];
   for (let j = 0; j < res - 1; j++) for (let i = 0; i < res - 1; i++) {
     const a = j * res + i, b = a + 1, c = a + res, d = c + 1;
     if (out[a] && out[b] && out[c] && out[d]) continue;
-    idx.push(a, b, c, b, d, c);
+    for (const u of split(a, b, c, d)) idx.push(u);
   }
   const tg = new THREE.BufferGeometry();
   tg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -674,6 +695,11 @@ function build(m: LocalMap) {
     for (let k = 0; k < ring.length - 1; k++) {
       const [ax, ay] = ring[k], [bx, by] = ring[k + 1];
       const ga = groundAtMap(m, ax, ay), gb = groundAtMap(m, bx, by);
+      // None under water: there the water's edge meets the backdrop's, and a skirt hanging below
+      // the sea bed showed through it as dark teeth along the edge.
+      const lakeAt = (x: number, y: number) => (!Number.isNaN(m.lakeLevel) && layerNear(m, x, y) > 0.3 ? m.lakeLevel : -Infinity);
+      const wa = Math.max(m.sea ? 0 : -Infinity, lakeAt(ax, ay)), wb = Math.max(m.sea ? 0 : -Infinity, lakeAt(bx, by));
+      if (ga < wa - 0.05 && gb < wb - 0.05) continue;
       skp.push(ax, ga, -ay, ax, ga - depth, -ay, bx, gb, -by, bx, gb, -by, ax, ga - depth, -ay, bx, gb - depth, -by);
       const ca = colAt(ax, ay), cb = colAt(bx, by);
       for (const cc of [ca, ca, cb, cb, ca, cb]) skc.push(cc[0], cc[1], cc[2]);
@@ -707,7 +733,7 @@ function build(m: LocalMap) {
       if (mask && Math.max(...q.map((u) => mask[u])) < 0.5) continue;
       if (Math.min(...q.map((u) => ph[u])) > level) continue;
       if (q.every((u) => out[u])) continue;
-      for (const u of [q[0], q[1], q[2], q[1], q[3], q[2]]) {
+      for (const u of split(q[0], q[1], q[2], q[3])) {
         lp.push(px[u], level, -py[u]);
         tint(Math.max(0, level - ph[u]), tmp); lc.push(tmp.r, tmp.g, tmp.b);
       }
@@ -764,7 +790,7 @@ function build(m: LocalMap) {
   // The grass carpet (hexgrass.ts), from the ground as painted.
   grass?.dispose();
   const gf = grassField(m, tg.getAttribute('color').array as Float32Array, tg.getAttribute('grain').array as Float32Array,
-    canopy.tCanopy.value.image.data as Uint8Array, CANOPY_RES);
+    canopy.tCanopy.value.image.data as Uint8Array, CANOPY_RES, inFrame);
   grass = new Grass(gf, m);
   world.add(grass.group);
   // A cold open can beat the pack: draw with the planet's models, then swap once it is here.

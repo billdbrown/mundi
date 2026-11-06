@@ -19,7 +19,8 @@ export interface GrassField { col: THREE.DataTexture; hgt: THREE.DataTexture }
  * grain (soil, stone, snow per sample: hexstyle.ts groundGrain), shade (0..1 crowns overhead, at
  * CANOPY resolution), and the water.
  */
-export function grassField(m: LocalMap, paint: Float32Array, grain: Float32Array, shade: Uint8Array, shadeRes: number): GrassField {
+export function grassField(m: LocalMap, paint: Float32Array, grain: Float32Array, shade: Uint8Array, shadeRes: number,
+  inFrame: (x: number, y: number) => boolean): GrassField {
   const R = m.res, N = R * R;
   const col = new Uint8Array(N * 4), hgt = new Float32Array(N * 2);
   for (let v = 0; v < N; v++) {
@@ -30,10 +31,12 @@ export function grassField(m: LocalMap, paint: Float32Array, grain: Float32Array
     const wet = ly(L_DEPTH) > 0 || (m.sea && h < 0.3) || (!Number.isNaN(m.lakeLevel) && m.lakeMask[v] > 0.5 && h < m.lakeLevel + 0.2);
     const bare = Math.max(grain[v * 3], grain[v * 3 + 1], grain[v * 3 + 2] * 1.4, ly(L_PATH));
     const field = ly(L_FIELD);
-    let dens = wet ? 0 : Math.max(0, 1 - bare * 1.35) * (1 - 0.75 * sh);
+    // (Only on the tile: outside it is the blurred backdrop of the neighbours.)
+    const on = inFrame(-m.size / 2 + i * m.size / (R - 1), -m.size / 2 + j * m.size / (R - 1));
+    let dens = wet || !on ? 0 : Math.max(0, 1 - bare * 1.35) * (1 - 0.75 * sh);
     // Sparse and short where it is cold up high; tall and lush in wet meadows; crops tall and even.
     let tall = 0.32 + 0.4 * ly(L_LUSH) - 0.15 * ly(L_ALPINE) + 0.25 * ly(L_HEDGE);
-    if (field > 0.5) { dens = Math.max(dens, 0.95); tall = 0.85; }
+    if (field > 0.5 && on) { dens = Math.max(dens, 0.95); tall = 0.85; }
     // Colour: the ground's own, a touch brighter and greener so blades read against it.
     const r = paint[v * 3], g = paint[v * 3 + 1], b = paint[v * 3 + 2];
     const k = field > 0.5 ? 1.1 : 1.15;
