@@ -4,8 +4,6 @@
  * planet; a style (hexstyle.ts, keys 1–5) decides how it is drawn.
  */
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
@@ -23,6 +21,8 @@ import { STYLE, paintGround, groundGrain, STYLE_GRADE, TILT_SHIFT, type HexStyle
 import { daylight, hourForElevation, type RGB } from './daylight.ts';
 import type { HexJob, ValleyJob } from './hexworker.ts';
 import type { Spot } from './debug.ts';
+import { HexCamera, FEEL } from './hexcamera.ts';
+import { Walker, pegman } from './hexwalk.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -95,10 +95,14 @@ $('view').appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0xffffff, 0);
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.3, 50000);
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.maxPolarAngle = Math.PI * 0.495;
-const walker = new PointerLockControls(camera, document.body);
+// A city-builder camera (hexcamera.ts): right-drag pans, middle-drag turns, the wheel zooms.
+const controls = new HexCamera(camera, renderer.domElement);
+controls.ground = (x, z) => waterAt(x, -z);
+{ const f = h.get('feel'); if (f && FEEL[f]) controls.feel = FEEL[f]; }
+// Walking (hexwalk.ts): drag the little figure onto the map.
+const walker = new Walker(camera, renderer.domElement);
+walker.ground = controls.ground;
+if (h.get('bob') !== null) walker.bob = Number(h.get('bob'));
 const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
 const sun = new THREE.DirectionalLight(0xffffff, 1);
 sun.castShadow = true;
@@ -1178,7 +1182,7 @@ worker.onmessage = (e: MessageEvent<{ map: LocalMap; ms: { world: number; local:
   map = m;
   build(m);
   drawInset(m); facts(m);
-  if (rel) { camera.position.copy(rel.p.multiplyScalar(m.size)); controls.target.copy(rel.t.multiplyScalar(m.size)); }
+  if (rel) { camera.position.copy(rel.p.multiplyScalar(m.size)); controls.target.copy(rel.t.multiplyScalar(m.size)); controls.snap(); }
   else resetView();
   firstBuild = false;
   $('timing').textContent = `world ${Math.round(e.data.ms.world)} ms · hex ${Math.round(e.data.ms.local)} ms${(e.data as { prebuilt?: boolean }).prebuilt ? ' (prebuilt)' : ''} · ${(m.trees.length / 6).toLocaleString()} plants`;
@@ -1197,32 +1201,57 @@ function resetView() {
   const fit = (map.localWidth * 0.62 + Math.max(0, hi - Math.max(lo, 0)) * 0.6) / Math.tan((c.fov * Math.PI / 180) / 2) * c.dist * narrow;
   // Standing further back on a narrow screen, look down more steeply, or near hills hide the hex.
   const t = Math.max(30, c.tilt - 12 * (narrow - 1)) * Math.PI / 180;
+  // Zoom: out to the whole hex with its neighbours round it, in to a few metres off the ground.
+  controls.maxDistance = fit * 1.15;
+  controls.minDistance = 4;
+  controls.bound = map.localWidth * 0.55;
   controls.target.set(0, g, 0);
   camera.position.set(0, g + Math.cos(t) * fit, Math.sin(t) * fit);
-  controls.update();
+  controls.snap();
   tiltH.uniforms.uFocus.value = tiltV.uniforms.uFocus.value = 0.5;
 }
 $('reset').onclick = resetView;
 
 // --- Walking ---
-const keys = new Set<string>();
+// Drag the figure onto the ground (a ring shows where), or click it to drop in at the middle of the
+// view. Esc glides back up to where the map camera was.
+const dropRing = new THREE.Mesh(new THREE.RingGeometry(1.2, 1.8, 40).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0xffd23f, transparent: true, opacity: 0.9, depthTest: false }));
+dropRing.renderOrder = 10; dropRing.visible = false;
 let saved: { p: THREE.Vector3; t: THREE.Vector3; tilt: boolean } | null = null;
-$('walk').onclick = () => {
-  if (!map) return;
+function walkAt(p: THREE.Vector3 | null) {
+  if (!map || walker.active) return;
+  const at = p ?? controls.target.clone();
   saved = { p: camera.position.clone(), t: controls.target.clone(), tilt: tiltOn };
-  camera.position.set(8, waterAt(8, 3) + 1.7, -3);
-  camera.lookAt(0, groundAt(0, 0) + 2, 0);
   controls.enabled = false;
   tiltH.enabled = tiltV.enabled = false;
-  walker.lock();
-};
-walker.addEventListener('unlock', () => {
+  walker.limit = map.size / 2 - 1;
+  walker.setReturn(saved.p, saved.t);
+  walker.start(at.x, at.z, controls.heading);
+  document.body.classList.add('walking');
+}
+walker.onDone = () => {
   controls.enabled = true;
-  if (saved) { camera.position.copy(saved.p); controls.target.copy(saved.t); controls.update(); tiltH.enabled = tiltV.enabled = saved.tilt; saved = null; }
-});
+  document.body.classList.remove('walking');
+  if (saved) { camera.position.copy(saved.p); controls.target.copy(saved.t); controls.snap(); tiltH.enabled = tiltV.enabled = saved.tilt; saved = null; }
+};
+pegman($('pegman'), renderer.domElement, dropRing, (x, y) => {
+  const p = controls.pick(x, y, false);
+  // In the map's group, which carries it onto the planet in the Earth style (pegman() takes it out).
+  if (dropRing.parent !== world) world.add(dropRing);
+  if (p) dropRing.scale.setScalar(Math.max(1, camera.position.distanceTo(p) * 0.012));   // a few pixels wide at any zoom
+  return p;
+}, walkAt);
+// Camera feel and head bob, to compare (Tuning; also #feel= and #bob= in the link).
+{
+  const fs = $<HTMLSelectElement>('feel'), bs = $<HTMLSelectElement>('bob');
+  fs.value = Object.keys(FEEL).find((k) => FEEL[k] === controls.feel) ?? 'silky';
+  bs.value = String(walker.bob);
+  fs.onchange = () => { controls.feel = FEEL[fs.value]; };
+  bs.onchange = () => { walker.bob = Number(bs.value); };
+}
 addEventListener('keydown', (e) => {
-  keys.add(e.code);
-  if (walker.isLocked || (e.target as HTMLElement)?.tagName === 'INPUT') return;
+  if (walker.active || (e.target as HTMLElement)?.tagName === 'INPUT') return;
   const n = Number(e.key);
   if (e.code === 'BracketLeft') { playing = false; setTime(hourNow() - 0.5); }
   if (e.code === 'BracketRight') { playing = false; setTime(hourNow() + 0.5); }
@@ -1232,10 +1261,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyN') setAround(!showCtx);
   if (e.code === 'KeyH' && outline) outline.visible = !outline.visible;
 });
-addEventListener('keyup', (e) => keys.delete(e.code));
 
 const timer = new THREE.Timer();
-const fwd = new THREE.Vector3(), right = new THREE.Vector3();
 let frames = 0, fpsT = 0;
 const loop = () => {
   timer.update();
@@ -1246,21 +1273,8 @@ const loop = () => {
   // Playing: a day in 48 seconds.
   if (playing && map) { userHour = (hourNow() + dt * 0.5) % 24; applyTime(); }
   if (fpsT > 1) { $('fps').textContent = `${Math.round(frames / fpsT)} fps`; frames = 0; fpsT = 0; }
-  if (walker.isLocked && map) {
-    const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 14 : 1.6;
-    camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
-    right.crossVectors(fwd, camera.up).normalize();
-    let mx = 0, mz = 0;
-    if (keys.has('KeyW') || keys.has('ArrowUp')) mx += 1;
-    if (keys.has('KeyS') || keys.has('ArrowDown')) mx -= 1;
-    if (keys.has('KeyD') || keys.has('ArrowRight')) mz += 1;
-    if (keys.has('KeyA') || keys.has('ArrowLeft')) mz -= 1;
-    camera.position.addScaledVector(fwd, mx * speed * dt).addScaledVector(right, mz * speed * dt);
-    const lim = map.size / 2 - 1;
-    camera.position.x = Math.max(-lim, Math.min(lim, camera.position.x));
-    camera.position.z = Math.max(-lim, Math.min(lim, camera.position.z));
-    camera.position.y = waterAt(camera.position.x, -camera.position.z) + 1.7;
-  } else controls.update();
+  if (walker.active) walker.update(dt);
+  else controls.update(dt);
   // The real sun (not the moon) for the atmosphere; in the Earth style through the same map-to-planet
   // matrix as the lights (it may mirror, so not just its rotation).
   if (style.atmosphere) sunDir.copy(realSun).multiplyScalar(1000).applyMatrix4(toPlanet).sub(sunOrigin.set(0, 0, 0).applyMatrix4(toPlanet)).normalize();
@@ -1327,7 +1341,7 @@ if (embedded) {
     }
     if (e.data.type === 'mundi-hex-close') {
       playing = false;
-      if (walker.isLocked) walker.unlock();
+      if (walker.active) walker.leave();
       renderer.setAnimationLoop(null);
     }
     if (e.data.type === 'mundi-hex-warm') { applyHash(e.data.hash); warm(); }
@@ -1350,7 +1364,9 @@ void LAYERS; void L_DEPTH;
   /** The hex on show was built with the planet's valleys. */
   get valleys() { return mapValleys; },
   get style() { return style.id; },
-  resetView, scene, setTilt, setTime, setAround,
+  resetView, scene, setTilt, setTime, setAround, walker,
+  /** The camera: position, the point looked at, distance (scripts/camtest.mjs). */
+  camPose: () => ({ p: camera.position.toArray().map((v) => +v.toFixed(1)), t: controls.target.toArray().map((v) => +v.toFixed(1)), d: +camera.position.distanceTo(controls.target).toFixed(1), max: +controls.maxDistance.toFixed(0) }),
   /** The planet's valleys, as the planet page sends them (scripts/hexcompare.mjs). */
   takeValleys,
   /** Hide the panels for clean screenshots. */
@@ -1368,11 +1384,11 @@ void LAYERS; void L_DEPTH;
     camera.fov = fov; camera.updateProjectionMatrix();
     controls.target.set(tx, g, -ty);
     camera.position.set(tx, g + Math.cos(tilt) * d, -ty + Math.sin(tilt) * d);
-    controls.update();
+    controls.snap();
   },
   /** Camera at (x, y north) metres, height above ground, looking at (tx, ty). */
   look: (x: number, y: number, up: number, tx: number, ty: number, tUp = 0) => {
     camera.position.set(x, groundAt(x, y) + up, -y);
-    controls.target.set(tx, groundAt(tx, ty) + tUp, -ty); controls.update();
+    controls.target.set(tx, groundAt(tx, ty) + tUp, -ty); controls.snap();
   },
 };

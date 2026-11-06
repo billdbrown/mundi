@@ -26,6 +26,15 @@
     #busy { top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 15px; }
     #hint { left: 50%; bottom: 12px; transform: translateX(-50%); color: #c9d3da; font-size: 12px; padding: 6px 12px; }
     .capture .card { display: none; }
+    #pegman { position: fixed; right: 274px; bottom: 16px; width: 40px; height: 52px; display: grid; place-items: center; background: rgba(18, 24, 30, 0.82); border-radius: 10px; cursor: grab; touch-action: none; }
+    #pegman svg, .pegman-ghost svg { fill: #ffc928; stroke: #6b4e00; stroke-width: 1; }
+    #pegman.lifted svg { opacity: 0.3; }
+    .pegman-ghost { position: fixed; pointer-events: none; transform: translate(-50%, -100%) rotate(-8deg); z-index: 10; filter: drop-shadow(0 3px 3px rgba(0,0,0,.4)); }
+    .pegman-ghost.nope { opacity: 0.5; }
+    #walkhint { display: none; left: 50%; top: 12px; transform: translateX(-50%); font-size: 12px; padding: 6px 12px; color: #c9d3da; }
+    .walking #walkhint { display: block; }
+    .walking #panel, .walking #inset, .walking #hint, .walking #pegman { display: none; }
+    .capture #pegman { display: none; }
     #timing { color: #7d8b95; font-size: 11px; margin-top: 8px; }
     #timerow { margin-top: 4px; display: grid; grid-template-columns: 34px 1fr 46px; gap: 8px; align-items: center; }
     #timerow output { text-align: right; color: #fff; font-variant-numeric: tabular-nums; }
@@ -57,15 +66,19 @@
     <label class="row">Heights ÷ <input id="vscale" type="range" min="1" max="40" step="0.5" /><output id="vscale-out"></output></label>
     <label class="row">Big heights <select id="vsoft"><option value="0">Same as small</option><option value="300">Squeezed hard</option><option value="450">Squeezed</option><option value="600">Squeezed gently</option><option value="1000">Squeezed lightly</option></select><span></span></label>
     <label class="row">Rivers <select id="river"><option value="scaled">Shrunk with the map</option><option value="flow">Life-size, from flow</option></select><span></span></label>
+    <label class="row">Camera feel <select id="feel"><option value="silky">Silky</option><option value="snappy">Snappy</option><option value="floaty">Floaty</option><option value="flat">Silky, no tilt on zoom</option></select><span></span></label>
+    <label class="row">Head bob <select id="bob"><option value="1">On</option><option value="0.5">Slight</option><option value="0">Off</option></select><span></span></label>
     <label class="row">Crags <input id="crags" type="checkbox" style="justify-self:start" /><span></span></label>
     </details>
     <label class="row">Detail <select id="res"><option value="257">Low</option><option value="513">Medium</option><option value="769">High</option></select><span></span></label>
-    <div class="buttons"><button id="walk">Walk (W A S D)</button><button id="reset">Reset view</button></div>
+    <div class="buttons"><button id="reset">Reset view</button></div>
     <div id="timing"></div><div id="fps" style="color:#7d8b95;font-size:11px"></div>
   </div>
   <div id="inset" class="card"><canvas id="map" width="480" height="480"></canvas><div>The planet's view of this ground · white = this hex</div></div>
+  <div id="pegman" title="Drag onto the map to walk there (or click to walk here)"><svg viewBox="0 0 24 40" width="24" height="40"><circle cx="12" cy="6" r="5"/><path d="M5 14h14l-1 13h-3l-1 12h-4l-1-12H6z"/></svg></div>
+  <div id="walkhint" class="card">W A S D walk · Shift sprint · Space jump · Esc back to the map</div>
   <div id="busy" class="card">Building the hex…</div>
-  <div id="hint" class="card">Drag to orbit · [ ] hour · P play the day · N neighbours · T tilt-shift · right-drag to pan · scroll to zoom · H hex outline · the red figure is 1.8 m</div>
+  <div id="hint" class="card">Right-drag to pan · middle-drag to turn · scroll to zoom · W A S D Q E · [ ] hour · P play · N neighbours · T tilt-shift · H outline</div>
   <script>document.getElementById('more').onclick = () => document.getElementById('panel').classList.toggle('open');</script>
   <script type="module" src="/src/hex.ts"></script>
 </body>
