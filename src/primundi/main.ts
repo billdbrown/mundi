@@ -224,10 +224,9 @@ function maybeStart() {
   loader = null;
   void l.finish();
   labels.rebuild();
-  // Home, or wherever you were: down into the hex, with the town's card over it if there is one.
+  // Home, or wherever you were: down into the hex. In a town its buildings are the menus (and the
+  // bar's Town button opens the whole card).
   openHex(s.cell);
-  const here = atlas.placeAt[s.cell];
-  if (here >= 0) openTown(here);
   if (s.log.length === 1) toast(s.log[0].text, 8000);
 }
 
@@ -514,6 +513,7 @@ function advance(dd: number) {
 function enter(cell: number) {
   if (!world || !atlas || !save) return;
   const w = world, a = atlas, s = save;
+  cameFrom = s.cell;
   s.cell = cell;
   s.route.shift();
   s.progress = 0;
@@ -545,7 +545,9 @@ function enter(cell: number) {
     follow = marks.dirOfCaravan();
     // A job's hex is usually where the route ends.
     if (questsAt(cell)) { syncBar(); return; }
-    if (pid >= 0) { openHex(cell); openTown(pid); } else toast('Arrived.');
+    // A town: into its hex, walking in to the square; its buildings are the menus (and the bar's
+    // Town button, for the whole card at once).
+    if (pid >= 0) { openHex(cell); toast(`${a.places[pid].name}. Tap the market, the inn or the notice board to go there.`, 6000); } else toast('Arrived.');
     syncBar();
     return;
   }
@@ -731,6 +733,8 @@ const labels = {
 };
 
 // --- The hex view (hex.html in game mode), in this page ---------------------------------------
+/** The cell the caravan last came in from (the hex view walks it in from that side). */
+let cameFrom = -1;
 let hexFrame: HTMLIFrameElement | null = null, hexReady = false, hexOpen = false, hexCell = -1, hexPending: string | null = null;
 let valleysSent = false;
 function hexHash(cell: number) {
@@ -740,6 +744,9 @@ function hexHash(cell: number) {
   h.set('embed', '1');
   h.set('game', '1');
   h.set('cell', String(cell));
+  const pid = atlas ? atlas.placeAt[cell] : -1;
+  if (pid >= 0) h.set('town', pid === save?.home ? 'home' : 'town');
+  if (cameFrom >= 0 && cameFrom !== cell) h.set('from', String(cameFrom));
   const near = world ? ringCells(world, cell, 4) : [cell];
   h.set('seen', near.filter((c) => revealed.has(c)).join('.'));
   return h.toString();
@@ -782,6 +789,11 @@ addEventListener('message', (e) => {
     hexReady = true;
     if (hexPending) { hexSend({ type: 'mundi-hex-open', hash: hexPending }); hexPending = null; }
     sendValleys();
+  }
+  // The caravan reached a building's door in the town's hex: that part of the town.
+  if (e.data.type === 'primundi-spot' && hexOpen && atlas && save) {
+    const pid = atlas.placeAt[hexCell];
+    if (pid >= 0 && hexCell === save.cell && !modal) openTown(pid, String(e.data.tab));
   }
   if (e.data.type === 'primundi-thunder') thunder.roll(Math.min(1, e.data.near * 0.9), 0.5 + (1 - e.data.near) * 2.5, Math.random() * 1.2 - 0.6);
 });

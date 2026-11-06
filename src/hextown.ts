@@ -81,6 +81,30 @@ export function layoutTowns(c: TownContext): Towns {
       const n = Math.round(Math.max(8, Math.min(220, Math.sqrt(pop) * 2.2)));
       return { s, x: cellXY[i * 2], y: cellXY[i * 2 + 1], pop, n, r: 45 + 10 * Math.sqrt(n), people: realmAt(s, HISTORY_YEARS) + 1 };
     });
+  // The square goes on level, dry ground near the cell's middle, not wherever the middle falls: a
+  // village's square stood on top of a knoll with its houses round the foot (2026-11-06).
+  const unevenAt = (x: number, y: number) => {
+    let lo = hAt(x, y), hi = lo;
+    for (let k = 0; k < 8; k++) {
+      const a = k * Math.PI / 4, px = x + Math.cos(a) * 14, py = y + Math.sin(a) * 14;
+      if (wet(px, py)) return Infinity;
+      const v = hAt(px, py); lo = Math.min(lo, v); hi = Math.max(hi, v);
+    }
+    return (hi - lo) / 28;
+  };
+  for (const t of towns) {
+    const R = Math.min(110, t.r * 0.7);
+    let bx = t.x, by = t.y, best = wet(t.x, t.y) ? Infinity : unevenAt(t.x, t.y);
+    for (let dy = -R; dy <= R; dy += 8) for (let dx = -R; dx <= R; dx += 8) {
+      const d = Math.hypot(dx, dy);
+      if (d > R || d === 0) continue;
+      const x = t.x + dx, y = t.y + dy;
+      if (wet(x, y)) continue;
+      const sc = unevenAt(x, y) + 0.12 * d / R;
+      if (sc < best) { best = sc; bx = x; by = y; }
+    }
+    t.x = bx; t.y = by;
+  }
 
   // --- Roads: the history's road network, cell centre through the shared edge's middle to the next
   // centre (as rivers), wandering a little. Dirt paths, flattened.

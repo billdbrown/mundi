@@ -194,6 +194,7 @@ export class HexCamera {
   // --- Mouse and touch ---
   private down = (e: PointerEvent) => {
     if (!this.enabled) return;
+    this.touched = performance.now();
     if (e.pointerType === 'touch') {
       this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       this.dom.setPointerCapture(e.pointerId);
@@ -384,6 +385,19 @@ export class HexCamera {
     this.yawVel = 0;
     this.free = false;
   }
+  /** When the user last took hold of the camera (performance.now()): a camera that follows something
+   * (Primundi's caravan) lets go once they do. */
+  touched = 0;
+  /** Ease the point looked at to (x, z), three's frame; and the distance, if given. */
+  glideTo(x: number, z: number, dist?: number) {
+    this.goal.x = x; this.goal.z = z;
+    if (dist !== undefined) this.distGoal = dist;
+    this.vel.set(0, 0, 0);
+    this.free = false;
+    this.clampGoal();
+  }
+  /** How far the camera is (or is going) from the point it looks at. */
+  get distance() { return this.distGoal; }
   /** The camera's heading (0: north), for whoever takes over from it (walking). */
   get heading() { return this.yaw; }
 }

@@ -60,4 +60,9 @@ Same build; `./deploy-primundi.sh` copies `dist/` to `dist-primundi/` with `prim
 index and deploys it with `wrangler.primundi.toml` (static only, saves live in the browser).
 It reaches into the shared code only through hooks that do nothing for Mundi: `PlanetView.onFrame`,
 `constrain`, `tiltScale`, `addToPlanet` (render.ts) and the hex view's `game=1&seen=` link
-parameters (hex.ts). `window.primundi` is its debug handle (`travelTo(cell)`, `setSpeed(n)`, `encounter(id)`, `revealRing()`).
+parameters (hex.ts; also `town=` and `from=`). In a game's hex, `hexcaravan.ts` is the caravan on
+the ground: tap the ground to walk there (A* on a 2 m grid round houses, fences, water and cliffs,
+preferring streets), tap a town building or its label to walk to its door, and the hex posts
+`primundi-spot` with the town card's tab to open. A town's landmark is what its model is (a market,
+an inn), a notice board stands on the square, the nearest houses are the inn, tavern and stores.
+`window.primundi` is its debug handle (`travelTo(cell)`, `setSpeed(n)`, `encounter(id)`, `revealRing()`).

@@ -29,9 +29,10 @@ import { HexCamera, FEEL } from './hexcamera.ts';
 import { Walker, pegman } from './hexwalk.ts';
 import { mountHud } from './hexui.ts';
 import { PROP_STRIDE } from './hextown.ts';
-import { loadHouses, buildHouses, buildProps, houseMaterial, houseNight, HOUSE_MODES, type HouseMode, type HousePack, type Building } from './hexhouses.ts';
+import { familyOf, loadHouses, buildHouses, buildProps, houseMaterial, houseNight, HOUSE_MODES, type HouseMode, type HousePack, type Building } from './hexhouses.ts';
 import { snowGround, snowContext } from './hexsnow.ts';
 import { HexFog } from './primundi/hexfog.ts';
+import { Nav, Caravan, townSpots, townLandmark, noticeBoard, LANDMARKS, type TownSpot } from './primundi/hexcaravan.ts';
 import { noiseTexture } from './primundi/fog.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -68,6 +69,10 @@ const fillK = h.get('fill') !== null ? Number(h.get('fill')) : 0.28;
  * the fog hides, is gone. */
 const game = h.get('game') === '1';
 let gameSeen = new Set((h.get('seen') ?? '').split('.').filter(Boolean).map(Number));
+/** Primundi: the place in this hex ('town', or 'home' for the caravan's own), and the cell the
+ * caravan came in from. */
+let gameTown = h.get('town') ?? '';
+let gameFrom = Number(h.get('from') ?? -1);
 const hexFog = game ? new HexFog(noiseTexture()) : null;
 if (game) {
   document.body.classList.add('primundi');
@@ -109,7 +114,7 @@ function applyHash(hash: string) {
   }
   opts.radiusKm = Number(q.get('radius')) || LOCAL_DEFAULTS.radiusKm;
   cell = Number(q.get('cell') ?? -1);
-  if (game) gameSeen = new Set((q.get('seen') ?? '').split('.').filter(Boolean).map(Number));
+  if (game) { gameSeen = new Set((q.get('seen') ?? '').split('.').filter(Boolean).map(Number)); gameTown = q.get('town') ?? ''; gameFrom = Number(q.get('from') ?? -1); }
   for (const k of [...back.keys()]) back.delete(k);
   for (const [k, v] of q) if (!['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around', 'plants', 'houses'].includes(k)) back.set(k, v);
 }
@@ -1530,9 +1535,11 @@ worker.onmessage = (e: MessageEvent<{ map: LocalMap; ms: { world: number; local:
   build(m);
   const drawMs = performance.now() - tb;
   drawInset(m); facts(m);
+  if (game) setupCaravan(m);
   if (rel) { camera.position.copy(rel.p.multiplyScalar(m.size)); controls.target.copy(rel.t.multiplyScalar(m.size)); controls.snap(); }
   else resetView();
   firstBuild = false;
+  if (game) arriveCaravan();
   $('timing').textContent = `world ${Math.round(e.data.ms.world)} ms · hex ${Math.round(e.data.ms.local)} ms${(e.data as { prebuilt?: boolean }).prebuilt ? ' (prebuilt)' : ''} · draw ${Math.round(drawMs)} ms · ${(m.trees.length / 6).toLocaleString()} plants`;
   writeHash();
   if (again) { again = false; request(); } else $('busy').hidden = true;
@@ -1561,6 +1568,200 @@ function resetView() {
   tiltH.uniforms.uFocus.value = tiltV.uniforms.uFocus.value = 0.5;
 }
 $('reset').onclick = resetView;
+
+// --- Primundi: the caravan, moved by tapping (primundi/hexcaravan.ts) ---
+// Tap the ground and the leader walks there; tap a town building or its label and they walk to its
+// door, and the game opens that part of the town. The camera follows the walk until it's moved.
+let nav: Nav | null = null, navMap: LocalMap | null = null;
+let caravan: Caravan | null = null;
+let spots: TownSpot[] = [];
+let followFrom = 0;
+let arrival: (() => void) | null = null;
+const spotLayer = document.createElement('div');
+spotLayer.id = 'spots';
+if (game) {
+  document.body.appendChild(spotLayer);
+  const css = document.createElement('style');
+  css.textContent = `#spots { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+    #spots button { position: absolute; left: 0; top: 0; pointer-events: auto; min-height: 40px; min-width: 44px;
+      padding: 0 14px; border-radius: 20px; border: 1px solid rgba(242, 193, 78, 0.55); background: rgba(22, 20, 16, 0.72); color: #f4ead2;
+      font: 600 14px/38px system-ui, sans-serif; letter-spacing: 0.02em; white-space: nowrap; cursor: pointer; backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px); box-shadow: 0 2px 10px rgba(0,0,0,0.35); transition: opacity 0.25s, background 0.2s; touch-action: manipulation; }
+    #spots button::after { content: ''; position: absolute; left: 50%; bottom: -7px; margin-left: -6px; border: 6px solid transparent; border-bottom: 0; border-top-color: rgba(22, 20, 16, 0.72); }
+    #spots button:hover, #spots button.going { background: rgba(120, 84, 24, 0.85); }
+    #spots button.far { opacity: 0; pointer-events: none; }
+    body.walking #spots { display: none; }`;
+  document.head.appendChild(css);
+}
+/** The map's walking grid, made when first needed. */
+function navFor(m: LocalMap): Nav {
+  if (nav && navMap === m) return nav;
+  const { res, size, layers } = m, step = size / (res - 1), half = size / 2;
+  const at = (x: number, y: number) => Math.max(0, Math.min(res - 1, Math.round((y + half) / step))) * res + Math.max(0, Math.min(res - 1, Math.round((x + half) / step)));
+  const shape = hexShape(m);
+  nav = new Nav({
+    houses: m.houses, props: m.props ?? new Float32Array(0), K: houseMode === 'plain' ? 1 : style.town.scale, hex: m.hex,
+    inside: (x, y) => shape.inside(x, y),
+    ground: (x, y) => groundAtMap(m, x, y),
+    water: (x, y) => {
+      const g = groundAtMap(m, x, y);
+      if (m.sea && g < 0.25) return 2;
+      if (!Number.isNaN(m.lakeLevel) && layerNear(m, x, y) > 0.3 && g < m.lakeLevel + 0.2) return 2;
+      return layers[at(x, y) * LAYERS + L_DEPTH] > 0.3 ? 1 : 0;
+    },
+    path: (x, y) => Math.min(1, layers[at(x, y) * LAYERS + L_PATH]),
+    wood: (x, y) => Math.min(1, layers[at(x, y) * LAYERS + L_FOREST]),
+  });
+  navMap = m;
+  return nav;
+}
+function setupCaravan(m: LocalMap) {
+  nav = null;
+  const K = houseMode === 'plain' ? 1 : style.town.scale;
+  const cartName = housePack?.index.props.find((n) => n.endsWith('/Cart'));
+  caravan = new Caravan((x, y) => groundAtMap(m, x, y), K, cartName ? housePack!.geos.get(cartName)!.clone() : null);
+  world.add(caravan.group);
+  // (In the looks drawn on the planet the map's group is scaled down to planet units, which would
+  // shrink the marker that keeps its size on screen.)
+  world.updateMatrixWorld(true);
+  caravan.markerScale(1 / world.matrixWorld.getMaxScaleOnAxis());
+  if (!cartName) {
+    const c = caravan;
+    void loadHouses().then((p) => { const n = p.index.props.find((k) => k.endsWith('/Cart')); if (n && caravan === c) c.setCart(p.geos.get(n)!.clone()); });
+  }
+  const n = navFor(m);
+  spots = [];
+  if (gameTown) {
+    // What the landmark is (a market, an inn...), by the family it's drawn in.
+    const lm = townLandmark(m.houses);
+    const landmark = lm >= 0 && houseMode !== 'plain' ? LANDMARKS[familyOf(houseMode, m.houses[lm + 9])][Math.min(2, m.houses[lm + 8] - 1)] : null;
+    const t = townSpots(m.houses, m.props ?? new Float32Array(0), K, gameTown === 'home', landmark, (x, y) => groundAtMap(m, x, y), (x, y) => n.ok(x, y));
+    spots = t.spots;
+    if (t.board) {
+      const [bx, by, br] = t.board, b = noticeBoard(K);
+      b.position.set(bx, groundAtMap(m, bx, by) - 0.05, -by);
+      b.rotation.y = br;
+      caravan.group.add(b);
+      n.block(bx, by, br, 2.2 * K, 0.8 * K);
+    }
+  }
+  spotLayer.replaceChildren(...spots.map((s, n) => {
+    const b = document.createElement('button');
+    b.textContent = s.label;
+    b.dataset.n = String(n);
+    b.onclick = (e) => { e.stopPropagation(); goSpot(s); };
+    return b;
+  }));
+  // Where they come in: from the side of the hex they came from (or the south), out at the edge of
+  // the town, walking in to its square. Out in the country: the middle.
+  let dx = 0, dy = -1;
+  const fi = gameFrom >= 0 ? Array.from(m.cells).indexOf(gameFrom) : -1;
+  if (fi >= 0) { const fx = m.cellXY[fi * 2], fy = m.cellXY[fi * 2 + 1], l = Math.hypot(fx, fy) || 1; dx = fx / l; dy = fy / l; }
+  const sq = spots.find((s) => s.tab === 'work');
+  if (sq) {
+    const [sx, sy] = sq.centre;
+    let far = 30;
+    for (let o = 0; o < m.houses.length; o += HOUSE_STRIDE) { const d = Math.hypot(m.houses[o] - sx, m.houses[o + 1] - sy); if (d < 260) far = Math.max(far, d); }
+    const v = n.nearest(sx + dx * (far * 0.8 + 15), sy + dy * (far * 0.8 + 15), 80);
+    const [x, y] = v >= 0 ? n.xy(v) : [sx + dx * 40, sy + dy * 40];
+    caravan.place(x, y, Math.atan2(-dx, dy));
+    arrival = () => {
+      controls.glideTo(x, -y, 70 * K);
+      const p = n.find(x, y, sx + dx * 16, sy + dy * 16);
+      if (p) { followFrom = performance.now(); caravan!.walk(p); }
+    };
+  } else {
+    const v = n.nearest(0, 0, 200);
+    const [x, y] = v >= 0 ? n.xy(v) : [0, 0];
+    caravan.place(x, y, Math.atan2(-dx, dy));
+    arrival = null;
+  }
+}
+/** Once the view has settled on a new hex: the walk in. */
+function arriveCaravan() {
+  const f = arrival; arrival = null;
+  if (f) setTimeout(f, 400);
+}
+function goTo(x: number, y: number, then: (() => void) | null = null) {
+  if (!map || !caravan) return false;
+  const p = navFor(map).find(caravan.x, caravan.y, x, y);
+  if (!p) return false;
+  for (const b of spotLayer.children) b.classList.remove('going');
+  followFrom = performance.now();
+  caravan.walk(p, then);
+  return true;
+}
+function goSpot(s: TownSpot) {
+  const b = spotLayer.children[spots.indexOf(s)];
+  const ok = goTo(s.door[0], s.door[1], () => {
+    b?.classList.remove('going');
+    parent.postMessage({ type: 'primundi-spot', tab: s.tab }, location.origin);
+  });
+  if (ok) b?.classList.add('going');
+}
+const tmpV = new THREE.Vector3();
+/** Where a map point is on screen (CSS pixels), or null behind the camera. (The map camera works in
+ * the map's frame, even in the looks drawn on the planet through planetCam.) */
+function onScreen(x: number, y: number, hh: number): [number, number] | null {
+  tmpV.set(x, hh, -y).project(camera);
+  if (tmpV.z > 1) return null;
+  return [(tmpV.x + 1) / 2 * innerWidth, (1 - tmpV.y) / 2 * innerHeight];
+}
+function tap(cx: number, cy: number) {
+  if (!map || !caravan || walker.active) return;
+  // A building that's one of the town's menus, near the tap?
+  let best: TownSpot | null = null, bd = Infinity;
+  camera.updateMatrixWorld();
+  for (const s of spots) {
+    const mid = (groundAt(s.centre[0], s.centre[1]) + s.top[2]) / 2;
+    const c = onScreen(s.centre[0], s.centre[1], mid), e = onScreen(s.centre[0] + s.radius, s.centre[1], mid);
+    if (!c || !e) continue;
+    const d = Math.hypot(c[0] - cx, c[1] - cy), r = Math.max(28, Math.hypot(e[0] - c[0], e[1] - c[1]));
+    if (d < r && d < bd) { bd = d; best = s; }
+  }
+  if (best) { goSpot(best); return; }
+  camera.updateMatrixWorld();
+  const p = controls.pick(cx, cy, false);
+  if (p) goTo(p.x, -p.z);
+}
+if (game) {
+  // A tap: one finger or the left button, down and up again without moving much, quickly.
+  const downs = new Map<number, { x: number; y: number; t: number }>();
+  let many = false;
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    downs.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now() });
+    if (downs.size > 1) many = true;
+  });
+  const up = (e: PointerEvent, cancel: boolean) => {
+    const d = downs.get(e.pointerId);
+    downs.delete(e.pointerId);
+    if (!d) return;
+    const single = !many;
+    if (!downs.size) many = false;
+    if (cancel || !single) return;
+    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 10 && performance.now() - d.t < 450) tap(e.clientX, e.clientY);
+  };
+  addEventListener('pointerup', (e) => up(e, false));
+  addEventListener('pointercancel', (e) => up(e, true));
+}
+/** Each frame: the caravan walks, the camera follows it (until it's moved by hand), the labels
+ * follow their buildings. */
+function updateCaravan(dt: number) {
+  if (!caravan || !map) return;
+  caravan.update(dt);
+  if (caravan.moving && controls.touched < followFrom) controls.glideTo(caravan.x, -caravan.y);
+  camera.updateMatrixWorld();
+  const far = Math.max(600, map.localWidth * 0.5);
+  spots.forEach((s, n) => {
+    const b = spotLayer.children[n] as HTMLElement;
+    const c = onScreen(s.top[0], s.top[1], s.top[2]);
+    const d = camera.position.distanceTo(tmpV.set(s.top[0], s.top[2], -s.top[1]));
+    const show = !!c && c[0] > -40 && c[0] < innerWidth + 40 && c[1] > 0 && c[1] < innerHeight + 40 && d < far;
+    b.classList.toggle('far', !show);
+    if (c) b.style.transform = `translate(${c[0].toFixed(1)}px, ${c[1].toFixed(1)}px) translate(-50%, calc(-100% - 8px))`;
+  });
+}
 
 // --- Walking ---
 // Drag the figure onto the ground (a ring shows where), or click it to drop in at the middle of the
@@ -1637,6 +1838,7 @@ const loop = () => {
   // Playing: a day in 48 seconds.
   if (playing && map) { userHour = (hourNow() + dt * 0.5) % 24; applyTime(); }
   if (fpsT > 1) { $('fps').textContent = `${Math.round(frames / fpsT)} fps`; frames = 0; fpsT = 0; }
+  if (game) updateCaravan(dt);
   if (walker.active) walker.update(dt);
   else controls.update(dt);
   // The near plane moves out as the camera climbs: from high up, a fixed 0.3 m left too little depth
@@ -1749,6 +1951,11 @@ if (embedded) {
 if (h.get('ui') !== 'classic') mountHud({
   heading: () => controls.heading,
   faceNorth: () => controls.turnTo(0),
+  help: game ? {
+    key: 'primundi-hex-help',
+    touch: `<div><b>Tap</b> walk there</div><div><b>Tap a building</b> go in</div><div><b>Drag</b> look round</div><div><b>Pinch</b> zoom · <b>twist</b> turn</div>`,
+    mouse: `<div><b>Click</b> walk there</div><div><b>Click a building</b> go in</div><div><b>Drag</b> look round</div><div><b>Scroll</b> zoom · <b>middle-drag</b> turn</div>`,
+  } : undefined,
 });
 void LAYERS; void L_DEPTH;
 (window as unknown as Record<string, unknown>).hex = {
@@ -1757,6 +1964,9 @@ void LAYERS; void L_DEPTH;
   /** The hex on show was built with the planet's valleys. */
   get valleys() { return mapValleys; },
   get style() { return style.id; },
+  get caravan() { return caravan; },
+  get spots() { return spots; },
+  tap, goTo, onScreen, camera, get worldGroup() { return world; },
   resetView, scene, setTilt, setTime, setAround, walker, wind, clouds, csm, waterUniforms, groundTex, canopy, shoreUniforms,
   /** The camera: position, the point looked at, distance (scripts/camtest.mjs). */
   camPose: () => ({ p: camera.position.toArray().map((v) => +v.toFixed(1)), t: controls.target.toArray().map((v) => +v.toFixed(1)), d: +camera.position.distanceTo(controls.target).toFixed(1), max: +controls.maxDistance.toFixed(0) }),

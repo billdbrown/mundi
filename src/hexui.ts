@@ -22,6 +22,8 @@ const ICON = {
 };
 
 export interface HudHooks {
+  /** A game's own words for how to move (Primundi: tap to walk), and the key it remembers being shown under. */
+  help?: { touch: string; mouse: string; key: string };
   /** The camera's heading, radians (0: north), for the compass. */
   heading: () => number;
   /** Turn to face north. */
@@ -123,7 +125,7 @@ export function mountHud(hooks: HudHooks) {
   // Touch screens get their own words (and no walking yet: it wants a keyboard).
   const touchOnly = matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
   if (touchOnly) $('pegman').hidden = true;
-  const help = el('div', 'hud-help', touchOnly ? `
+  const help = el('div', 'hud-help', hooks.help ? (touchOnly ? hooks.help.touch : hooks.help.mouse) : touchOnly ? `
     <div><b>Drag</b> move</div><div><b>Pinch</b> zoom</div><div><b>Twist</b> turn</div><div><b>Two fingers up or down</b> tilt</div>` : `
     <div><b>Right-drag</b> move</div><div><b>Middle-drag</b> turn</div><div><b>Scroll</b> zoom</div>
     <div><b>W A S D</b> move · <b>Q E</b> turn</div><div><b>Drag the figure</b> onto the map to walk</div>
@@ -134,10 +136,10 @@ export function mountHud(hooks: HudHooks) {
     help.classList.toggle('show', on); helpBtn.classList.toggle('on', on);
     clearTimeout(helpTimer);
     if (on) helpTimer = window.setTimeout(() => showHelp(false), 12000);
-    try { localStorage.setItem('mundi-hex-help', '1'); } catch { /* private window */ }
+    try { localStorage.setItem(hooks.help?.key ?? 'mundi-hex-help', '1'); } catch { /* private window */ }
   }
   let seen = false;
-  try { seen = localStorage.getItem('mundi-hex-help') === '1'; } catch { /* private window */ }
+  try { seen = localStorage.getItem(hooks.help?.key ?? 'mundi-hex-help') === '1'; } catch { /* private window */ }
   if (!seen) setTimeout(() => showHelp(true), 800);
 
   panel.hidden = true;

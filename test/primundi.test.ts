@@ -164,3 +164,36 @@ test('hometowns get harder from gentle to harsh to inhospitable', () => {
   const g = avg('gentle'), h = avg('harsh'), i = avg('inhospitable');
   assert.ok(g < h && h < i, `gentle ${g.toFixed(2)}, harsh ${h.toFixed(2)}, inhospitable ${i.toFixed(2)}`);
 });
+
+import { Nav } from '../src/primundi/hexcaravan.ts';
+test('in the hex, the caravan walks round houses and the sea, keeping to a street where there is one', () => {
+  // A square of land 200 m across: the sea to the west (x < -60), a house in the middle, a street
+  // along y = 30.
+  const hex = Float32Array.of(-100, -100, 100, -100, 100, 100, -100, 100);
+  const houses = new Float32Array(10);
+  houses.set([0, 0, 1, 0, 30, 30, 4, 0.5, 0, 1]);
+  const nav = new Nav({
+    houses, props: new Float32Array(0), K: 1, hex,
+    inside: (x, y) => Math.abs(x) <= 100 && Math.abs(y) <= 100,
+    ground: () => 1,
+    water: (x) => (x < -60 ? 2 : 0),
+    path: (_x, y) => (Math.abs(y - 30) < 4 ? 1 : 0),
+    wood: () => 0,
+  });
+  assert.ok(!nav.ok(0, 0), 'the house is solid');
+  assert.ok(!nav.ok(-80, 0), 'the sea is not walkable');
+  const p = nav.find(-40, 0, 40, 0)!;
+  assert.ok(p && p.length > 2, 'a way round');
+  const along = (f: (x: number, y: number) => boolean) => {
+    for (let k = 1; k < p.length; k++) for (let s = 0; s <= 20; s++) {
+      const x = p[k - 1][0] + (p[k][0] - p[k - 1][0]) * s / 20, y = p[k - 1][1] + (p[k][1] - p[k - 1][1]) * s / 20;
+      if (f(x, y)) return true;
+    }
+    return false;
+  };
+  assert.ok(!along((x, y) => Math.abs(x) < 15 && Math.abs(y) < 15), 'not through the house');
+  assert.ok(!along((x) => x < -60), 'not into the sea');
+  // Tapping the sea: as near as can be stood on.
+  const q = nav.find(0, 60, -90, 60)!;
+  assert.ok(q[q.length - 1][0] >= -62, 'stops at the shore');
+});
