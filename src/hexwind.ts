@@ -85,9 +85,9 @@ export class WindLines {
   private readonly oAttr: THREE.InstancedBufferAttribute;
   private readonly pAttr: THREE.InstancedBufferAttribute;
   private readonly born: Float32Array;
-  readonly uniforms = { uTime: wind.uWindT, uWindDir: wind.uWindDir, uScale: { value: 1 }, uColor: { value: new THREE.Color(1, 1, 1) }, uOpacity: { value: 0.42 } };
+  readonly uniforms = { uTime: wind.uWindT, uWindDir: wind.uWindDir, uScale: { value: 1 }, uColor: { value: new THREE.Color(1, 1, 1) }, uOpacity: { value: 0.32 } };
 
-  constructor(n = 28, seg = 40) {
+  constructor(n = 16, seg = 40) {
     this.n = n;
     // A strip of seg segments; s runs 0..1 along it, side -1 / 1 across.
     const pos = new Float32Array((seg + 1) * 2 * 3), idx: number[] = [];
@@ -125,7 +125,7 @@ export class WindLines {
         }
         void main() {
           float age = (uTime - params.x) / params.y;
-          float L = 34.0 * uScale;
+          float L = 24.0 * uScale;
           // The visible part: a short stretch sliding along the path as the line ages.
           float head = age * 1.35, tail = head - 0.38;
           float s = mix(tail, head, position.x);
@@ -166,7 +166,7 @@ export class WindLines {
       const h = ground(x, y) + (2 + Math.random() * 10) * scale;
       this.origin.set([x, h, -y], i * 3);
       const lf = 2.6 + Math.random() * 1.8;
-      this.params.set([now, lf, Math.random() < 0.35 ? 1 : 0, Math.random()], i * 4);
+      this.params.set([now, lf, Math.random() < 0.25 ? 1 : 0, Math.random()], i * 4);
       this.born[i] = now;
       dirty = true;
     }

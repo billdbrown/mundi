@@ -17,6 +17,7 @@ import { FIRST, FAMILIES, VARIANTS } from './species.ts';
 import { loadPack, packModel, packMaterial, packStill, PackPlants, type Pack } from './hexplants.ts';
 import { wind, WindLines, clouds, cloudMaterial } from './hexwind.ts';
 import { Grass, grassField } from './hexgrass.ts';
+import { waterMaterial, waterUniforms, shoreUniforms, SHORE_GLSL } from './hexwater.ts';
 import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
 import { parseSeed } from './seedname.ts';
 import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, L_FOREST, L_SNOW, L_LUSH, HOUSE_STRIDE, type LocalMap, type LocalOptions, H_LOG, H_LILYPAD, isFlower, H_FERN, H_STUMP, isHexKind } from './hexlocal.ts';
@@ -282,68 +283,6 @@ function dispose(o: THREE.Object3D) {
 
 const col = (hex: number) => new THREE.Color(hex);
 
-/** Water that moves: small ripples in the normal (so the light glints) and foam that shimmers. */
-const waterTime = { value: 0 };
-function animateWater(mat: THREE.MeshStandardMaterial, foam?: THREE.Color) {
-  // A river (foam given) also has white water: streaks of foam running with the current over
-  // rapids and down falls, by its 'flow' attribute (direction on the ground, and how rough, 0..1).
-  if (foam) mat.defines = { ...mat.defines, RIVER: '' };
-  mat.onBeforeCompile = (sh) => {
-    sh.uniforms.uWTime = waterTime;
-    sh.uniforms.uFoam = { value: foam ?? new THREE.Color(1, 1, 1) };
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWP;\n#ifdef RIVER\nattribute vec3 flow; varying vec3 vFlow;\n#endif')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP = position;\n#ifdef RIVER\nvFlow = flow;\n#endif');
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>
-        varying vec3 vWP; uniform float uWTime; uniform vec3 uFoam;
-        #ifdef RIVER
-        varying vec3 vFlow;
-        float wHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-        float wNoise(vec2 p) {
-          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-          return mix(mix(wHash(i), wHash(i + vec2(1, 0)), f.x), mix(wHash(i + vec2(0, 1)), wHash(i + vec2(1, 1)), f.x), f.y);
-        }
-        #endif`)
-      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        {
-          vec2 p = vWP.xz;
-          float t = uWTime;
-          vec2 g = vec2(
-            sin(p.x * 0.11 + p.y * 0.05 + t * 0.9) * 0.6 + sin(p.x * 0.23 - p.y * 0.17 + t * 1.4) * 0.4,
-            sin(p.y * 0.1 - p.x * 0.04 - t * 0.8) * 0.6 + sin(p.y * 0.21 + p.x * 0.13 - t * 1.2) * 0.4);
-          // Long, gentle swells only: finer, regular waves tiled into a waffle of glints. Faded out
-          // when a pixel covers more than about a metre, or from high up even the swells form a grid.
-          float near = 1.0 - smoothstep(0.5, 1.5, length(fwidth(p)));
-          normal = normalize(normal + (viewMatrix * vec4(g.x, 0.0, g.y, 0.0)).xyz * 0.035 * near);
-        }`)
-      .replace('#include <color_fragment>', `#include <color_fragment>
-        {
-          // Foam (the palest vertex colours) breathes in and out.
-          float foam = smoothstep(0.55, 0.85, dot(vColor.rgb, vec3(0.33)));
-          diffuseColor.rgb *= 1.0 + foam * 0.12 * sin(uWTime * 1.3 + vWP.x * 0.21 + vWP.z * 0.17);
-        }
-        #ifdef RIVER
-        {
-          // Streaks along the current (u), narrow across it (s), drifting downstream; u also runs
-          // down a fall's face, so its foam pours. Far off, where a pixel spans metres, the
-          // streaks give way to their average or they shimmer.
-          vec2 fd = vFlow.xy / max(1e-3, length(vFlow.xy));
-          float u = dot(vWP.xz, fd) - vWP.y * 1.2, s = dot(vWP.xz, vec2(-fd.y, fd.x));
-          float n = wNoise(vec2(u * 0.35 - uWTime * 1.9, s * 2.4)) * 0.55 + wNoise(vec2(u * 1.1 - uWTime * 3.6, s * 6.0)) * 0.45;
-          float r = vFlow.z, th = mix(0.95, 0.4, r);
-          float fm = smoothstep(th, th + 0.12, n) * smoothstep(0.0, 0.12, r);
-          fm = mix(r * r * 0.5, fm, 1.0 - smoothstep(0.6, 2.5, length(fwidth(vWP.xz))));
-          fm = max(fm, smoothstep(0.8, 1.0, r) * 0.4);
-          // (Whiter than the style's shore foam, which under its warm light read as sand.)
-          diffuseColor.rgb = mix(diffuseColor.rgb, mix(uFoam, vec3(0.95), 0.5), fm);
-          diffuseColor.a = mix(diffuseColor.a, 1.0, fm);
-        }
-        #endif`);
-  };
-  mat.customProgramCacheKey = () => (foam ? 'hexriver' : 'hexwater');
-}
-
 // Ground textures (CC0, public/assets/hex/CREDITS.md), and each one's mean brightness, so the
 // shader can use their grain without shifting the style's colours.
 const texMean = { grass: 0.2, ground: 0.2, rock: 0.2 };
@@ -369,7 +308,7 @@ for (const k of ['tGrass', 'tGround', 'tRock'] as const) {
 /** The terrain material with the ground textures' grain: grass, soil in patches, rock on steep ground. */
 function texturedGround(mat: THREE.MeshStandardMaterial) {
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, groundTex, canopy);
+    Object.assign(sh.uniforms, groundTex, canopy, shoreUniforms, { uWTime: waterUniforms.uWTime });
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vLPos; varying vec3 vLN; attribute vec3 grain; varying vec3 vGrain;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLPos = position; vLN = normal; vGrain = grain;');
@@ -380,6 +319,8 @@ function texturedGround(mat: THREE.MeshStandardMaterial) {
         uniform vec3 uMeans;
         uniform float uTexAmt, uTexScale;
         uniform sampler2D tCanopy; uniform vec2 uCanopyBox;
+        ${SHORE_GLSL}
+        float gWet;
         float texL(sampler2D t, vec2 uv) { return dot(texture2D(t, uv).rgb, vec3(0.2126, 0.7152, 0.0722)); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         if (uTexAmt > 0.0) {
@@ -394,7 +335,17 @@ function texturedGround(mat: THREE.MeshStandardMaterial) {
           // (vGrain: the ground's own soil and stone, from its patterns (desert, scree, gravel), and snow.)
           float det = mix(mix(g, d, max(soil * 0.5, vGrain.x)), r, max(steep, vGrain.y));
           diffuseColor.rgb *= mix(1.0, clamp(det, 0.4, 1.8), uTexAmt * (1.0 - 0.55 * vGrain.z));
+        }
+        {
+          // Wet sand at the waterline, following the swell; light rippling over the shallow bed.
+          vec3 nn = normalize(vLN);
+          vec2 sw = shore(vLPos, length(nn.xz) / max(nn.y, 0.05));
+          gWet = sw.x;
+          sw.y *= 1.0 - smoothstep(0.25, 0.8, length(fwidth(vLPos.xz)));
+          diffuseColor.rgb *= mix(1.0, 0.58, sw.x) * (1.0 + 0.7 * sw.y);
         }`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, 0.32, gWet);`)
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
         {
           float occ = texture2D(tCanopy, vec2(vLPos.x + uCanopyBox.x, -vLPos.z + uCanopyBox.x) / uCanopyBox.y).r;
@@ -739,14 +690,10 @@ function build(m: LocalMap) {
 
   // Water: coloured by depth, shallow to deep, with foam where it meets the land.
   const W = st.water, shallow = col(W.shallow), deep = col(W.deep), foam = col(W.foam);
-  const waterMat = (river = false) => {
-    // Pushed back a touch in depth: on gentle shores (true vertical scale) the ground and the
-    // water are nearly the same height and flickered over each other; the ground wins ties.
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: W.roughness, metalness: 0.05, transparent: true, opacity: W.opacity,
-      polygonOffset: true, polygonOffsetFactor: 0.5, polygonOffsetUnits: 2 });
-    animateWater(mat, river ? foam : undefined);
-    return mat;
-  };
+  // (hexwater.ts: coloured by the true depth under each pixel, ripples, surf, the sky reflected.)
+  const waterMat = (river = false) => waterMaterial(W, river);
+  shoreUniforms.uSeaLevel.value = m.sea ? 0 : -1e9;
+  shoreUniforms.uLakeLevel.value = Number.isNaN(m.lakeLevel) ? -1e9 : m.lakeLevel;
   const tint = (depth: number, out3: THREE.Color) => {
     out3.copy(shallow).lerp(deep, Math.min(1, depth / 10));
     if (depth < W.foamDepth) out3.lerp(foam, 1 - depth / W.foamDepth);
@@ -783,7 +730,8 @@ function build(m: LocalMap) {
       const a = Math.max(0, s2 - 1), b = Math.min(k - 1, s2 + 1);
       let tx = p[b * 4] - p[a * 4], ty = p[b * 4 + 1] - p[a * 4 + 1];
       const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
-      const w = p[s2 * 4 + 3], hw = w * 0.55, x = p[s2 * 4], y = p[s2 * 4 + 1], lv = p[s2 * 4 + 2] + 0.05;
+      // Wider than the water, so its clear edge meets the banks rather than ending in a hard line.
+      const w = p[s2 * 4 + 3], hw = w * 0.72, x = p[s2 * 4], y = p[s2 * 4 + 1], lv = p[s2 * 4 + 2] + 0.05;
       rp.set([x - ty * hw, lv, -(y + tx * hw), x, lv, -y, x + ty * hw, lv, -(y - tx * hw)], s2 * 9);
       const mid = tint(Math.max(0.6, Math.min(6, 0.12 * w)) * 2, new THREE.Color());
       const bank = tint(W.foamDepth * 0.85, new THREE.Color());
@@ -804,7 +752,7 @@ function build(m: LocalMap) {
     rg.setAttribute('flow', new THREE.BufferAttribute(rf, 3));
     rg.setIndex(ri);
     rg.computeVertexNormals();
-    const mat = waterMat(true); mat.side = THREE.DoubleSide; mat.roughness = Math.max(W.roughness, 0.45);   // narrow: sun glare turned it white
+    const mat = waterMat(true); mat.side = THREE.DoubleSide;
     const mesh = new THREE.Mesh(rg, mat); mesh.receiveShadow = true;
     world.add(mesh);
   }
@@ -960,6 +908,8 @@ function build(m: LocalMap) {
   scene.add(world);
   world.updateMatrixWorld(true);
   clouds.uToMap.value.copy(world.matrixWorld).invert();
+  waterUniforms.uUpW.value.set(0, 1, 0).transformDirection(world.matrixWorld);
+  waterUniforms.uMapRot.value.setFromMatrix4(new THREE.Matrix4().extractRotation(world.matrixWorld));
   applyLook(m);
 }
 
@@ -1119,6 +1069,8 @@ function applyTime() {
   // The planet's atmosphere already brightens low-sun skies; adapting fully washes them out.
   renderer.toneMappingExposure = st.atmosphere ? Math.min(L.exposure, st.exposure * (st.paintedSky ? 3 : 1.5)) : L.exposure;
   gradePass.uniforms.uTint.value = L.tint;
+  waterUniforms.uSkyTop.value.setRGB(L.sky[0][0], L.sky[0][1], L.sky[0][2]);
+  waterUniforms.uSkyHor.value.setRGB(L.sky[1][0], L.sky[1][1], L.sky[1][2]);
   if (style.atmosphere) {
     sun.position.applyMatrix4(toPlanet); rim.position.applyMatrix4(toPlanet);
     sun.target.position.set(0, 0, 0).applyMatrix4(toPlanet); rim.target.position.copy(sun.target.position);
@@ -1419,13 +1371,14 @@ addEventListener('keydown', (e) => {
 });
 
 const timer = new THREE.Timer();
+const fwd = new THREE.Vector3();
 let frames = 0, fpsT = 0;
 const loop = () => {
   timer.update();
   packPlants?.update(camera.position);   // the plants are in map coordinates, as the orbit camera
   const dt = Math.min(0.1, timer.getDelta());
   frames++; fpsT += dt;
-  waterTime.value += dt;
+  waterUniforms.uWTime.value += dt;
   wind.uWindT.value += dt;
   if (map && grass) grass.update(camera.position, camera.position.y - waterAt(camera.position.x, -camera.position.z));
   if (map && windLines) {
@@ -1444,6 +1397,12 @@ const loop = () => {
   if (fpsT > 1) { $('fps').textContent = `${Math.round(frames / fpsT)} fps`; frames = 0; fpsT = 0; }
   if (walker.active) walker.update(dt);
   else controls.update(dt);
+  // The near plane moves out as the camera climbs: from high up, a fixed 0.3 m left too little depth
+  // precision to keep a shallow sea bed under its water (it showed through in streaks).
+  if (map) {
+    const nr = Math.max(0.3, Math.min(60, (camera.position.y - waterAt(camera.position.x, -camera.position.z)) * 0.2));
+    if (Math.abs(nr - camera.near) > camera.near * 0.05) { camera.near = nr; camera.updateProjectionMatrix(); }
+  }
   // The real sun (not the moon) for the atmosphere; in the Earth style through the same map-to-planet
   // matrix as the lights (it may mirror, so not just its rotation).
   if (style.atmosphere) sunDir.copy(realSun).multiplyScalar(1000).applyMatrix4(toPlanet).sub(sunOrigin.set(0, 0, 0).applyMatrix4(toPlanet)).normalize();
@@ -1540,7 +1499,7 @@ void LAYERS; void L_DEPTH;
   /** The hex on show was built with the planet's valleys. */
   get valleys() { return mapValleys; },
   get style() { return style.id; },
-  resetView, scene, setTilt, setTime, setAround, walker, wind, clouds, csm,
+  resetView, scene, setTilt, setTime, setAround, walker, wind, clouds, csm, waterUniforms, groundTex, canopy, shoreUniforms,
   /** The camera: position, the point looked at, distance (scripts/camtest.mjs). */
   camPose: () => ({ p: camera.position.toArray().map((v) => +v.toFixed(1)), t: controls.target.toArray().map((v) => +v.toFixed(1)), d: +camera.position.distanceTo(controls.target).toFixed(1), max: +controls.maxDistance.toFixed(0) }),
   /** The planet's valleys, as the planet page sends them (scripts/hexcompare.mjs). */

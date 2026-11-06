@@ -116,9 +116,11 @@ export class Grass {
               return mix(mix(texture2D(tGrassHgt, b).rg, texture2D(tGrassHgt, b + e.xy).rg, f.x),
                          mix(texture2D(tGrassHgt, b + e.yx).rg, texture2D(tGrassHgt, b + e.xx).rg, f.x), f.y);
             }`)
-          .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3(0.0, 1.0, 0.0);')
-          .replace('#include <begin_vertex>', `
-            vec3 transformed = vec3(0.0, -1e5, 0.0);
+          .replace('#include <begin_vertex>', 'vec3 transformed = gPos;')
+          .replace('#include <beginnormal_vertex>', `
+            // (Placed here, before the normal is needed; begin_vertex takes the position.)
+            vec3 gPos = vec3(0.0, -1e5, 0.0);
+            vec3 objectNormal = vec3(0.0, 1.0, 0.0);
             vGCol = vec3(0.0); vGY = position.y;
             {
               float id = float(gl_InstanceID);
@@ -142,7 +144,14 @@ export class Grass {
                 vec2 lean = vec2(gHash(wc + 4.4) - 0.5, gHash(wc + 5.5) - 0.5) * 0.5;
                 q.xz += lean * position.y * position.y * tall;
                 q += windSway(p, position.y, 1.0, 0.55) * tall * 3.0;
-                transformed = vec3(p.x, hg.x, p.y) + q;
+                gPos = vec3(p.x, hg.x, p.y) + q;
+                // Lit as the ground under it is: its slope, not flat (a beach facing away from the
+                // sun had bright blades on dark ground).
+                float st = uGMap.y / (uGMap.z - 1.0);
+                vec2 eu = vec2(st / uGMap.y, 0.0);
+                float hx = gHgt(uv + eu.xy).x - gHgt(uv - eu.xy).x, hz = gHgt(uv + eu.yx).x - gHgt(uv - eu.yx).x;
+                // (uv's v runs north, three.js z south.)
+                objectNormal = normalize(vec3(-hx / (2.0 * st), 1.0, hz / (2.0 * st)));
                 vGCol = c.rgb * c.rgb;
               }
             }`);
