@@ -35,7 +35,7 @@ let valleys: ValleyField | null = null, valleyKey = '';
 const kept = new Map<string, { m: LocalMap; ms: number }>();
 
 const post = (msg: unknown, transfer: ArrayBuffer[]) => (self as unknown as Worker).postMessage(msg, transfer);
-const buffers = (m: LocalMap) => [m.heights.buffer, m.colors.buffer, m.base.buffer, m.layers.buffer, m.houses.buffer, m.lakeMask.buffer, m.trees.buffer, ...m.rivers.map((r) => r.pts.buffer)] as ArrayBuffer[];
+const buffers = (m: LocalMap) => [m.heights.buffer, m.colors.buffer, m.base.buffer, m.layers.buffer, m.houses.buffer, m.lakeMask.buffer, m.trees.buffer, ...m.rivers.flatMap((r) => [r.pts.buffer, r.rough.buffer])] as ArrayBuffer[];
 
 self.onmessage = (e: MessageEvent<HexJob | ValleyJob>) => {
   if (e.data.kind === 'valleys') {

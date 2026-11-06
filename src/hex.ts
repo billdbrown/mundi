@@ -192,14 +192,27 @@ const col = (hex: number) => new THREE.Color(hex);
 
 /** Water that moves: small ripples in the normal (so the light glints) and foam that shimmers. */
 const waterTime = { value: 0 };
-function animateWater(mat: THREE.MeshStandardMaterial) {
+function animateWater(mat: THREE.MeshStandardMaterial, foam?: THREE.Color) {
+  // A river (foam given) also has white water: streaks of foam running with the current over
+  // rapids and down falls, by its 'flow' attribute (direction on the ground, and how rough, 0..1).
+  if (foam) mat.defines = { ...mat.defines, RIVER: '' };
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uWTime = waterTime;
+    sh.uniforms.uFoam = { value: foam ?? new THREE.Color(1, 1, 1) };
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWP;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP = position;');
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWP;\n#ifdef RIVER\nattribute vec3 flow; varying vec3 vFlow;\n#endif')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP = position;\n#ifdef RIVER\nvFlow = flow;\n#endif');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWP; uniform float uWTime;')
+      .replace('#include <common>', `#include <common>
+        varying vec3 vWP; uniform float uWTime; uniform vec3 uFoam;
+        #ifdef RIVER
+        varying vec3 vFlow;
+        float wHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float wNoise(vec2 p) {
+          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(wHash(i), wHash(i + vec2(1, 0)), f.x), mix(wHash(i + vec2(0, 1)), wHash(i + vec2(1, 1)), f.x), f.y);
+        }
+        #endif`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         {
           vec2 p = vWP.xz;
@@ -217,9 +230,26 @@ function animateWater(mat: THREE.MeshStandardMaterial) {
           // Foam (the palest vertex colours) breathes in and out.
           float foam = smoothstep(0.55, 0.85, dot(vColor.rgb, vec3(0.33)));
           diffuseColor.rgb *= 1.0 + foam * 0.12 * sin(uWTime * 1.3 + vWP.x * 0.21 + vWP.z * 0.17);
-        }`);
+        }
+        #ifdef RIVER
+        {
+          // Streaks along the current (u), narrow across it (s), drifting downstream; u also runs
+          // down a fall's face, so its foam pours. Far off, where a pixel spans metres, the
+          // streaks give way to their average or they shimmer.
+          vec2 fd = vFlow.xy / max(1e-3, length(vFlow.xy));
+          float u = dot(vWP.xz, fd) - vWP.y * 1.2, s = dot(vWP.xz, vec2(-fd.y, fd.x));
+          float n = wNoise(vec2(u * 0.35 - uWTime * 1.9, s * 2.4)) * 0.55 + wNoise(vec2(u * 1.1 - uWTime * 3.6, s * 6.0)) * 0.45;
+          float r = vFlow.z, th = mix(0.95, 0.4, r);
+          float fm = smoothstep(th, th + 0.12, n) * smoothstep(0.0, 0.12, r);
+          fm = mix(r * r * 0.5, fm, 1.0 - smoothstep(0.6, 2.5, length(fwidth(vWP.xz))));
+          fm = max(fm, smoothstep(0.8, 1.0, r) * 0.4);
+          // (Whiter than the style's shore foam, which under its warm light read as sand.)
+          diffuseColor.rgb = mix(diffuseColor.rgb, mix(uFoam, vec3(0.95), 0.5), fm);
+          diffuseColor.a = mix(diffuseColor.a, 1.0, fm);
+        }
+        #endif`);
   };
-  mat.customProgramCacheKey = () => 'hexwater';
+  mat.customProgramCacheKey = () => (foam ? 'hexriver' : 'hexwater');
 }
 
 // Ground textures (CC0, public/assets/hex/CREDITS.md), and each one's mean brightness, so the
@@ -607,12 +637,12 @@ function build(m: LocalMap) {
 
   // Water: coloured by depth, shallow to deep, with foam where it meets the land.
   const W = st.water, shallow = col(W.shallow), deep = col(W.deep), foam = col(W.foam);
-  const waterMat = () => {
+  const waterMat = (river = false) => {
     // Pushed back a touch in depth: on gentle shores (true vertical scale) the ground and the
     // water are nearly the same height and flickered over each other; the ground wins ties.
     const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: W.roughness, metalness: 0.05, transparent: true, opacity: W.opacity,
       polygonOffset: true, polygonOffsetFactor: 0.5, polygonOffsetUnits: 2 });
-    animateWater(mat);
+    animateWater(mat, river ? foam : undefined);
     return mat;
   };
   const tint = (depth: number, out3: THREE.Color) => {
@@ -646,7 +676,7 @@ function build(m: LocalMap) {
   if (!Number.isNaN(m.lakeLevel)) waterOver(m.lakeLevel, m.lakeMask);
   // Rivers: a ribbon of three rows, foam-pale at the banks and deeper down the middle.
   for (const r of m.rivers) {
-    const p = r.pts, k = p.length / 4, rp = new Float32Array(k * 9), rc = new Float32Array(k * 9), ri: number[] = [];
+    const p = r.pts, k = p.length / 4, rp = new Float32Array(k * 9), rc = new Float32Array(k * 9), rf = new Float32Array(k * 9), ri: number[] = [];
     for (let s2 = 0; s2 < k; s2++) {
       const a = Math.max(0, s2 - 1), b = Math.min(k - 1, s2 + 1);
       let tx = p[b * 4] - p[a * 4], ty = p[b * 4 + 1] - p[a * 4 + 1];
@@ -655,7 +685,10 @@ function build(m: LocalMap) {
       rp.set([x - ty * hw, lv, -(y + tx * hw), x, lv, -y, x + ty * hw, lv, -(y - tx * hw)], s2 * 9);
       const mid = tint(Math.max(0.6, Math.min(6, 0.12 * w)) * 2, new THREE.Color());
       const bank = tint(W.foamDepth * 0.85, new THREE.Color());
+      const ro = r.rough[s2];
+      mid.lerp(foam, ro * ro * 0.3); bank.lerp(foam, ro * ro * 0.3);
       rc.set([bank.r, bank.g, bank.b, mid.r, mid.g, mid.b, bank.r, bank.g, bank.b], s2 * 9);
+      rf.set([tx, -ty, ro, tx, -ty, ro, tx, -ty, ro], s2 * 9);
       // Only the stretch on the map.
       if (s2 < k - 1 && inFrame(x, y) && inFrame(p[s2 * 4 + 4], p[s2 * 4 + 5]) && !(m.sea && lv < 0.3 && groundAtMap(m, x, y) < 0)) {
         const o = s2 * 3;
@@ -666,9 +699,10 @@ function build(m: LocalMap) {
     const rg = new THREE.BufferGeometry();
     rg.setAttribute('position', new THREE.BufferAttribute(rp, 3));
     rg.setAttribute('color', new THREE.BufferAttribute(rc, 3));
+    rg.setAttribute('flow', new THREE.BufferAttribute(rf, 3));
     rg.setIndex(ri);
     rg.computeVertexNormals();
-    const mat = waterMat(); mat.side = THREE.DoubleSide; mat.roughness = Math.max(W.roughness, 0.45);   // narrow: sun glare turned it white
+    const mat = waterMat(true); mat.side = THREE.DoubleSide; mat.roughness = Math.max(W.roughness, 0.45);   // narrow: sun glare turned it white
     const mesh = new THREE.Mesh(rg, mat); mesh.receiveShadow = true;
     world.add(mesh);
   }

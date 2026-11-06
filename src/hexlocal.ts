@@ -69,6 +69,10 @@ export const LOCAL_DEFAULTS: LocalOptions = { mag: 10, vScale: 10, vSoft: 0, riv
 export interface LocalRiver {
   /** Per point: x, y, water level, width (local metres). */
   pts: Float32Array;
+  /** Per point, 0..1: white water (rapids, falls and the foam below them). */
+  rough: Float32Array;
+  /** The point where the piece crosses the hex edge (index into pts / 4). */
+  mid: number;
 }
 
 /**
@@ -77,7 +81,7 @@ export interface LocalRiver {
  */
 export const L_GRASS = 0, L_MOTTLE = 1, L_FOREST = 2, L_ROCK = 3, L_SNOW = 4, L_SAND = 5, L_BED = 6,
   L_LUSH = 7, L_ALPINE = 8, L_DEPTH = 9, L_AO = 10, L_CLEARING = 11, L_PATH = 12, L_FIELD = 13, L_FIELDKIND = 14, L_HEDGE = 15, L_ELEV = 16,
-  L_HOLLOW = 17, L_SCREE = 18, L_GRAVEL = 19, L_DRIFT = 20, L_BARE = 21;
+  L_HOLLOW = 17, L_SCREE = 18, L_GRAVEL = 19, L_DRIFT = 20, L_BARE = 21, L_TALUS = 22;
 /** (L_DEPTH is metres of water over the ground, 0 on land; L_AO how sunken the spot is, a crease;
  * L_FIELDKIND which crop a field grows, 0..1; L_HEDGE how close to a field's edge.) */
 /** L_ELEV: how high a sample stands on this map's own land, 0..1, scaled down where the map is
@@ -85,8 +89,9 @@ export const L_GRASS = 0, L_MOTTLE = 1, L_FOREST = 2, L_ROCK = 3, L_SNOW = 4, L_
 /** Ground patterns (richer hexes step 3): L_HOLLOW how far a sample sits below the ground ~45 m
  * round, metres (+ a swale, - a ridge); L_SCREE loose stone on slopes and high flats; L_GRAVEL
  * bars along rivers and lake shores; L_DRIFT snow lying in hollows and on shaded slopes below
- * the snow line; L_BARE bare ground in dry country (soil, or in desert a stony pavement). */
-export const LAYERS = 22;
+ * the snow line; L_BARE bare ground in dry country (soil, or in desert a stony pavement), and
+ * the raw earth of steep river banks. L_TALUS (step 4) fallen rock at the foot of cliffs. */
+export const LAYERS = 23;
 
 /** Plant kinds the hex adds to the planet's own (flora.ts, species.ts): drawn only from the
  * plant pack (hexplants.ts), so they appear once it has loaded. */
@@ -252,6 +257,10 @@ interface PatternInput {
   snowLine: Float32Array; slopeA: Float32Array;
 }
 
+/** Rugged country, where a stream steps down in pools and falls; and wet lowland, where none does. */
+const RUGGED: Set<number> = new Set([B.MOUNTAIN, B.PEAK, B.ALPINE_MEADOW, B.MONTANE_FOREST, B.LARCH, B.CLOUD_FOREST, B.CANYONS, B.KARST, B.BADLANDS]);
+const CALM: Set<number> = new Set([B.FLOODPLAIN, B.SWAMP, B.MARSH, B.BOG, B.SALT_MARSH, B.MANGROVE]);
+
 /** Biomes whose ground is stony where it is at all steep or high. */
 const STONY: Set<number> = new Set([B.MOUNTAIN, B.PEAK, B.BADLANDS, B.CANYONS, B.KARST, B.POLAR_DESERT, B.COLD_DESERT, B.TUNDRA, B.DESERT, B.DESERT_SCRUB]);
 
@@ -266,6 +275,10 @@ function groundPatterns(P: PatternInput): void {
   const n01 = (x: number, y: number, l: number, z: number) => 0.5 + 0.5 * noise(x / l, y / l, z);
   // The ground ~90 m across: swales (+) gather water and snow; ridges (-) dry out and blow bare.
   const swaleBlur = boxBlur(heights, res, Math.max(3, Math.round(45 / step)));
+  // Rock ~40 m round, for the talus below cliffs.
+  const rockA = new Float32Array(res * res);
+  for (let v = 0; v < res * res; v++) rockA[v] = layers[v * LAYERS + L_ROCK];
+  const rockBlur = boxBlur(rockA, res, Math.max(3, Math.round(20 / step)));
   for (let j = 0; j < res; j++) {
     for (let i = 0; i < res; i++) {
       const v = j * res + i;
@@ -283,8 +296,11 @@ function groundPatterns(P: PatternInput): void {
       const patch = stony > 0 || dry > 0 || slope > 0.2 ? n01(x, y, 34, 151) * 0.65 + n01(x, y, 10, 153) * 0.35 : 0.5;
       // Scree: loose stone on slopes short of cliffs, most in cold, high or stony country, and
       // fell-field stones in patches on the high flats.
-      const scree = Math.min(1, smooth(0.32, 0.8, slope + 0.3 * (patch - 0.5)) * (1 - rock) * (0.25 + 0.75 * stony)
-        + 0.85 * stony * smooth(0.55, 0.75, patch)) * (1 - 0.85 * canopy) * (1 - white);
+      // Talus (step 4): rock fallen from the cliffs round about, lying anywhere off the ridges.
+      const talus = smooth(0.06, 0.28, rockBlur[v]) * smooth(0.5, 0.2, rock) * smooth(-2, 0.5, hol) * (1 - white);
+      layers[L0 + L_TALUS] = talus;
+      const scree = Math.max(0.85 * talus, Math.min(1, smooth(0.32, 0.8, slope + 0.3 * (patch - 0.5)) * (1 - rock) * (0.25 + 0.75 * stony)
+        + 0.85 * stony * smooth(0.55, 0.75, patch)) * (1 - 0.85 * canopy) * (1 - white));
       layers[L0 + L_SCREE] = scree;
       // Gravel bars along rivers, in patches, and a stony strip round lakes just above the water.
       const rnG = riverNear[v];
@@ -301,7 +317,9 @@ function groundPatterns(P: PatternInput): void {
       const drift = near * Math.max(smooth(1, 4, hol), smooth(0.06, 0.3, shade)) * smooth(0.6 - 0.2 * near, 0.7 - 0.2 * near, dp) * (1 - rock) * (1 - white);
       layers[L0 + L_DRIFT] = drift;
       // Bare ground in dry country, in patches and on ridges; the swales keep their cover.
-      const bare = dry * Math.min(1, smooth(0.5, 0.72, patch + 0.12 * smooth(0, -4, hol)) + 0.6 * smooth(-1.5, -6, hol)) * smooth(2.5, -1, hol) * (1 - canopy);
+      // And (step 4) the raw earth of a river bank too steep to hold grass, where it is not rock.
+      const cut = rnG >= 1 && rnG < 3 ? smooth(1, 1.3, rnG) * smooth(2.8, 1.8, rnG) * smooth(0.3, 0.6, slope) * (1 - rock) * (1 - white) * (1 - gravel) : 0;
+      const bare = Math.max(cut, dry * Math.min(1, smooth(0.5, 0.72, patch + 0.12 * smooth(0, -4, hol)) + 0.6 * smooth(-1.5, -6, hol)) * smooth(2.5, -1, hol) * (1 - canopy));
       layers[L0 + L_BARE] = bare;
       grow[v] *= (1 - gravel) * (1 - 0.6 * scree) * (1 - drift) * (1 - 0.6 * bare);
     }
@@ -316,6 +334,7 @@ interface PlantInput {
   riverNear: Float32Array; grow: Float32Array; treeLine: Float32Array; owner: Int16Array; cellList: number[];
   sampleH: (x: number, y: number) => number;
   groveIn: (x: number, y: number, dens: number) => number;
+  rivers: LocalRiver[];
 }
 
 /**
@@ -324,7 +343,7 @@ interface PlantInput {
  * build less well, ~0.6 s slower on a hex though the planting itself took 0.15 s.)
  */
 function placePlants(P: PlantInput): Float32Array {
-  const { w, size, half, step, res, rng, noise, layers, tempV, moistV, lakeMask, lakeLevel, riverNear, grow, treeLine, owner, cellList, sampleH, groveIn } = P;
+  const { w, size, half, step, res, rng, noise, layers, tempV, moistV, lakeMask, lakeLevel, riverNear, grow, treeLine, owner, cellList, sampleH, groveIn, rivers } = P;
   const treeOut: number[] = [];
   const famKind = (f: (typeof FAMILIES)[number]) => FIRST + FAMILIES.indexOf(f) * SPECIES_VARIANTS;
   const REEDS = famKind('reeds'), WILLOW = famKind('willow');
@@ -389,6 +408,9 @@ function placePlants(P: PlantInput): Float32Array {
       // Bare rock: boulders, more on the steepest.
       const rock = layers[L0 + L_ROCK];
       if (rock > 0.3 && r7 < 0.05 * rock) { put(x, y, z, ROCK_KIND, (1.6 + 3.5 * r3 * r3), 0x74716c, r4); continue; }
+      // Talus: boulders fallen from the cliff above (step 4).
+      const talus = layers[L0 + L_TALUS];
+      if (talus > 0.05 && r6 < 0.16 * talus) { put(x, y, z, ROCK_KIND, (0.9 + 3.2 * r3 * r3), 0x74716c, r4); continue; }
       if (grow[v] <= 0) continue;
       const tl = treeLine[v];                     // 1 below the tree line, 0 above it
       const g = groveIn(x, y, pl.treeD / FULL);   // 1 deep in a grove, 0 in the open
@@ -423,6 +445,8 @@ function placePlants(P: PlantInput): Float32Array {
         [H_STUMP, 0.004 * g + 0.012 * clearing, 0.5 + 0.4 * r3, 0],
         [TUFT, 0.35 * above * (1 - rock), 1.4 * (0.6 + 0.7 * r3), colourOf(pl, TUFT, 0x6e6a44)],
         [ROCK_KIND, 0.04 * above + 0.02 * smooth(0.22, 0.1, moist) + 0.008 * g + 0.12 * layers[L0 + L_SCREE], (0.6 + 1.6 * r3 * r3), 0x74716c],
+        // The odd great lone boulder on cold open ground, left by the ice (step 4).
+        [ROCK_KIND, 0.004 * Math.max(above, smooth(0.3, 0.15, temp)) * (1 - g), 2.6 + 2.6 * r3, 0x74716c],
       ];
       let acc = 0, done = false;
       for (const [kind, p, metres, colour] of extras) {
@@ -444,7 +468,112 @@ function placePlants(P: PlantInput): Float32Array {
       }
     }
   }
+  // Boulders in and along the streams (step 4): in rapids, at the lips of falls, and lining the
+  // banks in stony country. One in the water stands on the bed, tall enough to break the surface.
+  for (const rv of rivers) {
+    const p = rv.pts, ro = rv.rough, n = p.length / 4;
+    for (let s = 0; s < n - 1; s++) {
+      const x = p[s * 4], y = p[s * 4 + 1];
+      if (Math.abs(x) > half || Math.abs(y) > half) continue;
+      const dx = p[s * 4 + 4] - x, dy = p[s * 4 + 5] - y, sl = Math.hypot(dx, dy);
+      if (sl < 0.05) continue;
+      const tx = dx / sl, ty = dy / sl, wd = p[s * 4 + 3], lv = p[s * 4 + 2];
+      const v = at(x, y), stony = STONY.has(w.biome[cellList[owner[v]]]) || layers[v * LAYERS + L_ALPINE] > 0.5 ? 1 : 0;
+      const isFall = (k: number) => k >= 0 && (p[k * 4 + 2] - p[k * 4 + 6]) / Math.max(0.05, Math.hypot(p[k * 4 + 4] - p[k * 4], p[k * 4 + 5] - p[k * 4 + 1])) > 0.4;
+      const lip = isFall(s) && !isFall(s - 1);
+      const r = ro[s];
+      const drop = (along: number, across: number, metres: number, inWater: boolean) => {
+        const px = x + tx * along - ty * across, py = y + ty * along + tx * across;
+        if (Math.abs(px) > half || Math.abs(py) > half) return;
+        const gz = sampleH(px, py);
+        if (inWater) { if (lv - gz > 2.6) return; metres = Math.max(metres, lv - gz + 0.35 + 0.4 * rng()); }
+        put(px, py, gz, ROCK_KIND, metres, 0x74716c, rng());
+      };
+      // In the channel: as many as the water is rough, sized to the stream.
+      const nIn = r * sl * Math.min(wd, 18) / 40;
+      for (let k = Math.floor(nIn + rng()); k > 0; k--) drop(rng() * sl, (rng() - 0.5) * 0.9 * wd, (0.5 + 1.1 * rng()) * Math.min(1.4, 0.5 + wd / 16), true);
+      // A pair at the lip of a fall, one each side.
+      if (lip) for (const side of [-1, 1]) drop(0, side * (0.42 + 0.1 * rng()) * wd, 1.2 + 1.3 * rng(), true);
+      // Along the banks: in stony country, and wherever the stream runs white.
+      const nBank = (0.1 * stony + 0.35 * r) * sl / 8;
+      for (let k = Math.floor(nBank + rng()); k > 0; k--) drop(rng() * sl, (rng() < 0.5 ? -1 : 1) * (0.5 + 0.35 * rng()) * wd, 0.7 + 1.8 * rng() ** 2, false);
+    }
+  }
   return new Float32Array(treeOut);
+}
+
+/**
+ * Steep reaches of a stream as steps and pools (richer hexes step 4): the water held flat in a
+ * pool, then dropping over a lip into the next, as mountain streams do, in place of an even
+ * slope of water. Every pool sits at or below the water's old level, so it never floats over the
+ * ground; the channel is carved down to it, cutting a little gorge back from each fall. Falls
+ * are ~2.5 m on ordinary steep reaches, up to ~14 m on the steepest. Each lip gets a curved
+ * sheet of water a grid step and a half long, arcing out over the drop: a vertical sheet would
+ * hide inside the ground, which cannot be steeper than one grid cell.
+ * Returns the new points and where the point at index `mid` went.
+ */
+function stepPools(p: Float32Array, mid: number, step: number, minG: number): { pts: Float32Array; mid: number } {
+  const n = p.length / 4;
+  if (n < 3 || p[3] > 30) return { pts: p, mid };     // (big rivers keep their rapids)
+  const lv = (s: number) => p[s * 4 + 2];
+  const len = (s: number) => Math.hypot(p[s * 4 + 4] - p[s * 4], p[s * 4 + 5] - p[s * 4 + 1]);
+  const steep = (s: number) => s < n - 1 && (lv(s) - lv(s + 1)) / Math.max(0.05, len(s)) >= minG;
+  const level = Array.from({ length: n }, (_, s) => lv(s));
+  const lips = new Map<number, number>();               // point -> the pool level below its fall
+  let s = 0;
+  while (s < n - 1) {
+    if (!steep(s)) { s++; continue; }
+    let e = s + 1;                                      // a run of steep segments (one flat gap allowed)
+    while (e < n - 1 && (steep(e) || steep(e + 1))) e++;
+    const D = lv(s) - lv(e);
+    if (D >= 2) {
+      let run = 0;
+      for (let k = s; k < e; k++) run += len(k);
+      const maxH = Math.min(14, 2.5 + 40 * Math.max(0, D / run - 0.12)), steps = Math.ceil(D / maxH);
+      let from = s;
+      for (let k = 1; k <= steps && from < e; k++) {
+        const target = lv(s) - (D * k) / steps + 1e-6;
+        let b = from + 1;
+        while (b < e && lv(b) > target) b++;
+        for (let q = from + 1; q <= b; q++) level[q] = lv(b);
+        lips.set(from, lv(b));
+        from = b;
+      }
+    }
+    s = e;
+  }
+  if (!lips.size) return { pts: p, mid };
+  const out: number[] = [];
+  let m2 = mid;
+  for (let q = 0; q < n; q++) {
+    if (q === mid) m2 = out.length / 4;
+    out.push(p[q * 4], p[q * 4 + 1], level[q], p[q * 4 + 3]);
+    const lo = lips.get(q);
+    if (lo === undefined || q >= n - 1) continue;
+    const hi = level[q], L = len(q), d = Math.min(1.5 * step, 0.85 * L), ux = (p[q * 4 + 4] - p[q * 4]) / L, uy = (p[q * 4 + 5] - p[q * 4 + 1]) / L;
+    for (const t of [0.25, 0.5, 0.75, 1]) out.push(p[q * 4] + ux * d * t, p[q * 4 + 1] + uy * d * t, hi - (hi - lo) * t ** 2.5, p[q * 4 + 3]);
+  }
+  return { pts: new Float32Array(out), mid: m2 };
+}
+
+/** Per river point, 0..1, how white the water runs: rapids by the slope of the water (times
+ * `calm`, low in wet lowlands), falls white, and the foam spreading from the foot of each fall. */
+function whitewater(p: Float32Array, calm: number): Float32Array {
+  const n = p.length / 4, r = new Float32Array(n);
+  const len = (s: number) => Math.hypot(p[s * 4 + 4] - p[s * 4], p[s * 4 + 5] - p[s * 4 + 1]);
+  for (let s = 0; s < n - 1; s++) {
+    const dz = p[s * 4 + 2] - p[s * 4 + 6], g = dz / Math.max(0.05, len(s));
+    if (g > 0.4) {
+      r[s] = Math.max(r[s], 0.6); r[s + 1] = 1;
+      const reach = 1.2 * p[s * 4 + 3] + 3 * dz + 4;
+      let dist = 0;
+      for (let k = s + 1; k < n && dist < reach; k++) { r[k] = Math.max(r[k], 1 - dist / reach); if (k < n - 1) dist += len(k); }
+    } else {
+      const a = smooth(0.03, 0.14, g) * 0.6 * calm;      // (rapids stay mostly water: < 0.6)
+      r[s] = Math.max(r[s], a); r[s + 1] = Math.max(r[s + 1], a);
+    }
+  }
+  return r;
 }
 
 export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions> = {}, history?: History, valleys: ValleyField | null = null): LocalMap {
@@ -857,20 +986,27 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     }
     if (w.water[d] === WATER_OCEAN) for (let s = 0; s <= n; s++) pts[s * 4 + 2] = Math.max(pts[s * 4 + 2], -0.3);
     levelIn.set(d, Math.min(levelIn.get(d) ?? Infinity, level));
-    rivers.push({ pts });
+    // Steep reaches as pools and falls (richer hexes step 4), then where the water runs white.
+    // (Pools and falls on any steep reach in high, rugged country; elsewhere only on real
+    // cascades, and never in the wet lowlands.)
+    const bc = w.biome[c], minG = RUGGED.has(bc) ? 0.06 : CALM.has(bc) ? Infinity : 0.15;
+    const sp = isLake ? { pts, mid: n / 2 } : stepPools(pts, n / 2, step, minG);
+    rivers.push({ pts: sp.pts, mid: sp.mid, rough: whitewater(sp.pts, CALM.has(bc) ? 0.3 : 1) });
   }
 
   // Carve each river: a channel under the water and a valley floor easing out to the land.
+  // Each sample is cut to the stretch of water nearest it, not the deepest cut of any in reach:
+  // beside a fall, that let the pool below cut the banks of the pool above down to its own level,
+  // leaving the upper pool's water standing above its banks (2026-11-05).
   const riverNear = new Float32Array(N).fill(Infinity);   // distance to water, in widths
   const treeLine = new Float32Array(N).fill(1);
+  const nearD = new Float32Array(N).fill(Infinity), nearLv = new Float32Array(N), nearW = new Float32Array(N);
   for (const rv of rivers) {
     const p = rv.pts, n = p.length / 4;
     for (let s = 0; s < n - 1; s++) {
       const x0 = p[s * 4], y0 = p[s * 4 + 1], l0 = p[s * 4 + 2], w0 = p[s * 4 + 3];
       const x1 = p[s * 4 + 4], y1 = p[s * 4 + 5], l1 = p[s * 4 + 6];
-      const depth = Math.max(1, 0.12 * w0);
-      const valley = w0 * 2.5 + 25;
-      const reachR = w0 / 2 + valley;
+      const reachR = w0 / 2 + w0 * 2.5 + 25;
       const iA = Math.max(0, Math.floor((Math.min(x0, x1) - reachR + half) / step));
       const iB = Math.min(res - 1, Math.ceil((Math.max(x0, x1) + reachR + half) / step));
       const jA = Math.max(0, Math.floor((Math.min(y0, y1) - reachR + half) / step));
@@ -882,16 +1018,21 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
           const t = Math.max(0, Math.min(1, ((x - x0) * sx + (y - y0) * sy) / sl2));
           const dist = Math.hypot(x - x0 - sx * t, y - y0 - sy * t);
           if (dist > reachR) continue;
-          const lv = l0 + (l1 - l0) * t;
-          const h = heights[v];
-          let target: number;
-          if (dist < w0 / 2) target = lv - depth * (1 - (2 * dist / w0) ** 2);
-          else target = h > lv ? lv + 0.4 + (h - lv - 0.4) * smooth(w0 / 2, reachR, dist) : h;
-          if (target < h) heights[v] = target;
+          // (Nearest by distance from its water's edge, so a big river's channel wins over a stream joining it.)
+          if (dist - w0 / 2 < nearD[v]) { nearD[v] = dist - w0 / 2; nearLv[v] = l0 + (l1 - l0) * t; nearW[v] = w0; }
           riverNear[v] = Math.min(riverNear[v], dist / Math.max(1, w0 / 2));
         }
       }
     }
+  }
+  for (let v = 0; v < N; v++) {
+    if (nearD[v] === Infinity) continue;
+    const lv = nearLv[v], w0 = nearW[v], h = heights[v], dist = nearD[v] + w0 / 2;
+    const depth = Math.max(1, 0.12 * w0), reachR = w0 / 2 + w0 * 2.5 + 25;
+    let target: number;
+    if (dist < w0 / 2) target = lv - depth * (1 - (2 * dist / w0) ** 2);
+    else target = h > lv ? lv + 0.4 + (h - lv - 0.4) * smooth(w0 / 2, reachR, dist) : h;
+    if (target < h) heights[v] = target;
   }
   const sea = cellList.some((c) => w.water[c] === WATER_OCEAN);
 
@@ -1096,7 +1237,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
   // neighbouring biomes interleaving across their border instead of meeting on a line.
   const treeOut = o.plants ? placePlants({
     w, size, half, step, res, rng, noise, layers, tempV, moistV, lakeMask, lakeLevel, riverNear, grow, treeLine,
-    owner, cellList, sampleH, groveIn,
+    owner, cellList, sampleH, groveIn, rivers,
   }) : new Float32Array(0);
 
   // The planet's picture, for the inset.
@@ -1139,7 +1280,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
 /** Where a river piece crosses the hex edge: its point at t = 0.5 (tests check it is the planet's crossing). */
 export function riverCrossings(m: LocalMap): [number, number][] {
   return m.rivers.map((r) => {
-    const s = (r.pts.length / 4 - 1) / 2;
+    const s = r.mid;
     return [r.pts[s * 4], r.pts[s * 4 + 1]];
   });
 }
