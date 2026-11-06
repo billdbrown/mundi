@@ -55,6 +55,8 @@ export interface Effect {
   rumour?: boolean;
   /** Someone new joins. */
   recruit?: { role: Member['role']; name: string };
+  /** The job that brought you here is done. */
+  questDone?: boolean;
 }
 export interface Outcome { text: string; effect: Effect }
 export interface Choice { label: string; hint?: string; resolve(ctx: Ctx): Outcome }
@@ -293,6 +295,51 @@ export const ENCOUNTERS: Encounter[] = [
     ],
   },
 ];
+
+/** Encounters a job leads you into, on the hex it names (quests.ts). Not in the random draw. */
+export const QUEST_ENCOUNTERS: Record<'bounty' | 'relic', Encounter> = {
+  bounty: {
+    id: 'q-bounty',
+    title: 'The band you were sent for',
+    weight: () => 0,
+    text: (x) => `Smoke from a camp ${x.forest ? 'in the trees' : 'below the rise'}, horses on a line, a lookout who has seen you. These are the ones taking carts on the road.`,
+    choices: (x) => {
+      const enemy = 6 + x.rng() * 5;
+      return [
+        { label: 'Go in hard', hint: strength(x.caravan) > enemy ? 'You think you have the numbers' : 'They may have the numbers', resolve: (c) => {
+          const m = fight(c, enemy);
+          if (m > 0.15) return { text: 'They scatter into the hills, leaving the camp and what they took.', effect: { questDone: true, orrels: Math.round(15 + c.rng() * 40), morale: 10 } };
+          if (m > -0.15) { const h = someone(c.caravan, c.rng); return { text: `A hard fight. They break in the end, but ${h?.name ?? 'someone'} is cut badly.`, effect: { questDone: true, hurt: h, morale: 2 } }; }
+          const d = c.rng() < 0.35 ? someone(c.caravan, c.rng) : null;
+          return { text: d ? `They were ready for you. ${d.name} does not come back, and you pull away.` : 'They were ready for you. You pull away with the wounded and nothing to show.', effect: { dies: d, hurt: d ? null : someone(c.caravan, c.rng), morale: -12 } };
+        } },
+        { label: 'Wait for dark and take them sleeping', resolve: (c) => {
+          const m = fight(c, enemy * 0.7);
+          return m > 0
+            ? { text: 'A long cold wait, and a short night. By morning the band is gone for good.', effect: { questDone: true, days: 1, morale: 6 } }
+            : { text: 'A dog barks at the wrong moment. You lose a day and get nothing for it.', effect: { days: 1, morale: -5 } };
+        } },
+        { label: 'Leave them for now', resolve: () => ({ text: 'You mark the place and go on. They will still be here.', effect: {} }) },
+      ];
+    },
+  },
+  relic: {
+    id: 'q-relic',
+    title: 'The old site',
+    weight: () => 0,
+    text: () => 'Where you were told: a mound, too regular to be a hill, with a cut stone doorway half buried in its side.',
+    choices: () => [
+      { label: 'Dig it out carefully', resolve: (c) => c.rng() < 0.8
+        ? { text: 'Two days with spades and lamps. At the back of a narrow room, wrapped in rotten cloth: the thing you were sent for, and a second piece besides.', effect: { questDone: true, cargo: [[G.relics, 2]], days: 2, morale: 8 } }
+        : { text: 'Two days of digging and the roof comes in. Everyone gets out. Whatever was there is under tons of earth now.', effect: { days: 2, morale: -6 } } },
+      { label: 'Break straight in', resolve: (c) => {
+        if (c.rng() < 0.6) return { text: 'You are in by noon. It is there, as she said.', effect: { questDone: true, cargo: [[G.relics, 1]], days: 0.5 } };
+        const h = someone(c.caravan, c.rng, true);
+        return { text: `A step gives way into a pit. ${h?.name ?? 'Someone'} is hurt, and the way in is blocked. Try again another way.`, effect: { hurt: h, days: 0.5 } };
+      } },
+    ],
+  },
+};
 
 /** The context for an encounter at a cell. */
 export function contextAt(w: World, cell: number, road: boolean, snow: boolean, nearTown: boolean, caravan: Caravan, rng: () => number, name: () => string): Ctx {

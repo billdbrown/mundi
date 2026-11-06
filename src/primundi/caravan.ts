@@ -62,7 +62,7 @@ export function newCaravan(name: string, origin: Origin, seed: number): Caravan 
   return {
     name, origin, members,
     orrels: t ? 220 : 120,
-    rations: members.length * 20,
+    rations: members.length * 30,
     water: members.length * WATER_DAYS,
     cargo: GOODS.map(() => 0),
     basis: GOODS.map(() => 0),
@@ -79,7 +79,7 @@ export const living = (c: Caravan) => c.members.filter((m) => m.alive);
 export const leader = (c: Caravan) => c.members.find((m) => m.alive && m.role === 'leader') ?? null;
 export const cargoUsed = (c: Caravan) => c.cargo.reduce((a, b) => a + b, 0);
 export const waterCap = (c: Caravan) => living(c).length * WATER_DAYS;
-/** Rations eaten a day. */
+/** Rations eaten a day (a ration is a person's food for a day; the frugal eat less). */
 export const appetite = (c: Caravan) => living(c).reduce((a, m) => a + (m.trait === 'frugal' ? 0.7 : 1), 0);
 export const thirst = (c: Caravan) => living(c).length;
 
@@ -112,10 +112,12 @@ export function pace(c: Caravan): number {
 }
 
 /** One day passes. Returns notes worth telling the player. */
-export function passDay(c: Caravan, atWater: boolean, resting: boolean): string[] {
+/** `forage`: the share of the day's food the caravan has to take from its stores; the rest it
+ * finds (game, fish, fruit, a farm that sells eggs), more in kind country than in hard. */
+export function passDay(c: Caravan, atWater: boolean, resting: boolean, forage = 1): string[] {
   const notes: string[] = [];
   const hadR = c.rations > 0, hadW = c.water > 0;
-  c.rations = Math.max(0, c.rations - appetite(c));
+  c.rations = Math.max(0, c.rations - appetite(c) * forage);
   if (atWater) c.water = waterCap(c);
   else c.water = Math.max(0, c.water - thirst(c));
   let dm = resting ? 3 : 0.3;

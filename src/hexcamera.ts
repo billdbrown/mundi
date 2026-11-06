@@ -5,7 +5,9 @@
  *   right-drag (or left-drag) pans: the ground under the pointer stays under it
  *   middle-drag (or Ctrl/Alt + drag) turns round the point; up and down tilts
  *   wheel zooms toward the pointer, the view flattening toward the horizon as it comes in
- *   W A S D pans, Q E turns, R F zooms; touch: one finger pans, two pinch, twist and tilt
+ *   W A S D pans, Q E turns, R F zooms; touch: one finger pans; two fingers pinch to zoom
+ *   (about the point between them) and drag the map along, turning only once clearly twisted;
+ *   two fingers moving up or down together tilt
  *
  * Every input moves a target and the camera eases toward it at a rate that doesn't depend on the
  * frame rate, so motion stays smooth however the input arrives (a wheel's steps, a mouse at
@@ -66,7 +68,11 @@ export class HexCamera {
   private keys = new Set<string>();
   private drag: null | { mode: 'pan' | 'turn'; id: number; x: number; y: number; grab: THREE.Vector3 | null; t: number } = null;
   private touches = new Map<number, { x: number; y: number }>();
-  private pinch: null | { d: number; a: number; mx: number; my: number; dist: number; yaw: number } = null;
+  /** Two fingers: where they started, and what they've been read as. A gesture is classified once
+   * the fingers have moved a little: 'tilt' (both sliding up or down together) or 'pinch' (zoom
+   * and pan, plus a twist once it passes a dead zone). */
+  private pinch: null | { d: number; a: number; mx: number; my: number; mx0: number; my0: number; dist: number; yaw: number;
+    mode: 'undecided' | 'pinch' | 'tilt'; twist: boolean; grab: THREE.Vector3 | null; ys: [number, number]; t: number } = null;
   private ray = new THREE.Raycaster();
   /** A camera at the goal pose, for working out what is under the pointer without lag. */
   private ghost = new THREE.PerspectiveCamera();
@@ -237,8 +243,12 @@ export class HexCamera {
   }
   private up = (e: PointerEvent) => {
     if (e.pointerType === 'touch') {
+      if (!this.touches.has(e.pointerId)) return;
+      // A finger lifted while still: no fling.
+      const last = this.drag?.t ?? this.pinch?.t ?? 0;
+      if (performance.now() - last > 80 || this.touches.size > 1) { this.vel.set(0, 0, 0); this.yawVel = 0; }
       this.touches.delete(e.pointerId);
-      this.startTouch();
+      this.startTouch(true);
       return;
     }
     if (this.drag?.id !== e.pointerId) return;
@@ -246,29 +256,53 @@ export class HexCamera {
     if (performance.now() - this.drag.t > 80) { this.vel.set(0, 0, 0); this.yawVel = 0; }
     this.drag = null;
   };
-  private startTouch() {
+  private startTouch(lifted = false) {
     const t = [...this.touches.values()];
     this.drag = null; this.pinch = null;
-    if (t.length === 1) this.drag = { mode: 'pan', id: [...this.touches.keys()][0], x: t[0].x, y: t[0].y, grab: this.pick(t[0].x, t[0].y), t: performance.now() };
-    else if (t.length >= 2) {
-      const [a, b] = t;
-      this.pinch = { d: Math.hypot(b.x - a.x, b.y - a.y), a: Math.atan2(b.y - a.y, b.x - a.x), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, dist: this.distGoal, yaw: this.yawGoal };
+    if (t.length === 1) {
+      this.drag = { mode: 'pan', id: [...this.touches.keys()][0], x: t[0].x, y: t[0].y, grab: this.pick(t[0].x, t[0].y), t: performance.now() };
+      if (lifted) this.vel.set(0, 0, 0);
+    } else if (t.length >= 2) {
+      const [a, b] = t, mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      this.vel.set(0, 0, 0); this.yawVel = 0;
+      this.pinch = { d: Math.hypot(b.x - a.x, b.y - a.y), a: Math.atan2(b.y - a.y, b.x - a.x), mx, my, mx0: mx, my0: my, dist: this.distGoal, yaw: this.yawGoal,
+        mode: 'undecided', twist: false, grab: this.pick(mx, my), ys: [a.y, b.y], t: performance.now() };
     }
   }
   private moveTouch() {
     const t = [...this.touches.values()];
+    const now = performance.now();
     if (t.length === 1 && this.drag?.grab) {
-      const now = performance.now();
       this.panTo(this.drag.grab, t[0].x, t[0].y, Math.max(1, now - this.drag.t) / 1000);
       this.drag.t = now;
     } else if (t.length >= 2 && this.pinch) {
       const [a, b] = t, p = this.pinch;
-      const d = Math.hypot(b.x - a.x, b.y - a.y), ang = Math.atan2(b.y - a.y, b.x - a.x);
-      const my = (a.y + b.y) / 2;
-      this.distGoal = p.dist * p.d / Math.max(10, d);
-      this.yawGoal = p.yaw + (ang - p.a);
-      this.tiltGoal += (my - p.my) * 0.004; p.my = my;
-      this.vel.set(0, 0, 0);
+      const d = Math.hypot(b.x - a.x, b.y - a.y);
+      let dAng = Math.atan2(b.y - a.y, b.x - a.x) - p.a;
+      dAng = Math.atan2(Math.sin(dAng), Math.cos(dAng));
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      if (p.mode === 'undecided') {
+        // Decide what this is once the fingers have moved ~12 px. Tilt: both fingers going the same
+        // way up or down, the gap and the angle between them barely changing.
+        const dyA = a.y - p.ys[0], dyB = b.y - p.ys[1];
+        const moved = Math.max(Math.abs(dyA), Math.abs(dyB), Math.abs(d - p.d), Math.hypot(mx - p.mx0, my - p.my0));
+        if (moved < 12) return;
+        const together = Math.sign(dyA) === Math.sign(dyB) && Math.min(Math.abs(dyA), Math.abs(dyB)) > 6;
+        p.mode = together && Math.abs(d - p.d) < 0.4 * Math.abs(my - p.my0) && Math.abs(dAng) < 0.12 && Math.abs(mx - p.mx0) < Math.abs(my - p.my0) ? 'tilt' : 'pinch';
+        p.my = my;
+      }
+      if (p.mode === 'tilt') {
+        this.tiltGoal += (my - p.my) * 0.005; p.my = my;
+      } else {
+        this.distGoal = THREE.MathUtils.clamp(p.dist * p.d / Math.max(10, d), this.minDistance, this.maxDistance);
+        // Turn only after a clear twist, then follow it from there without a jump.
+        if (!p.twist && Math.abs(dAng) > 0.18) { p.twist = true; p.yaw = this.yawGoal - dAng; }
+        if (p.twist) this.yawGoal = p.yaw + dAng;
+        // The ground under the fingers stays under them.
+        if (p.grab) this.panTo(p.grab, mx, my, Math.max(1, now - p.t) / 1000);
+        this.vel.set(0, 0, 0);
+      }
+      p.t = now;
     }
     this.clampGoal();
   }

@@ -20,27 +20,31 @@ import { nameSeed, parseSeed, randomName } from '../seedname.ts';
 import { SEA, surfaceQueries, type SurfaceQueries } from '../surface.ts';
 import { mountLoader, type Loader } from '../loader.ts';
 import { describeHex } from '../hexcard.ts';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { RES_FERTILE, RES_FISH, RES_TIMBER } from '../gamedata.ts';
+import { MAX_QUESTS, canHandIn, offersAt, questPitch, questStatus, questTarget, questTitle, type Quest } from './quests.ts';
 import { makeRng } from '../rng.ts';
 import { PlanetFog } from './fog.ts';
 import { flicker } from './hexfog.ts';
 import { Thunder } from './thunder.ts';
 import { pickHome, BIASES, type StartBias } from './start.ts';
-import { buildAtlas, findPath, GOODS, hasWater, ringCells, seasonalTemp, SNOW_TEMP, stepDays, walkable, type Atlas, type Place } from './atlas.ts';
+import { buildAtlas, findPath, GOODS, G, hasWater, ringCells, seasonalTemp, SNOW_TEMP, stepDays, walkable, type Atlas, type Place } from './atlas.ts';
 import { bestKnownSell, quotes, rationPrice, remember, trade, type Known, type Stocks } from './market.ts';
 import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, cargoUsed, leader, living, newCaravan, pace, passDay, sight, waterCap, thirst, type Caravan, type Origin, type Role } from './caravan.ts';
-import { ENCOUNTERS, applyEffect, contextAt, drawEncounter, type Choice, type Encounter, type Outcome } from './encounters.ts';
+import { ENCOUNTERS, QUEST_ENCOUNTERS, applyEffect, contextAt, drawEncounter, type Choice, type Encounter, type Outcome } from './encounters.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const RADIUS_KM = 640;
 /** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
-const RATES = [0, 0.16, 0.45, 1.2];
+const RATES = [0, 0.22, 0.6, 1.6];
 /** The calendar day of the year the game starts on (northern spring). */
 const START_DOY = 100;
 /** Chance of an encounter on entering a hex off the road (on it, a bit less). */
 const ENCOUNTER_P = 0.07;
 
 // --- The save ---------------------------------------------------------------------------------
-interface Job { item: string; giver: string; from: number; to: number; reward: number; taken: number }
 interface Save {
   v: 2;
   world: string;
@@ -57,8 +61,12 @@ interface Save {
   charted: number;
   known: Record<number, Known>;
   stocks: Stocks;
-  job: Job | null;
+  /** Jobs in hand (quests.ts), and the ids of every offer ever taken (so it isn't offered again). */
+  jobs: Quest[];
+  taken: string[];
   jobsDone: number;
+  /** Places whose local map you've bought. */
+  maps: number[];
   log: { day: number; text: string }[];
   speed: number;
   draws: number;
@@ -68,7 +76,11 @@ const SAVE_KEY = 'primundi.save2';
 function loadSave(): Save | null {
   try {
     const s = JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null') as Save | null;
-    return s && s.v === 2 && typeof s.world === 'string' && !s.over ? s : null;
+    if (!s || s.v !== 2 || typeof s.world !== 'string' || s.over) return null;
+    // Saves from before several jobs at once.
+    s.jobs ??= []; s.taken ??= []; s.maps ??= [];
+    delete (s as unknown as { job?: unknown }).job;
+    return s;
   } catch { return null; }
 }
 let save: Save | null = null;
@@ -224,7 +236,7 @@ function newGame(w: World, a: Atlas, n: { name: string; origin: Origin; bias: St
   const caravan = newCaravan(n.name, n.origin, params.seed);
   const s: Save = {
     v: 2, world: n.world, bias: n.bias, home: home.id, caravan, day: 0, cell: home.cell, route: [], progress: 0,
-    revealed: [], charted: 0, known: {}, stocks: {}, job: null, jobsDone: 0, log: [], speed: 0, draws: 0, over: false,
+    revealed: [], charted: 0, known: {}, stocks: {}, jobs: [], taken: [], jobsDone: 0, maps: [], log: [], speed: 0, draws: 0, over: false,
   };
   const seen = new Set(ringCells(w, home.cell, 2));
   // You know home's market and its nearest neighbours', and where they are.
@@ -247,7 +259,8 @@ function bearing(w: World, from: number, to: number): string {
   const a = new THREE.Vector3(P[from * 3], P[from * 3 + 1], P[from * 3 + 2]);
   const b = new THREE.Vector3(P[to * 3], P[to * 3 + 1], P[to * 3 + 2]);
   const north = new THREE.Vector3(0, 1, 0).sub(a.clone().multiplyScalar(a.y)).normalize();
-  const east = new THREE.Vector3().crossVectors(north, a).normalize().negate();
+  // The generator's east is +longitude (atan2(x, z)): north × up.
+  const east = new THREE.Vector3().crossVectors(north, a).normalize();
   const d = b.clone().sub(a);
   const ang = Math.atan2(d.dot(east), d.dot(north));
   return ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'][((Math.round(ang / (Math.PI / 4)) % 8) + 8) % 8];
@@ -356,8 +369,33 @@ view.constrain = (pos) => {
 // --- On the planet: the caravan, its route, the roads -----------------------------------------
 const marks = {
   group: new THREE.Group(),
-  roadLines: null as THREE.LineSegments | null,
-  routeLine: null as THREE.Line | null,
+  roadLines: [] as Line2[],
+  routeLine: null as Line2 | null,
+  roadMat: new LineMaterial({ color: 0xe0c48c, linewidth: 2.2, dashed: true, dashSize: 0.0042, gapSize: 0.0022, transparent: true, opacity: 0.9, depthTest: false }),
+  roadUnder: new LineMaterial({ color: 0x1a140c, linewidth: 4.4, transparent: true, opacity: 0.35, depthTest: false }),
+  routeMat: new LineMaterial({ color: 0xf2c14e, linewidth: 3, dashed: true, dashSize: 0.005, gapSize: 0.003, transparent: true, opacity: 1, depthTest: false }),
+  /** A smooth line through cells (Catmull-Rom through their inland points). */
+  smooth(cells: number[], lift: number): number[] {
+    const pts = cells.map((c) => this.at(c, new THREE.Vector3(), lift));
+    if (pts.length < 2) return [];
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5);
+    const out: number[] = [];
+    for (const v of curve.getPoints(Math.max(2, (pts.length - 1) * 6))) out.push(v.x, v.y, v.z);
+    return out;
+  },
+  line(pos: number[], mat: LineMaterial, order: number) {
+    const g = new LineGeometry();
+    g.setPositions(pos);
+    const l = new Line2(g, mat);
+    l.computeLineDistances();
+    l.renderOrder = order;
+    this.group.add(l);
+    return l;
+  },
+  resize() {
+    const r = view.renderer.domElement;
+    for (const m of [this.roadMat, this.roadUnder, this.routeMat]) m.resolution.set(r.clientWidth, r.clientHeight);
+  },
   anchor: new THREE.Object3D(),
   build() {
     view.addToPlanet(this.group);
@@ -390,29 +428,25 @@ const marks = {
   /** The backbone roads, where both ends are revealed. */
   roads() {
     if (!atlas || !world) return;
-    if (this.roadLines) { this.group.remove(this.roadLines); this.roadLines.geometry.dispose(); }
-    const pts: number[] = [], a = new THREE.Vector3(), b = new THREE.Vector3();
-    for (const [x, y] of atlas.roadEdges) {
-      if (!revealed.has(x) || !revealed.has(y)) continue;
-      this.at(x, a, 0.0012); this.at(y, b, 0.0012);
-      pts.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    for (const l of this.roadLines) { this.group.remove(l); l.geometry.dispose(); }
+    this.roadLines = [];
+    this.resize();
+    // Each road town to town, as smooth runs over what you've seen: a dashed track on a soft shadow.
+    for (const path of atlas.roadPaths) {
+      let run: number[] = [];
+      const flush = () => {
+        if (run.length > 1) { const pos = this.smooth(run, 0.0012); this.roadLines.push(this.line(pos, this.roadUnder, 7), this.line(pos, this.roadMat, 8)); }
+        run = [];
+      };
+      for (const c of path) { if (revealed.has(c)) run.push(c); else flush(); }
+      flush();
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-    this.roadLines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xd8b878, transparent: true, opacity: 0.75, depthTest: false }));
-    this.roadLines.renderOrder = 8;
-    this.group.add(this.roadLines);
   },
   route() {
     if (this.routeLine) { this.group.remove(this.routeLine); this.routeLine.geometry.dispose(); this.routeLine = null; }
     if (!save || !save.route.length || !world) return;
-    const pts: THREE.Vector3[] = [this.at(save.cell, new THREE.Vector3(), 0.0022)];
-    for (const c of save.route) pts.push(this.at(c, new THREE.Vector3(), 0.0022));
-    const g = new THREE.BufferGeometry().setFromPoints(pts);
-    this.routeLine = new THREE.Line(g, new THREE.LineDashedMaterial({ color: 0xf2c14e, dashSize: 0.004, gapSize: 0.003, depthTest: false, transparent: true, opacity: 0.95 }));
-    this.routeLine.computeLineDistances();
-    this.routeLine.renderOrder = 9;
-    this.group.add(this.routeLine);
+    this.resize();
+    this.routeLine = this.line(this.smooth([save.cell, ...save.route], 0.0022), this.routeMat, 9);
   },
   /** The caravan's position this frame, between its hex and the next. */
   place() {
@@ -440,7 +474,8 @@ let lastSpeed = 1;
 /** A card that needs an answer stops the clock (an encounter, a town, a death). */
 let modal = false;
 const paused = () => speed === 0 || modal || hexOpen || !save || save.over;
-const north = () => !!world && !!save && world.grid.centers[save.cell * 3 + 1] >= 0;
+/** The calendar's seasons are home's: they don't flip when the caravan crosses the equator. */
+const north = () => !!world && !!save && !!atlas && world.grid.centers[atlas.places[save.home].cell * 3 + 1] >= 0;
 
 function setSpeed(s: number) {
   if (!save || save.over) return;
@@ -508,10 +543,14 @@ function enter(cell: number) {
   if (!s.route.length) {
     speed = 0;
     follow = marks.dirOfCaravan();
+    // A job's hex is usually where the route ends.
+    if (questsAt(cell)) { syncBar(); return; }
     if (pid >= 0) { openHex(cell); openTown(pid); } else toast('Arrived.');
     syncBar();
     return;
   }
+  // A job's hex.
+  if (questsAt(cell)) return;
   // The road.
   if (pid < 0) {
     const rng = makeRng((params.seed * 7919 + ++s.draws * 104729) >>> 0);
@@ -526,12 +565,48 @@ function enter(cell: number) {
   }
 }
 
+/** The caravan reached a job's hex: survey done, or the band or the old site found. True if a card
+ * came up (which stops the clock). */
+function questsAt(cell: number): boolean {
+  if (!world || !atlas || !save) return false;
+  const near = new Set([cell, ...world.grid.neighbors[cell]]);
+  for (const q of save.jobs) {
+    if (q.done || q.cell == null) continue;
+    if (q.kind === 'survey' && near.has(q.cell)) {
+      q.done = true;
+      reveal(ringCells(world, q.cell, 2), true);
+      toast(`Charted. Back to ${atlas.places[q.from].name} with it.`, 5000);
+      log(`Charted the hex ${q.giver} asked about.`);
+      labels.rebuild();
+      continue;
+    }
+    if ((q.kind === 'bounty' || q.kind === 'relic') && q.cell === cell) {
+      const rng = makeRng((params.seed * 7919 + ++save.draws * 104729) >>> 0);
+      const ctx = contextAt(world, cell, !!atlas.road[cell], false, false, save.caravan, rng, nameMaker(params.seed * 31 + save.draws));
+      showEncounter(QUEST_ENCOUNTERS[q.kind], ctx, q.id);
+      return true;
+    }
+  }
+  return false;
+}
+
+/** How much of the day's food comes from the stores: kind country feeds you a little. */
+function forageAt(c: number): number {
+  if (!world || !game) return 1;
+  const r = game.resources[c];
+  if (r & (RES_FERTILE | RES_FISH)) return 0.6;
+  if (r & RES_TIMBER || world.moisture[c] > 0.5) return 0.75;
+  return 1;
+}
+
 const warned = { water: false, rations: false };
 function newDay(resting: boolean) {
   if (!world || !atlas || !save) return;
   const s = save, c = s.caravan;
   const atWater = hasWater(world, atlas, s.cell);
-  for (const n of passDay(c, atWater, resting)) { toast(n); log(n); }
+  // In a town you eat what you buy; on the road the land helps.
+  const forage = atlas.placeAt[s.cell] >= 0 ? 1 : forageAt(s.cell);
+  for (const n of passDay(c, atWater, resting, forage)) { toast(n); log(n); }
   const wd = c.water / Math.max(1, thirst(c)), rd = c.rations / Math.max(1, appetite(c));
   if (wd <= 2 && !atWater && !warned.water && c.water > 0) { warned.water = true; speed = 0; toast(`Water for ${Math.floor(wd)} more days.`, 5000); }
   if (wd > 3) warned.water = false;
@@ -626,10 +701,19 @@ const labels = {
     box.innerHTML = '';
     this.els = [];
     if (!world || !save || !atlas) return;
+    const jobPlaces = new Set(save.jobs.map((q) => atlas!.placeAt[questTarget(q, atlas!)]).filter((x) => x >= 0));
+    for (const q of save.jobs) {
+      if (q.done || q.cell == null) continue;
+      const el = document.createElement('div');
+      el.className = 'pin';
+      el.textContent = q.kind === 'bounty' ? 'Bandits' : q.kind === 'survey' ? 'Survey' : 'Old site';
+      box.appendChild(el);
+      this.els.push({ cell: q.cell, el });
+    }
     for (const p of atlas.places) {
       if (!revealed.has(p.cell)) continue;
       const el = document.createElement('div');
-      const job = save.job?.to === p.id;
+      const job = jobPlaces.has(p.id);
       el.className = `lbl ${p.id === save.home ? 'own' : p.town ? 'town' : 'village'}${job ? ' job' : ''}`;
       el.textContent = p.name;
       box.appendChild(el);
@@ -804,7 +888,7 @@ function showHexCard(c: number) {
   showPanel('hex', `${close}${head(place ? `${place.town ? 'Town' : 'Village'}${place.realm ? ` · ${esc(place.realm)}` : ''}` : about.where || 'Hex',
       place ? esc(place.name) : about.title, place ? about.title + (place.id === save.home ? ' · <b>your home</b>' : '') : here ? 'You are here' : '')}
     <p>${about.text}</p>${chips(facts)}
-    ${save.job?.to === pid ? `<p class="note">You have ${esc(save.job.giver)}'s ${esc(save.job.item)} to deliver here.</p>` : ''}
+    ${save.jobs.filter((q) => questTarget(q, atlas!) === c).map((q) => `<p class="note">◆ ${esc(questTitle(q, atlas!))} · ${esc(questStatus(q, atlas!, save!.caravan.cargo))}</p>`).join('')}
     ${here ? `${place ? `<button class="go" data-act="town">Enter ${esc(place.name)}</button>` : ''}<button class="ghost" data-act="look">Look around</button>`
       : p ? `<button class="go" data-act="travel" data-cell="${c}">Travel here<span>${p.guess ? 'perhaps ' : ''}${daysText(p.days)}</span></button>` : '<p class="dim">No way there that you know of.</p>'}`);
 }
@@ -821,7 +905,8 @@ function openTown(pid: number, tab = townTab) {
   const q = quotes(w, p, s.stocks, day, doy);
   remember(s.known, p, q, Math.floor(day));
   const home = p.id === s.home;
-  const tabs = [['market', 'Market'], ['supplies', 'Supplies'], ['work', 'Work'], ['rest', home ? 'Home' : 'Inn']];
+  const due = s.jobs.filter((x) => canHandIn(x, p.id, c.cargo)).length;
+  const tabs = [['market', 'Market'], ['supplies', 'Supplies'], ['work', due ? `Work · ${due}` : 'Work'], ['tavern', 'Tavern'], ['rest', home ? 'Home' : 'Inn']];
   const purse = chips([`${ORREL}${fmt(c.orrels)}`, `${cargoUsed(c)} of ${c.capacity} loads`]);
   let body = '';
   if (tab === 'market') {
@@ -852,20 +937,24 @@ function openTown(pid: number, tab = townTab) {
       ${c.unsoldCharts ? `<p>You have mapped ${fmt(c.unsoldCharts)} hexes nobody here has seen drawn.</p><div class="opts">${opt('charts', 'Sell your charts', `${p.town ? 'A town pays well' : 'A village pays half'}`, `${ORREL}${fmt(chart)}`)}</div>`
         : '<p class="dim">Nothing new to sell. Every hex you uncover on the road is worth something here.</p>'}`;
   } else if (tab === 'work') {
-    const j = s.job;
-    if (j && j.to === p.id) {
-      body = `<blockquote>${esc(j.giver)}'s ${esc(j.item)} is for someone here. They have been expecting it.</blockquote>
-        <button class="go" data-act="deliver">Hand it over<span>${j.reward} orrels</span></button>`;
-    } else if (j) {
-      body = `<p>You are carrying ${esc(j.giver)}'s ${esc(j.item)} to <b>${esc(a.places[j.to].name)}</b>, ${bearing(w, s.cell, a.places[j.to].cell)} of here, for ${j.reward} orrels.</p>
-        <p class="dim">One job at a time.</p><button class="ghost" data-act="abandon">Give it up</button>`;
-    } else {
-      const offer = jobAt(p);
-      body = offer
-        ? `<blockquote>"I need a ${esc(offer.item)} taken to ${esc(a.places[offer.to].name)}, ${bearing(w, p.cell, a.places[offer.to].cell)} of here.${revealed.has(a.places[offer.to].cell) ? '' : " I'll show you on your map."} ${offer.reward} orrels when it gets there."<cite>${esc(offer.giver)}</cite></blockquote>
-           <button class="go" data-act="job">Take the job<span>${offer.reward} orrels on delivery</span></button>`
-        : `<p class="dim">Nobody in ${esc(p.name)} has work for a caravan this month.</p>`;
-    }
+    const handIn = s.jobs.filter((x) => canHandIn(x, p.id, c.cargo));
+    const offers = jobsOffered(p);
+    const dir = (cell: number) => bearing(w, p.cell, cell);
+    body = `${handIn.length ? `<h3>To hand in</h3>${handIn.map((q) => `<div class="job-card due"><b>${esc(questTitle(q, a))}</b><small>for ${esc(q.giver)}</small>
+        <button class="go" data-act="handin" data-q="${q.id}">Hand it in<span>${q.reward} orrels</span></button></div>`).join('')}` : ''}
+      <h3>The notice board</h3>
+      ${offers.length ? offers.map((q) => `<div class="job-card"><blockquote>${esc(questPitch(q, a, dir))}<cite>${esc(q.giver)}</cite></blockquote>
+        <div class="job-foot"><span>${q.reward} orrels${q.kind === 'deliver' ? ' on delivery' : ''}</span>
+        <button class="go" data-act="take" data-q="${q.id}" ${s.jobs.length >= MAX_QUESTS ? 'disabled' : ''}>Take it</button></div></div>`).join('')
+        : `<p class="dim">Nothing else posted in ${esc(p.name)} this month.</p>`}
+      ${s.jobs.length ? `<p class="dim small">You hold ${s.jobs.length} of ${MAX_QUESTS} jobs. The journal lists them.</p>` : ''}`;
+  } else if (tab === 'tavern') {
+    const mapped = s.maps.includes(p.id), mapCost = p.town ? 40 : 25;
+    body = `${purse}<h3>Talk</h3>
+      <div class="opts">${opt('round', 'Stand a round', 'Someone always knows of a place you don\'t', `${ORREL}8`, '', c.orrels < 8)}
+      ${opt('localmap', 'Buy a map of the country round', mapped ? 'You have it' : 'Four days\' walk in every direction', `${ORREL}${mapCost}`, `data-n="${mapCost}"`, mapped || c.orrels < mapCost)}</div>
+      <h3>${esc(p.name)} remembers</h3>
+      ${p.story.length ? `<ul class="log">${p.story.slice(-4).reverse().map((x) => { const i = x.indexOf(': '); return `<li><span>Year ${x.slice(0, i)}</span>${esc(x.slice(i + 2))}</li>`; }).join('')}</ul>` : '<p class="dim">Nothing anyone tells twice.</p>'}`;
   } else {
     const cost = home ? 0 : living(c).length;
     const hires: [Role, number, string][] = [['hand', 30, 'Carries, cooks, keeps watch'], ['guard', 55, 'Fights when it comes to it'], ...(p.town ? [['scout', 70, 'Sees a hex further'] as [Role, number, string]] : [])];
@@ -878,6 +967,7 @@ function openTown(pid: number, tab = townTab) {
       <div class="opts">${opt('beast', 'A pack beast', 'Carries four more loads', `${ORREL}45`, '', c.orrels < 45)}</div>`;
   }
   showPanel('town', `${close}${head(`${p.town ? 'Town' : 'Village'}${p.realm ? ` · ${esc(p.realm)}` : ''}`, esc(p.name), `${fmt(p.pop)} people${home ? ' · <b>your home</b>' : ''}`)}
+    <p class="about">${townCharacter(p)}</p>
     <nav class="tabs">${tabs.map(([k, l]) => `<button data-act="tab" data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</nav>
     <div class="tab-body">${body}</div>`);
   panel.dataset.pid = String(pid);
@@ -885,23 +975,28 @@ function openTown(pid: number, tab = townTab) {
 }
 function chartRate(p: Place) { return (save?.caravan.origin === 'cartographers' ? 1.5 : 0.6) * (p.town ? 1 : 0.5); }
 
-/** The work a place offers this month, if any: carry something somewhere 4–14 hexes off. */
-function jobAt(p: Place): Job | null {
-  if (!world || !atlas || !save) return null;
-  const w = world, a = atlas, month = Math.floor(save.day / 30);
-  const rng = makeRng((params.seed * 131 + p.id * 977 + month * 7) >>> 0);
-  if (rng() < 0.15) return null;
-  const cellA = cellAngle();
-  const cands = a.places.filter((o) => o.id !== p.id && game!.continent[o.cell] === game!.continent[p.cell]).filter((o) => { const d = angle(w, o.cell, p.cell) / cellA; return d >= 4 && d <= 14; });
-  if (!cands.length) return null;
-  const to = cands[Math.floor(rng() * cands.length)];
-  const path = findPath(w, p.cell, to.cell, (x, y) => stepDays(w, a, x, y, doyOf(save!.day)), () => true, 30);
-  if (!path) return null;
-  let days = 0;
-  for (let i = 1; i < path.length; i++) days += stepDays(w, a, path[i - 1], path[i], doyOf(save.day));
-  const items = ['sealed letter', 'parcel of seed', 'small locked box', 'bolt of fine cloth', 'bundle of deeds', 'wrapped icon', 'crate of medicines'];
-  const giver = nameMaker(params.seed + p.id * 13 + month)();
-  return { item: items[Math.floor(rng() * items.length)], giver, from: p.id, to: to.id, reward: Math.round(20 + days * 7), taken: save.day };
+/** This month's notice board at a place, less what you've taken. */
+function jobsOffered(p: Place): Quest[] {
+  if (!world || !atlas || !save || !game) return [];
+  const w = world, a = atlas, s = save, month = Math.floor(s.day / 30);
+  const price = (pl: Place, g: number) => quotes(w, pl, s.stocks, s.day, doyOf(s.day))[g].buy || pl.price[g];
+  return offersAt(w, a, game.continent, p, month, params.seed, revealed, price).filter((q) => !s.taken.includes(q.id));
+}
+
+/** A line of who a place is: where it sits, what it's known for, where it came from. */
+function townCharacter(p: Place): string {
+  if (!world || !atlas || !game) return '';
+  const w = world, c = p.cell, nb = w.grid.neighbors[c];
+  const coast = nb.some((n) => w.water[n] === 1), river = !!w.river[c], lake = nb.some((n) => w.water[n] === 2);
+  const high = w.elevation[c] > 0.3;
+  const kind = p.capital ? 'the seat of its realm' : p.pop > 6000 ? 'a city' : p.town ? 'a market town' : p.pop < 300 ? 'a hamlet' : 'a village';
+  const where = coast ? (river ? 'where a river meets the sea' : 'on the coast') : lake ? 'on a lakeshore' : river ? 'on a river' : high ? 'up in the hills' : `in the ${BIOMES[w.biome[c]].name.toLowerCase()}`;
+  // Known for: whatever is cheapest here against its usual price.
+  let best = -1, bk = 0.8;
+  for (let g = 0; g < GOODS.length - 1; g++) { const k = p.price[g] / GOODS[g].base; if (k < bk) { bk = k; best = g; } }
+  const known = best >= 0 ? `, known for its ${GOODS[best].name.toLowerCase()}` : '';
+  const origin = p.parent ? ` Settled from ${esc(p.parent)} in year ${p.founded}.` : p.founded <= 200 ? ' One of the first places people settled.' : ` Founded in year ${p.founded}.`;
+  return `${kind[0].toUpperCase() + kind.slice(1)} ${where}${known}.${origin}`;
 }
 
 // The road: a card in the middle, the world dimmed behind it.
@@ -909,26 +1004,28 @@ function roadKicker() {
   if (!world || !save) return 'On the road';
   return `On the road · ${BIOMES[world.biome[save.cell]].name} · ${dateText(save.day, north())}`;
 }
-function showEncounter(e: Encounter, ctx: ReturnType<typeof contextAt>) {
+function showEncounter(e: Encounter, ctx: ReturnType<typeof contextAt>, quest?: string) {
   speed = 0;
   const choices = e.choices(ctx);
   showPanel('encounter', `${head(roadKicker(), esc(e.title))}<p class="tale">${esc(e.text(ctx))}</p>
     <div class="opts">${choices.map((ch, i) => opt('choose', esc(ch.label), ch.hint ? esc(ch.hint) : '', '', `data-i="${i}"`)).join('')}</div>`, true);
-  pendingChoices = { e, ctx, choices };
+  pendingChoices = { e, ctx, choices, quest };
 }
-let pendingChoices: { e: Encounter; ctx: ReturnType<typeof contextAt>; choices: Choice[] } | null = null;
+let pendingChoices: { e: Encounter; ctx: ReturnType<typeof contextAt>; choices: Choice[]; quest?: string } | null = null;
 /** What changed, as chips: good news green, bad news red. */
 function fxChips(lines: string[]) {
   if (!lines.length) return '';
   const bad = /^−|hurt|sick|dead|lost|down/;
-  return `<div class="facts fx">${lines.map((l) => `<span class="${bad.test(l) ? 'bad' : l.startsWith('+') || /up|joins|mapped/.test(l) ? 'good' : ''}">${esc(l)}</span>`).join('')}</div>`;
+  return `<div class="facts fx">${lines.map((l) => `<span class="${bad.test(l) ? 'bad' : l.startsWith('+') || /up|joins|mapped|job done/.test(l) ? 'good' : ''}">${esc(l)}</span>`).join('')}</div>`;
 }
 function choose(i: number) {
   if (!pendingChoices || !save) return;
-  const { e, ctx, choices } = pendingChoices;
+  const { e, ctx, choices, quest } = pendingChoices;
   pendingChoices = null;
   const out: Outcome = choices[i].resolve(ctx);
   const lines = applyEffect(save.caravan, out.effect, ctx.name, save.day);
+  const q = quest ? save.jobs.find((x) => x.id === quest) : undefined;
+  if (q && out.effect.questDone) { q.done = true; lines.push(`job done: back to ${atlas!.places[q.from].name}`); labels.rebuild(); }
   let extra = '';
   if (out.effect.reveal) { const n = reveal(ringCells(world!, save.cell, out.effect.reveal), true); if (n) lines.push(`${n} hexes mapped`); }
   if (out.effect.rumour) extra = rumour();
@@ -974,23 +1071,41 @@ function gameOver() {
     <button class="go" data-act="menu">Begin again</button>`, true);
 }
 
-function showJournal() {
-  if (!save || !atlas) return;
-  const s = save, c = s.caravan, o = ORIGINS.find((x) => x.id === c.origin)!;
+let journalTab = 'work';
+function showJournal(tab = journalTab) {
+  if (!save || !atlas || !world) return;
+  journalTab = tab;
+  const s = save, c = s.caravan, a = atlas, w = world, o = ORIGINS.find((x) => x.id === c.origin)!;
   const prog = c.origin === 'traders' ? c.earned : s.charted, goal = AMBITION_GOAL[c.origin];
   const mood = c.morale > 70 ? 'in good heart' : c.morale > 40 ? 'steady' : c.morale > 20 ? 'low' : 'close to giving up';
-  showPanel('journal', `${close}${head(`Journal · ${o.label}`, esc(c.name), `From ${esc(atlas.places[s.home].name)} · ${dateText(s.day, north())}`)}
-    <h3>Ambition</h3>
-    <p>${o.ambition}${prog >= goal ? ': <b>done</b>. The road goes on.' : ''}</p>
-    <div class="meter"><i style="width:${Math.min(100, (prog / goal) * 100)}%"></i></div>
-    <p class="dim small">${fmt(Math.min(prog, goal))} of ${fmt(goal)}. A direction, not a rule: go where you like.</p>
-    ${s.job ? `<h3>Work</h3><p>${esc(s.job.giver)}'s ${esc(s.job.item)} to ${esc(atlas.places[s.job.to].name)}, for ${s.job.reward} orrels.</p>` : ''}
-    <h3>The caravan</h3>
-    <p class="dim small">${living(c).length} people, ${mood}.</p>
-    <ul class="people">${c.members.filter((m) => m.alive).map((m) => `<li><span class="who"><b>${esc(m.name)}</b><small>${TRAITS[m.trait]}</small></span><span class="role${m.role === 'leader' ? ' lead' : ''}">${ROLE_NAMES[m.role]}</span>${m.health !== 'well' ? `<span class="hp">${m.health}</span>` : ''}</li>`).join('')}</ul>
-    ${c.members.some((m) => !m.alive) ? `<p class="dim small">Lost on the road: ${c.members.filter((m) => !m.alive).map((m) => esc(m.name)).join(', ')}.</p>` : ''}
-    <h3>Lately</h3>
-    <ul class="log">${s.log.slice(-30).reverse().map((l) => `<li><span>${dateText(l.day, north())}</span>${esc(l.text)}</li>`).join('')}</ul>`);
+  const tabs = [['work', s.jobs.length ? `Work · ${s.jobs.length}` : 'Work'], ['caravan', 'Caravan'], ['story', 'Story']];
+  let body = '';
+  if (tab === 'work') {
+    body = `<h3>Ambition</h3>
+      <p>${o.ambition}${prog >= goal ? ': <b>done</b>. The road goes on.' : ''}</p>
+      <div class="meter"><i style="width:${Math.min(100, (prog / goal) * 100)}%"></i></div>
+      <p class="dim small">${fmt(Math.min(prog, goal))} of ${fmt(goal)}. A direction, not a rule.</p>
+      <h3>Jobs · ${s.jobs.length} of ${MAX_QUESTS}</h3>
+      ${s.jobs.length ? s.jobs.map((q) => {
+        const t = questTarget(q, a), p = plan(t);
+        const where = t === s.cell ? 'here' : `${p ? `${p.guess ? 'perhaps ' : ''}${daysText(p.days)}` : 'no known way'} ${bearing(w, s.cell, t)}`;
+        const ready = a.placeAt[s.cell] >= 0 && canHandIn(q, a.placeAt[s.cell], c.cargo);
+        return `<div class="job-card${q.done || ready ? ' due' : ''}"><b>${esc(questTitle(q, a))}</b>
+          <small>${esc(questStatus(q, a, c.cargo))} · ${where} · ${q.reward} orrels · for ${esc(q.giver)} of ${esc(a.places[q.from].name)}</small>
+          <div class="job-foot"><button class="ghost" data-act="giveup" data-q="${q.id}">Give up</button>
+          ${t !== s.cell && p ? `<button class="go" data-act="course" data-q="${q.id}">Set out</button>` : ''}</div></div>`;
+      }).join('') : '<p class="dim">No jobs in hand. Town notice boards have work.</p>'}`;
+  } else if (tab === 'caravan') {
+    body = `<p class="dim small">${living(c).length} people, ${mood}. ${cargoUsed(c)} of ${c.capacity} loads carried.</p>
+      <ul class="people">${c.members.filter((m) => m.alive).map((m) => `<li><span class="who"><b>${esc(m.name)}</b><small>${TRAITS[m.trait]}</small></span><span class="role${m.role === 'leader' ? ' lead' : ''}">${ROLE_NAMES[m.role]}</span>${m.health !== 'well' ? `<span class="hp">${m.health}</span>` : ''}</li>`).join('')}</ul>
+      ${c.members.some((m) => !m.alive) ? `<p class="dim small">Lost on the road: ${c.members.filter((m) => !m.alive).map((m) => esc(m.name)).join(', ')}.</p>` : ''}
+      ${c.cargo.some((x) => x) ? `<h3>Cargo</h3>${chips(c.cargo.map((n, g) => (n ? `${n} ${GOODS[g].name.toLowerCase()}` : '')).filter(Boolean))}` : ''}`;
+  } else {
+    body = `<ul class="log">${s.log.slice(-40).reverse().map((l) => `<li><span>${dateText(l.day, north())}</span>${esc(l.text)}</li>`).join('')}</ul>`;
+  }
+  showPanel('journal', `${close}${head(`Journal · ${o.label}`, esc(c.name), `From ${esc(a.places[s.home].name)} · ${dateText(s.day, north())}`)}
+    <nav class="tabs">${tabs.map(([k, l]) => `<button data-act="jtab" data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</nav>
+    <div class="tab-body">${body}</div>`);
 }
 
 panel.addEventListener('click', (e) => {
@@ -1044,30 +1159,70 @@ panel.addEventListener('click', (e) => {
       store();
       break;
     }
-    case 'job': {
-      const j = jobAt(atlas.places[pid]);
-      if (!j) break;
-      s.job = j;
-      const to = atlas.places[j.to];
-      reveal(ringCells(world, to.cell, 1));
-      log(`Took ${j.giver}'s ${j.item} to carry to ${to.name}.`);
+    case 'take': {
+      const q = jobsOffered(atlas.places[pid]).find((x) => x.id === b.dataset.q);
+      if (!q || s.jobs.length >= MAX_QUESTS) break;
+      q.taken = s.day;
+      s.jobs.push(q); s.taken.push(q.id);
+      // The giver shows you on your map where it is.
+      reveal(ringCells(world, questTarget(q, atlas), 1));
+      log(`Took on: ${questTitle(q, atlas)}, for ${q.giver} of ${atlas.places[q.from].name}.`);
       labels.rebuild();
       openTown(pid, 'work');
       store();
       break;
     }
-    case 'deliver': {
-      const j = s.job!;
-      c.orrels += j.reward; c.earned += j.reward;
+    case 'handin': {
+      const q = s.jobs.find((x) => x.id === b.dataset.q);
+      if (!q || !canHandIn(q, pid, c.cargo)) break;
+      if (q.kind === 'procure') { const g = q.good!, n = q.qty!; c.basis[g] -= c.cargo[g] ? (c.basis[g] / c.cargo[g]) * n : 0; c.cargo[g] -= n; }
+      if (q.kind === 'relic' && c.cargo[G.relics] > 0) { c.basis[G.relics] = 0; c.cargo[G.relics]--; }
+      c.orrels += q.reward; c.earned += q.reward;
       s.jobsDone++;
-      log(`Delivered ${j.giver}'s ${j.item} to ${atlas.places[j.to].name}: ${j.reward} orrels.`);
-      s.job = null;
+      s.jobs = s.jobs.filter((x) => x !== q);
+      log(`${questTitle(q, atlas)}: done, ${q.reward} orrels.`);
+      toast(`${q.reward} orrels. ${q.giver} is pleased.`);
       labels.rebuild();
       openTown(pid, 'work');
       store();
       break;
     }
-    case 'abandon': if (s.job) { log(`Gave up the ${s.job.item} for ${atlas.places[s.job.to].name}.`); s.job = null; labels.rebuild(); openTown(pid, 'work'); store(); } break;
+    case 'giveup': {
+      const q = s.jobs.find((x) => x.id === b.dataset.q);
+      if (!q || !confirm(`Give up "${questTitle(q, atlas)}"?`)) break;
+      s.jobs = s.jobs.filter((x) => x !== q);
+      log(`Gave up: ${questTitle(q, atlas)}.`);
+      labels.rebuild();
+      showJournal('work');
+      store();
+      break;
+    }
+    case 'course': {
+      const q = s.jobs.find((x) => x.id === b.dataset.q);
+      if (q) travelTo(questTarget(q, atlas));
+      break;
+    }
+    case 'jtab': showJournal(b.dataset.tab); break;
+    case 'round': {
+      if (c.orrels < 8) break;
+      c.orrels -= 8;
+      toast(rumour(), 6000);
+      openTown(pid, 'tavern');
+      store();
+      break;
+    }
+    case 'localmap': {
+      const n = Number(b.dataset.n);
+      if (c.orrels < n || s.maps.includes(pid)) break;
+      c.orrels -= n;
+      s.maps.push(pid);
+      const got = reveal(ringCells(world, atlas.places[pid].cell, 6));
+      toast(`The map shows ${got} hexes you hadn't seen.`);
+      log(`Bought a map of the country round ${atlas.places[pid].name}.`);
+      openTown(pid, 'tavern');
+      store();
+      break;
+    }
     case 'rest': {
       const n = Number(b.dataset.n), cost = pid === s.home ? 0 : living(c).length * n;
       if (c.orrels < cost) break;
@@ -1189,3 +1344,4 @@ const ENCOUNTERS_BY_ID = Object.fromEntries(ENCOUNTERS.map((e) => [e.id, e]));
 
 showLaunch();
 syncBar();
+addEventListener('resize', () => marks.resize());

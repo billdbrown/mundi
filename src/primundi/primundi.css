@@ -259,3 +259,22 @@ body.gathering::after { content: 'The storm gathers…'; position: fixed; inset:
   #toast { bottom: calc(64px + env(safe-area-inset-bottom)); }
 }
 .primundi #card button:disabled:hover, .primundi #card button:disabled { border-color: var(--edge); }
+
+/* A town's character, under its name. */
+#card .about { margin: -4px 0 10px; color: var(--quiet); font-size: 12.5px; font-style: italic; }
+/* Jobs: on the notice board, and in the journal. */
+#card .job-card { display: grid; gap: 3px; padding: 10px 12px; margin: 6px 0; border-radius: 11px; background: rgba(255, 255, 255, .04); border: 1px solid var(--edge); }
+#card .job-card.due { border-color: rgba(242, 193, 78, .55); background: rgba(242, 193, 78, .07); }
+#card .job-card > b { font-weight: 600; color: #fff; }
+#card .job-card > small { color: var(--quiet); font-size: 12px; }
+#card .job-card blockquote { margin: 0 0 4px; }
+#card .job-foot { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+#card .job-foot > span { flex: 1; color: var(--gold); font-weight: 600; font-variant-numeric: tabular-nums; }
+#card .job-foot .go, #card .job-foot .ghost { width: auto; flex: 0 0 auto; margin: 0; padding: 7px 14px; font-size: 13px; }
+#card .job-foot .ghost { margin-right: auto; }
+#card .job-card .go { margin-top: 6px; }
+#card .job-foot .go { margin-top: 0; }
+/* A job's hex on the map. */
+.pin { position: absolute; left: 0; top: 0; white-space: nowrap; font-size: 11.5px; font-weight: 600; color: #1a1406; background: var(--gold);
+  padding: 2px 8px 2px 7px; border-radius: 999px; box-shadow: 0 2px 8px rgba(0, 0, 0, .5); }
+.pin::after { content: ''; position: absolute; left: 50%; top: 100%; margin-left: -4px; border: 4px solid transparent; border-top-color: var(--gold); }

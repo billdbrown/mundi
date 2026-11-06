@@ -70,6 +70,12 @@ export interface Place {
   price: Float32Array;
   /** How many units of each good the market holds when left alone. */
   stock: Float32Array;
+  /** Its history (civ.ts): the year it was founded, who founded it, whether it leads a realm, and
+   * what happened to it, oldest first ("year: text"). */
+  founded: number;
+  parent: string;
+  capital: boolean;
+  story: string[];
 }
 
 export interface Atlas {
@@ -80,6 +86,8 @@ export interface Atlas {
   road: Uint8Array;
   /** Road segments (pairs of neighbouring cells), for drawing. */
   roadEdges: [number, number][];
+  /** Each road as a chain of cells from town to town, for drawing as a line. */
+  roadPaths: number[][];
 }
 
 /** People at or above this make a town; below, a village. */
@@ -95,7 +103,10 @@ export function buildAtlas(w: World, gd: GameData, h: History): Atlas {
     const r = realmAt(s, year);
     const realm = r >= 0 ? h.realms.find((x) => x.id === r)?.name ?? '' : '';
     const id = places.length;
-    places.push({ id, cell: s.cell, name: s.name, pop: Math.round(pop), town: pop >= TOWN_POP, realm, price: new Float32Array(NG), stock: new Float32Array(NG) });
+    const parent = s.parent >= 0 ? h.settlements.find((x) => x.id === s.parent)?.name ?? '' : '';
+    const capital = h.realms.some((x) => x.id === r && h.settlements[x.capital]?.id === s.id);
+    const story = h.events.filter((e) => e.cell === s.cell || e.text.includes(s.name)).sort((a, b) => a.year - b.year).map((e) => `${e.year}: ${e.text}`);
+    places.push({ id, cell: s.cell, name: s.name, pop: Math.round(pop), town: pop >= TOWN_POP, realm, price: new Float32Array(NG), stock: new Float32Array(NG), founded: s.founded, parent, capital, story });
     placeAt[s.cell] = id;
   }
 
@@ -104,6 +115,7 @@ export function buildAtlas(w: World, gd: GameData, h: History): Atlas {
   const oldRoad = new Uint8Array(N);
   for (const r of h.roads) for (const c of r.cells) oldRoad[c] = 1;
   const towns = places.filter((p) => p.town);
+  const roadPaths: number[][] = [];
   const coastal = new Uint8Array(N);
   for (let c = 0; c < N; c++) if (w.water[c] === WATER_LAND && nb[c].some((n) => w.water[n] === WATER_OCEAN)) coastal[c] = 1;
   const P = w.grid.centers;
@@ -133,7 +145,7 @@ export function buildAtlas(w: World, gd: GameData, h: History): Atlas {
       const cost = (a: number, b: number) => (oldRoad[b] ? 0.35 : 1) * terrainCost(w, a, b);
       const path = findPath(w, from, to, cost, (c) => !coastal[c], 22)
         ?? findPath(w, from, to, (a, b) => cost(a, b) * (coastal[b] && b !== to ? 12 : 1), () => true, 22 * 12);
-      if (path) for (const c of path) road[c] = 1;
+      if (path) { for (const c of path) road[c] = 1; roadPaths.push(path); }
     }
   }
   const roadEdges: [number, number][] = [];
@@ -179,7 +191,7 @@ export function buildAtlas(w: World, gd: GameData, h: History): Atlas {
     if (!s || s.n < 2) continue;
     for (let g = 0; g < NG; g++) p.price[g] = Math.exp(Math.log(p.price[g]) * 0.7 + (s.lg[g] / s.n) * 0.3);
   }
-  return { places, placeAt, road, roadEdges };
+  return { places, placeAt, road, roadEdges, roadPaths };
 }
 
 function roadComponents(w: World, road: Uint8Array): Int32Array {

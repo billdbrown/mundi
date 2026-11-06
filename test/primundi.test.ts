@@ -129,3 +129,31 @@ test('roads keep a hex back from the sea, except where they start or end at a co
   }
   assert.ok(total > 0 && shore / total < 0.05, `${shore} of ${total} road hexes on the shore`);
 });
+
+import { offersAt, canHandIn, questTarget, questTitle } from '../src/primundi/quests.ts';
+test('notice boards: stable within a month, varied in kind, every job pointing somewhere real', () => {
+  const kinds = new Set<string>();
+  const none = new Set<number>();
+  for (const p of atlas.places.slice(0, 40)) {
+    const a = offersAt(hw, atlas, hgd.continent, p, 3, 9, none, (pl, g) => pl.price[g]);
+    const b = offersAt(hw, atlas, hgd.continent, p, 3, 9, none, (pl, g) => pl.price[g]);
+    assert.deepEqual(a, b);
+    for (const q of a) {
+      kinds.add(q.kind);
+      assert.ok(q.reward > 0 && questTitle(q, atlas).length > 5);
+      const t = questTarget(q, atlas);
+      assert.ok(t >= 0 && t < hw.grid.count && hw.water[t] === WATER_LAND);
+    }
+  }
+  assert.ok(kinds.size >= 4, [...kinds].join(','));
+});
+
+test('a job is handed in where it should be, and only when it is done', () => {
+  const cargo = GOODS.map(() => 0);
+  assert.ok(canHandIn({ id: 'a', kind: 'deliver', giver: 'X', from: 0, to: 2, reward: 1, taken: 0 }, 2, cargo));
+  assert.ok(!canHandIn({ id: 'b', kind: 'procure', giver: 'X', from: 0, good: G.salt, qty: 3, reward: 1, taken: 0 }, 0, cargo));
+  cargo[G.salt] = 3;
+  assert.ok(canHandIn({ id: 'b', kind: 'procure', giver: 'X', from: 0, good: G.salt, qty: 3, reward: 1, taken: 0 }, 0, cargo));
+  assert.ok(!canHandIn({ id: 'c', kind: 'bounty', giver: 'X', from: 0, cell: 5, reward: 1, taken: 0 }, 0, cargo));
+  assert.ok(canHandIn({ id: 'c', kind: 'bounty', giver: 'X', from: 0, cell: 5, reward: 1, taken: 0, done: true }, 0, cargo));
+});
