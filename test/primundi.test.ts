@@ -119,3 +119,13 @@ test('every choice of every encounter resolves, in many places', () => {
   assert.ok(n > 500);
   assert.ok(strength(newCaravan('T', 'traders', 1)) > strength(newCaravan('T', 'cartographers', 1)));
 });
+
+test('roads keep a hex back from the sea, except where they start or end at a coastal place', () => {
+  let shore = 0, total = 0;
+  for (let c = 0; c < hw.grid.count; c++) {
+    if (!atlas.road[c] || atlas.placeAt[c] >= 0) continue;
+    total++;
+    if (hw.grid.neighbors[c].some((n) => hw.water[n] === 1)) shore++;
+  }
+  assert.ok(total > 0 && shore / total < 0.05, `${shore} of ${total} road hexes on the shore`);
+});

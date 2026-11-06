@@ -104,6 +104,8 @@ export function buildAtlas(w: World, gd: GameData, h: History): Atlas {
   const oldRoad = new Uint8Array(N);
   for (const r of h.roads) for (const c of r.cells) oldRoad[c] = 1;
   const towns = places.filter((p) => p.town);
+  const coastal = new Uint8Array(N);
+  for (let c = 0; c < N; c++) if (w.water[c] === WATER_LAND && nb[c].some((n) => w.water[n] === WATER_OCEAN)) coastal[c] = 1;
   const P = w.grid.centers;
   const ang = (a: number, b: number) => Math.acos(Math.min(1, P[a * 3] * P[b * 3] + P[a * 3 + 1] * P[b * 3 + 1] + P[a * 3 + 2] * P[b * 3 + 2]));
   const byCont = new Map<number, Place[]>();
@@ -125,7 +127,12 @@ export function buildAtlas(w: World, gd: GameData, h: History): Atlas {
       }
       inTree.add(bj);
       if (best > cellA * 14) continue;
-      const path = findPath(w, group[bi].cell, group[bj].cell, (a, b) => (oldRoad[b] ? 0.35 : 1) * terrainCost(w, a, b), () => true, 22);
+      // Roads keep a hex back from the sea (Bill, 2026-11-06): a coastal town's road heads inland
+      // at once. Only where there's no other way (a narrow neck of land) does one follow the shore.
+      const from = group[bi].cell, to = group[bj].cell;
+      const cost = (a: number, b: number) => (oldRoad[b] ? 0.35 : 1) * terrainCost(w, a, b);
+      const path = findPath(w, from, to, cost, (c) => !coastal[c], 22)
+        ?? findPath(w, from, to, (a, b) => cost(a, b) * (coastal[b] && b !== to ? 12 : 1), () => true, 22 * 12);
       if (path) for (const c of path) road[c] = 1;
     }
   }
