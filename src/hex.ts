@@ -53,6 +53,8 @@ let tiltOn = h.get('tilt') === null ? style.tiltShift : h.get('tilt') === '1';
 /** The hour of local solar time, once Bill has set one; until then each style's own hour. */
 let userHour: number | null = h.get('time') !== null && h.get('time') !== '' ? ((Number(h.get('time')) % 24) + 24) % 24 : null;
 let playing = false;
+/** The fill light's strength, as a share of the sun's. */
+const fillK = h.get('fill') !== null ? Number(h.get('fill')) : 0.28;
 /** The neighbouring hexes, drawn blurred behind the tile (N, or the panel). */
 let showCtx = h.get('around') !== '0';
 /** Plant models from the free Ultimate Nature pack (hexplants.ts; Bill's pick of four, 2026-11-05),
@@ -357,6 +359,9 @@ function texturedGround(mat: THREE.MeshStandardMaterial) {
         {
           float occ = texture2D(tCanopy, vec2(vLPos.x + uCanopyBox.x, -vLPos.z + uCanopyBox.x) / uCanopyBox.y).r;
           reflectedLight.indirectDiffuse *= 1.0 - 0.62 * occ;
+          // Leaf litter and dark soil under the crowns, warmer and browner than the grass around.
+          reflectedLight.directDiffuse = mix(reflectedLight.directDiffuse, reflectedLight.directDiffuse * vec3(1.05, 0.82, 0.62), occ * 0.55);
+          reflectedLight.indirectDiffuse = mix(reflectedLight.indirectDiffuse, reflectedLight.indirectDiffuse * vec3(1.05, 0.82, 0.62), occ * 0.55);
           reflectedLight.directDiffuse *= 1.0 - 0.18 * occ;
         }`);
     snowGround(sh);   // last: snow and the rock among it, per pixel (hexsnow.ts)
@@ -973,15 +978,37 @@ function buildPlants(m: LocalMap, inFrame: (x: number, y: number) => boolean): T
   const byModel = new Map<string, { mtx: number[]; col: number[]; nearOnly?: boolean }>();
   const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc3 = new THREE.Vector3(), ps = new THREE.Vector3(), pc = new THREE.Color();
   const up = new THREE.Vector3(0, 1, 0);
+  const tilt = new THREE.Quaternion(), tAxis = new THREE.Vector3();
   const place = (i: number) => {
     const sz = T[i * STRIDE + 3], jit = ((i * 2654435761) >>> 0) / 4294967296;
     q.setFromAxisAngle(up, jit * Math.PI * 2);
+    // No two quite upright (2026-11-06): a lean of up to ~4 degrees, and on a slope a little more,
+    // downhill, as trees on a bank do. (Small things: more; they sit in the ground's tilt.)
+    {
+      const x = T[i * STRIDE], y = T[i * STRIDE + 1], e = 2;
+      const gx = (groundAtMap(m, x + e, y) - groundAtMap(m, x - e, y)) / (2 * e), gy = (groundAtMap(m, x, y + e) - groundAtMap(m, x, y - e)) / (2 * e);
+      const j2 = ((i * 2246822519) >>> 0) / 4294967296, j3 = ((i * 3266489917) >>> 0) / 4294967296;
+      const small = sz < 2.5 ? 1 : 0;
+      // A lean: random, plus downhill (in three.js axes, map y is -z).
+      let lx = (j2 - 0.5) * 0.14 - gx * (0.18 + 0.4 * small), lz = (j3 - 0.5) * 0.14 + gy * (0.18 + 0.4 * small);
+      const L = Math.hypot(lx, lz), cap = small ? 0.45 : 0.14;
+      if (L > cap) { lx *= cap / L; lz *= cap / L; }
+      if (L > 1e-4) {
+        // Tilt the up axis toward (lx, 1, lz): about the horizontal axis across it.
+        tAxis.set(lz, 0, -lx).normalize();
+        tilt.setFromAxisAngle(tAxis, Math.atan(Math.min(L, cap)));
+        q.premultiply(tilt);
+      }
+    }
     sc3.setScalar(sz * st.plants.scale);
     ps.set(T[i * STRIDE], T[i * STRIDE + 2] - 0.04 * sz * st.plants.scale, -T[i * STRIDE + 1]);
     mtx.compose(ps, q, sc3);
     pc.setHex(T[i * STRIDE + 5]);
     const l = 0.2126 * pc.r + 0.7152 * pc.g + 0.0722 * pc.b;
     pc.setRGB((l + (pc.r - l) * st.plants.sat) * st.plants.bright, (l + (pc.g - l) * st.plants.sat) * st.plants.bright, (l + (pc.b - l) * st.plants.sat) * st.plants.bright);
+    // Each its own shade: a little lighter or darker, a little yellower or bluer.
+    const vb = 0.86 + 0.28 * (((i * 1597334677) >>> 0) / 4294967296), vh = (((i * 3812015801) >>> 0) / 4294967296 - 0.5) * 0.12;
+    pc.setRGB(pc.r * vb * (1 + vh), pc.g * vb, pc.b * vb * (1 - vh));
   };
   for (let i = 0; i < count; i++) {
     const x = T[i * STRIDE], y = T[i * STRIDE + 1];
@@ -1092,7 +1119,9 @@ function applyTime() {
   const d = size * 1.2, [kx, ky, kz] = L.key.dir;
   sun.color.setRGB(L.key.color[0], L.key.color[1], L.key.color[2]); sun.intensity = L.key.intensity;
   sun.position.set(kx * d, ky * d, kz * d); sun.target.position.set(0, 0, 0);
-  rim.intensity = L.rim;
+  // A cool fill from opposite the sun (2026-11-06): the sky's light on the shaded side, so the
+  // shade of a wall, a trunk or a wood reads blue-grey, not black. (?fill=0 to compare.)
+  rim.intensity = Math.max(L.rim, fillK * L.key.intensity * Math.min(1, Math.max(0, L.elev / 8)));
   rim.position.set(-sun.position.x, size * 0.3, -sun.position.z);
   // The planet's atmosphere already brightens low-sun skies; adapting fully washes them out.
   renderer.toneMappingExposure = st.atmosphere ? Math.min(L.exposure, st.exposure * (st.paintedSky ? 3 : 1.5)) : L.exposure;
