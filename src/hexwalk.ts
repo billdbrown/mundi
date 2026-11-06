@@ -13,7 +13,9 @@
 import * as THREE from 'three';
 
 const EYE = 1.7;
-const WALK = 2.4, SPRINT = 9;          // m/s
+const WALK = 4, SPRINT = 14;           // m/s (Bill, 2026-11-06: faster than 2.4 / 9)
+/** The walker's field of view (vertical, degrees): wider than the map camera's, as in games. */
+const FOV = 68;
 const ACCEL = 10, DECEL = 12;          // how fast speed changes (1/s)
 const GRAVITY = 14, JUMP = 4.6;        // a little heavier than real: real gravity feels floaty
 const GLIDE_S = 1.1;                   // the drop's and the return's glide, seconds
@@ -47,6 +49,7 @@ export class Walker {
   private land = 0;                       // dip on landing
   private sprintK = 0;
   private baseFov = 50;
+  private outFov = FOV;
   private glide: null | { t: number; from: THREE.Vector3; fromQ: THREE.Quaternion; to: THREE.Vector3; toQ: THREE.Quaternion; out: boolean } = null;
 
   constructor(camera: THREE.PerspectiveCamera, dom: HTMLElement) {
@@ -92,8 +95,8 @@ export class Walker {
   leave() {
     if (!this.active || this.glide?.out) return;
     if (document.pointerLockElement === this.dom) document.exitPointerLock();
-    this.camera.fov = this.baseFov; this.camera.updateProjectionMatrix();
-    if (!this.back) { this.active = false; this.onDone(); return; }
+    this.outFov = this.camera.fov;
+    if (!this.back) { this.camera.fov = this.baseFov; this.camera.updateProjectionMatrix(); this.active = false; this.onDone(); return; }
     this.glide = { t: 0, from: this.camera.position.clone(), fromQ: this.camera.quaternion.clone(), to: this.back.p, toQ: this.back.q, out: true };
   }
 
@@ -113,6 +116,9 @@ export class Walker {
       if (!g.out) g.toQ.copy(this.look());
       cam.position.lerpVectors(g.from, g.to, k);
       cam.quaternion.slerpQuaternions(g.fromQ, g.toQ, k);
+      // The lens widens going in and narrows coming out.
+      cam.fov = g.out ? THREE.MathUtils.lerp(this.outFov, this.baseFov, k) : THREE.MathUtils.lerp(this.baseFov, FOV, k);
+      cam.updateProjectionMatrix();
       if (g.t >= 1) {
         this.glide = null;
         if (g.out) { this.active = false; this.onDone(); }
@@ -175,7 +181,7 @@ export class Walker {
     cam.position.set(this.pos.x + c * side, this.eyeY + up - this.land, this.pos.z - s * side);
     cam.quaternion.copy(this.look());
     // Sprint widens the view a touch.
-    const fov = this.baseFov + 7 * this.sprintK;
+    const fov = FOV + 7 * this.sprintK;
     if (Math.abs(cam.fov - fov) > 0.01) { cam.fov = fov; cam.updateProjectionMatrix(); }
   }
 }

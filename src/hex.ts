@@ -1239,11 +1239,13 @@ function resetView() {
   // Standing further back on a narrow screen, look down more steeply, or near hills hide the hex.
   const t = Math.max(30, c.tilt - 12 * (narrow - 1)) * Math.PI / 180;
   // Zoom: out to the whole hex with its neighbours round it, in to a few metres off the ground.
-  controls.maxDistance = fit * 1.15;
+  // (Bill, 2026-11-06: farthest out closer in than the first try at 1.15 × the fit; the starting
+  // view is the farthest out.)
+  controls.maxDistance = fit * 0.8;
   controls.minDistance = 4;
   controls.bound = map.localWidth * 0.55;
   controls.target.set(0, g, 0);
-  camera.position.set(0, g + Math.cos(t) * fit, Math.sin(t) * fit);
+  camera.position.set(0, g + Math.cos(t) * fit * 0.8, Math.sin(t) * fit * 0.8);
   controls.snap();
   tiltH.uniforms.uFocus.value = tiltV.uniforms.uFocus.value = 0.5;
 }
