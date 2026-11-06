@@ -9,11 +9,13 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { CSM } from 'three/addons/csm/CSM.js';
 import { GRADE_SHADER } from './grade.ts';
 import { Atmosphere, applyAerial } from './atmosphere.ts';
 import { treeGeometry, treeMaterial, TUFT } from './flora.ts';
 import { FIRST, FAMILIES, VARIANTS } from './species.ts';
-import { loadPack, packModel, packMaterial, PackPlants, type Pack } from './hexplants.ts';
+import { loadPack, packModel, packMaterial, packStill, PackPlants, type Pack } from './hexplants.ts';
+import { wind, WindLines, clouds, cloudMaterial } from './hexwind.ts';
 import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
 import { parseSeed } from './seedname.ts';
 import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, L_FOREST, L_SNOW, L_LUSH, HOUSE_STRIDE, type LocalMap, type LocalOptions, H_LOG, H_LILYPAD, isFlower, H_FERN, H_STUMP, isHexKind } from './hexlocal.ts';
@@ -106,14 +108,94 @@ const walker = new Walker(camera, renderer.domElement);
 walker.ground = controls.ground;
 if (h.get('bob') !== null) walker.bob = Number(h.get('bob'));
 const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
+/** The key light (sun or moon) as the hour sets it; not in the scene itself: the cascades below
+ * carry it, each with its own shadow map. */
 const sun = new THREE.DirectionalLight(0xffffff, 1);
-sun.castShadow = true;
-sun.shadow.mapSize.set(4096, 4096);
-sun.shadow.bias = -0.0004;
 const rim = new THREE.DirectionalLight(0xdfe8ff, 0);
-scene.add(hemi, sun, sun.target, rim, rim.target);
+scene.add(hemi, rim, rim.target);
+// Shadows in three cascades that follow the camera (2026-11-06): a fine map for the first few tens
+// of metres (a tree's own shadow, dappled light in a wood), a middle one, and a coarse one for the
+// whole view. One map over the whole hex was ~0.5 m a texel, so plants' shadows were mush.
+// (CSM swaps three's light chunks for its own; the hex page is its own document, so the planet's
+// shaders are untouched.)
+const csmBreaks = [0.1, 0.4, 1];
+const csm = new CSM({ camera, parent: scene, cascades: 3, mode: 'custom', shadowMapSize: 2048, shadowBias: -0.0002, lightIntensity: 1,
+  customSplitsCallback: (n: number, near: number, far: number, out: number[]) => { for (const b of csmBreaks) out.push(b); } });
+csm.fade = true;
+csm.lights[2].shadow.mapSize.set(4096, 4096);
 // Lights reach layer 1 too, where the backdrop of neighbouring hexes is drawn.
-for (const l of [hemi, sun, rim]) l.layers.enableAll();
+for (const l of [hemi, rim, ...csm.lights]) l.layers.enableAll();
+/** Give a lit material the cascades (after its own shader hooks, which it keeps). */
+function csmMaterial(mat: THREE.Material) {
+  if ((mat.defines as Record<string, unknown> | undefined)?.USE_CSM) return;
+  const prev = mat.onBeforeCompile, key = mat.customProgramCacheKey?.bind(mat);
+  csm.setupMaterial(mat);
+  const hook = mat.onBeforeCompile;
+  mat.onBeforeCompile = (sh, r) => { prev?.call(mat, sh, r); hook.call(mat, sh, r); };
+  if (key) mat.customProgramCacheKey = key;
+  cloudMaterial(mat);
+  mat.needsUpdate = true;
+}
+
+/**
+ * Shade under the plants (2026-11-06): a map over the whole tile of how much each spot is roofed
+ * by crowns, splatted from the plants, so the ground darkens under a wood and at each trunk's
+ * foot. It dims the sky's light there (not the sun's, which the shadows already handle).
+ * 1.3-1.8 m a texel.
+ */
+const canopy = { tCanopy: { value: null as THREE.DataTexture | null }, uCanopyBox: { value: new THREE.Vector2(1, 1) } };
+const CANOPY_RES = 1024;
+function canopyMap(m: LocalMap): THREE.DataTexture {
+  const R = CANOPY_RES, half = m.size / 2, tx = m.size / R, acc = new Float32Array(R * R);
+  const T = m.trees;
+  for (let i = 0; i < T.length; i += 6) {
+    const sz = T[i + 3], k = T[i + 4];
+    if (sz < 1.2 || isFlower(k) || k === H_FERN || k === TUFT || k === H_LILYPAD) continue;
+    // Crowns about a third of the height across; the foot gets a tighter, darker spot.
+    const rc = Math.max(0.8, sz * 0.22) / tx, cx = (T[i] + half) / tx, cy = (T[i + 1] + half) / tx;
+    const wgt = Math.min(1, sz / 8);
+    const r = Math.ceil(rc * 1.6), i0 = Math.max(0, Math.floor(cx - r)), i1 = Math.min(R - 1, Math.ceil(cx + r));
+    const j0 = Math.max(0, Math.floor(cy - r)), j1 = Math.min(R - 1, Math.ceil(cy + r));
+    for (let j = j0; j <= j1; j++) for (let ii = i0; ii <= i1; ii++) {
+      const d2 = ((ii + 0.5 - cx) ** 2 + (j + 0.5 - cy) ** 2) / (rc * rc);
+      if (d2 < 2.6) acc[j * R + ii] += wgt * (0.5 * Math.exp(-d2) + 0.5 * Math.exp(-d2 * 6));
+    }
+  }
+  const data = new Uint8Array(R * R);
+  for (let v = 0; v < R * R; v++) data[v] = Math.round(255 * (1 - Math.exp(-acc[v] * 1.1)));
+  const t = new THREE.DataTexture(data, R, R, THREE.RedFormat, THREE.UnsignedByteType);
+  t.magFilter = t.minFilter = THREE.LinearFilter;
+  t.needsUpdate = true;
+  return t;
+}
+const unitV = new THREE.Vector3();
+/** Fit the cascades to the camera: the near ones by its height over the ground, so at eye level
+ * the first covers the next ~40 m and from a drone ~100 m; from high up all is the last one. */
+function fitShadows(cam: THREE.PerspectiveCamera) {
+  if (!map) return;
+  const k = style.atmosphere ? planetScale : 1;
+  camera.updateMatrixWorld();
+  const hAG = Math.max(1, camera.position.y - waterAt(camera.position.x, -camera.position.z));
+  const dT = camera.position.distanceTo(controls.target);
+  const farM = Math.min(camera.far, dT + map.size * 0.9);
+  const b0 = Math.max(40, hAG * 3), b1 = b0 * 5;
+  csmBreaks[0] = Math.min(1, b0 / farM); csmBreaks[1] = Math.min(1, b1 / farM); csmBreaks[2] = 1;
+  csm.camera = cam;
+  csm.maxFar = farM * k;
+  csm.lightMargin = map.size * 0.6 * k;
+  csm.lightDirection.copy(unitV.copy(sun.target.position).sub(sun.position).normalize());
+  csm.updateFrustums();
+  csm.update();
+  for (let i = 0; i < 3; i++) {
+    const L = csm.lights[i], sc = L.shadow.camera, w = sc.right - sc.left;
+    L.color.copy(sun.color); L.intensity = sun.intensity;
+    sc.near = 0; sc.far = csm.lightMargin + w * 2 + map.size * 0.5 * k; sc.updateProjectionMatrix();
+    // About one texel and a half along the normal: no acne, and small things keep their shadows.
+    L.shadow.normalBias = w / L.shadow.mapSize.x * 1.5;
+    // An empty cascade (the camera is high) isn't drawn.
+    L.shadow.autoUpdate = i === 2 || csmBreaks[i] > (i ? csmBreaks[i - 1] : 0) + 1e-4;
+  }
+}
 
 // The planet's atmosphere, for the Earth style: the map is put back on the planet (planet radii,
 // true size) and drawn through a camera that mirrors the orbit camera, so the planet's own sky,
@@ -122,7 +204,8 @@ const atmo = new Atmosphere();
 scene.add(atmo.sky);
 atmo.sky.layers.enableAll();
 applyAerial(treeMaterial, true);
-applyAerial(packMaterial, true);
+applyAerial(packMaterial, true); applyAerial(packStill, true);
+csmMaterial(treeMaterial); csmMaterial(packMaterial); csmMaterial(packStill);
 const planetCam = new THREE.PerspectiveCamera(50, 1, 1e-6, 1);
 /** Map metres to planet radii, for the current map (identity until a map is in). */
 const toPlanet = new THREE.Matrix4(), toPlanetRot = new THREE.Quaternion();
@@ -169,6 +252,7 @@ addEventListener('resize', resize);
 resize();
 
 let map: LocalMap | null = null;
+let windLines: WindLines | null = null;
 let world = new THREE.Group();
 scene.add(world);
 let outline: THREE.Line | null = null;
@@ -283,7 +367,7 @@ for (const k of ['tGrass', 'tGround', 'tRock'] as const) {
 /** The terrain material with the ground textures' grain: grass, soil in patches, rock on steep ground. */
 function texturedGround(mat: THREE.MeshStandardMaterial) {
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, groundTex);
+    Object.assign(sh.uniforms, groundTex, canopy);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vLPos; varying vec3 vLN; attribute vec3 grain; varying vec3 vGrain;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLPos = position; vLN = normal; vGrain = grain;');
@@ -293,6 +377,7 @@ function texturedGround(mat: THREE.MeshStandardMaterial) {
         uniform sampler2D tGrass, tGround, tRock;
         uniform vec3 uMeans;
         uniform float uTexAmt, uTexScale;
+        uniform sampler2D tCanopy; uniform vec2 uCanopyBox;
         float texL(sampler2D t, vec2 uv) { return dot(texture2D(t, uv).rgb, vec3(0.2126, 0.7152, 0.0722)); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         if (uTexAmt > 0.0) {
@@ -307,6 +392,12 @@ function texturedGround(mat: THREE.MeshStandardMaterial) {
           // (vGrain: the ground's own soil and stone, from its patterns (desert, scree, gravel), and snow.)
           float det = mix(mix(g, d, max(soil * 0.5, vGrain.x)), r, max(steep, vGrain.y));
           diffuseColor.rgb *= mix(1.0, clamp(det, 0.4, 1.8), uTexAmt * (1.0 - 0.55 * vGrain.z));
+        }`)
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+        {
+          float occ = texture2D(tCanopy, vec2(vLPos.x + uCanopyBox.x, -vLPos.z + uCanopyBox.x) / uCanopyBox.y).r;
+          reflectedLight.indirectDiffuse *= 1.0 - 0.62 * occ;
+          reflectedLight.directDiffuse *= 1.0 - 0.18 * occ;
         }`);
     snowGround(sh);   // last: snow and the rock among it, per pixel (hexsnow.ts)
   };
@@ -394,6 +485,7 @@ function addContext(aerial: boolean) {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, roughness: 1 });
   if (aerial) applyAerial(mat, true);
   snowContext(mat);   // snow out there lit as on the hex (hexsnow.ts)
+  csmMaterial(mat);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.name = 'context';
   mesh.layers.set(1);
@@ -716,6 +808,9 @@ function build(m: LocalMap) {
   }
 
   world.add(buildPlants(m, inFrame));
+  canopy.tCanopy.value?.dispose();
+  canopy.tCanopy.value = canopyMap(m);
+  canopy.uCanopyBox.value.set(half, size);
   // A cold open can beat the pack: draw with the planet's models, then swap once it is here.
   if (!pack) void fetchPack().then(() => { if (map === m) redrawPlants(); });
 
@@ -797,6 +892,11 @@ function build(m: LocalMap) {
     world.add(glow);
   }
 
+  // Wind lines drifting through the air (hexwind.ts).
+  windLines?.dispose();
+  windLines = new WindLines();
+  world.add(windLines.mesh);
+
   // A person (1.8 m) beside the centre, for scale.
   const person = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 1.3, 4, 8), new THREE.MeshStandardMaterial({ color: 0xc0392b }));
   person.position.set(6, groundAtMap(m, 6, 0) + 0.9, 0); person.castShadow = true;
@@ -825,8 +925,13 @@ function build(m: LocalMap) {
   // The atmosphere on everything (a no-op outside the Earth style).
   world.traverse((o) => {
     const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh || o.name === 'plants' || o.name === 'sides' || o.name === 'windows' || o.name === 'occluder' || o.name === 'ctxlines') return;
+    if (!mesh.isMesh || o.name === 'plants' || o.name === 'sides' || o.name === 'windows' || o.name === 'occluder' || o.name === 'ctxlines' || o.name === 'windlines') return;
     for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) applyAerial(mat, true);
+  });
+  world.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) if (!(mat as THREE.MeshBasicMaterial).isMeshBasicMaterial && !(mat as THREE.ShaderMaterial).isShaderMaterial) csmMaterial(mat);
   });
   // Where the map sits on the planet: x east, y up, z south (three.js), metres to radii.
   const F = m.frame;
@@ -845,6 +950,8 @@ function build(m: LocalMap) {
     world.matrixWorldNeedsUpdate = true;
   }
   scene.add(world);
+  world.updateMatrixWorld(true);
+  clouds.uToMap.value.copy(world.matrixWorld).invert();
   applyLook(m);
 }
 
@@ -956,10 +1063,6 @@ function applyLook(m: LocalMap) {
   fog.density = st.atmosphere ? 0 : st.fog / size / narrowness();
   // In the Earth style everything is in planet radii: the lights move with the map.
   const k = st.atmosphere ? planetScale : 1;
-  const sc = sun.shadow.camera;
-  sc.left = -size * 0.75 * k; sc.right = size * 0.75 * k; sc.top = size * 0.75 * k; sc.bottom = -size * 0.75 * k;
-  sc.near = 1 * k; sc.far = size * 4 * k; sc.updateProjectionMatrix();
-  sun.shadow.normalBias = (size / (m.res - 1)) * 0.5 * k;
   camera.far = size * 8; camera.fov = st.camera.fov; camera.updateProjectionMatrix();
   photoPass.enabled = st.photoGrade;
   gradePass.enabled = !st.photoGrade;
@@ -1312,6 +1415,15 @@ const loop = () => {
   const dt = Math.min(0.1, timer.getDelta());
   frames++; fpsT += dt;
   waterTime.value += dt;
+  wind.uWindT.value += dt;
+  if (map && windLines) {
+    // Around where the camera looks, sized to how far off it is (from up high, longer and fewer
+    // would be lost anyway: they fade out past a few hundred metres).
+    const t = controls.target, dist = camera.position.distanceTo(t);
+    const sc = Math.max(0.5, Math.min(4, dist / 120));
+    windLines.mesh.visible = dist < map.size * 0.9;
+    windLines.update(wind.uWindT.value, t.x, -t.z, Math.min(map.size * 0.4, 40 + dist * 0.7), sc, groundAt);
+  }
   // Playing: a day in 48 seconds.
   if (playing && map) { userHour = (hourNow() + dt * 0.5) % 24; applyTime(); }
   if (fpsT > 1) { $('fps').textContent = `${Math.round(frames / fpsT)} fps`; frames = 0; fpsT = 0; }
@@ -1334,6 +1446,7 @@ const loop = () => {
     atmo.update(renderer, camera, sunDir, false);
     renderPass.camera = camera;
   }
+  fitShadows(renderPass.camera as THREE.PerspectiveCamera);
   renderFrame();
 };
 renderer.setAnimationLoop(embedded && cell < 0 ? null : loop);
@@ -1412,7 +1525,7 @@ void LAYERS; void L_DEPTH;
   /** The hex on show was built with the planet's valleys. */
   get valleys() { return mapValleys; },
   get style() { return style.id; },
-  resetView, scene, setTilt, setTime, setAround, walker,
+  resetView, scene, setTilt, setTime, setAround, walker, wind, clouds, csm,
   /** The camera: position, the point looked at, distance (scripts/camtest.mjs). */
   camPose: () => ({ p: camera.position.toArray().map((v) => +v.toFixed(1)), t: controls.target.toArray().map((v) => +v.toFixed(1)), d: +camera.position.distanceTo(controls.target).toFixed(1), max: +controls.maxDistance.toFixed(0) }),
   /** The planet's valleys, as the planet page sends them (scripts/hexcompare.mjs). */

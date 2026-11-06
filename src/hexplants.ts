@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { CONIFER, BROADLEAF, SCRUB, PALM, ROCK, CACTUS, BIRCH, TUFT } from './flora.ts';
 import { FIRST, FAMILIES, VARIANTS } from './species.ts';
 import { H_STUMP, H_LOG, H_FLOWERS, H_LILYPAD, H_DEAD, H_FERN, isFlower } from './hexlocal.ts';
+import { swayMaterial, swayDepth } from './hexwind.ts';
 
 interface Lod { verts: number; tris: number; pos: number; col: number; idx: number; wide: boolean }
 interface PackIndex { sets: Record<string, string[]>; models: Record<string, { near: Lod; far: Lod; w: number }> }
@@ -47,6 +48,11 @@ export function packGeometry(p: Pack, name: string, lod: 'near' | 'far'): THREE.
 /** Flat shaded; the instance colour tints each vertex by its colour's alpha (leaves, not bark). */
 export const packMaterial = new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.9, vertexColors: true });
 packMaterial.onBeforeCompile = (sh) => {
+  // Less sky light low in a plant and toward its middle: crowns read as round masses, not cut-outs.
+  sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vPlantAO;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvPlantAO = clamp(0.45 + 0.55 * smoothstep(0.0, 0.85, position.y) + 0.25 * smoothstep(0.1, 0.45, length(position.xz)), 0.0, 1.0);');
+  sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vPlantAO;')
+    .replace('#include <aomap_fragment>', '#include <aomap_fragment>\nreflectedLight.indirectDiffuse *= vPlantAO;');
   sh.vertexShader = sh.vertexShader.replace('#include <color_vertex>', `
     #if defined( USE_COLOR_ALPHA )
       vColor = vec4( color.rgb, 1.0 );
@@ -58,6 +64,11 @@ packMaterial.onBeforeCompile = (sh) => {
     #endif`);
 };
 packMaterial.customProgramCacheKey = () => 'hexpack';
+/** Rocks, stumps, logs and lily pads: the same, but still in the wind (packMaterial sways). */
+export const packStill = packMaterial.clone();
+packStill.onBeforeCompile = packMaterial.onBeforeCompile;
+packStill.customProgramCacheKey = () => 'hexpackstill';
+swayMaterial(packMaterial);
 
 const hash = (i: number, salt: number) => (((i * 2654435761) ^ (salt * 40503)) >>> 0) % 1000 / 1000;
 
@@ -100,12 +111,15 @@ export class PackPlants {
 
   constructor(p: Pack, byModel: Map<string, { mtx: number[]; col: number[]; nearOnly?: boolean }>, near: number) {
     this.near = near;
+    const still = new Set(['rock', 'rockMoss', 'rockSnow', 'stump', 'log', 'lilypad'].flatMap((k) => p.index.sets[k] ?? []));
     for (const [name, d] of byModel) {
+      const sways = !still.has(name);
       const n = d.mtx.length / 16;
       const mtx = new Float32Array(d.mtx), col = new Float32Array(d.col), pos = new Float32Array(n * 3);
       for (let k = 0; k < n; k++) { pos[k * 3] = mtx[k * 16 + 12]; pos[k * 3 + 1] = mtx[k * 16 + 13]; pos[k * 3 + 2] = mtx[k * 16 + 14]; }
       const make = (geo: THREE.BufferGeometry) => {
-        const m = new THREE.InstancedMesh(geo, packMaterial, n);
+        const m = new THREE.InstancedMesh(geo, sways ? packMaterial : packStill, n);
+        if (sways) m.customDepthMaterial = swayDepth;
         (m.instanceMatrix.array as Float32Array).set(mtx);
         m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(col), 3);
         m.castShadow = true; m.receiveShadow = true; m.name = 'plants';
