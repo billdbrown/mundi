@@ -123,6 +123,8 @@ export interface LocalMap {
   radiusKm: number;
   /** Placeholder houses where the history put towns (hextown.ts), HOUSE_STRIDE values each. */
   houses: Float32Array;
+  /** The small things in the towns: wells, stalls, carts, barrels, fences (hextown.ts PROP_STRIDE). */
+  props: Float32Array;
   townNames: string[];
   /** Sea level is 0 (when the map has sea). */
   sea: boolean;
@@ -1211,14 +1213,14 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
 
   // --- Towns (placeholders) where the history put them: roads, houses, fields. Before the plants,
   // which they clear.
-  let houses: Float32Array = new Float32Array(0), townNames: string[] = [];
+  let houses: Float32Array = new Float32Array(0), props: Float32Array = new Float32Array(0), townNames: string[] = [];
   if (history) {
     const t = layoutTowns({
       w, history, cellList, indexOf, cellXY, res, size, step, half, heights, grow, riverNear, layers, LAYERS,
       L_PATH, L_FIELD, L_FIELDKIND, L_HEDGE, edgeMid, noise, rng, sea,
       arable: (v) => tempV[v] > 0.25 && moistV[v] > 0.12 && layers[v * LAYERS + L_SNOW] < 0.2 && layers[v * LAYERS + L_ROCK] < 0.3,
     });
-    houses = t.houses; townNames = t.names;
+    houses = t.houses; props = t.props; townNames = t.names;
     // The Earth look gets them too: dirt paths, crops, hedges.
     const DIRT = lin(0x8a7458), HEDGE = lin(0x34502a);
     const CROPS = [lin(0xc9a654), lin(0x8a9a46), lin(0x7a6248), lin(0xa8b060)];
@@ -1268,7 +1270,7 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
     trueWidthKm: apothem * 2 * o.mag / 1000,
     localWidth: apothem * 2,
     frame: Float32Array.of(cx, cy, cz, ex, ey, ez, nx, ny, nz), mag: o.mag, radiusKm: o.radiusKm,
-    heights, colors, base, layers, houses, townNames, sea, lakeLevel, lakeMask, rivers, hex,
+    heights, colors, base, layers, houses, props, townNames, sea, lakeLevel, lakeMask, rivers, hex,
     trees: treeOut,
     cells: Int32Array.from(cellList), cellXY,
     info: {

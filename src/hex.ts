@@ -28,6 +28,8 @@ import type { Spot } from './debug.ts';
 import { HexCamera, FEEL } from './hexcamera.ts';
 import { Walker, pegman } from './hexwalk.ts';
 import { mountHud } from './hexui.ts';
+import { PROP_STRIDE } from './hextown.ts';
+import { loadHouses, buildHouses, buildProps, houseNight, HOUSE_MODES, type HouseMode, type HousePack, type Building } from './hexhouses.ts';
 import { snowGround, snowContext } from './hexsnow.ts';
 import { HexFog } from './primundi/hexfog.ts';
 import { noiseTexture } from './primundi/fog.ts';
@@ -49,6 +51,10 @@ let opts: LocalOptions = { ...LOCAL_DEFAULTS, radiusKm: Number(h.get('radius')) 
 for (const k of ['mag', 'vScale', 'vSoft', 'res'] as const) if (h.get(k)) opts[k] = Number(h.get(k));
 if (h.get('river') === 'scaled' || h.get('river') === 'flow') opts.riverMode = h.get('river') as LocalOptions['riverMode'];
 if (h.get('crags')) opts.crags = h.get('crags') === '1';
+/** How towns' buildings are drawn (hexhouses.ts): CC0 model families, or the plain boxes. */
+let houseMode: HouseMode = (HOUSE_MODES.find(([k]) => k === h.get('houses'))?.[0]) ?? 'people';
+let housePack: HousePack | null = null;
+let housesGroup: THREE.Group | null = null;
 // One look: Golden Earth (hexstyle.ts), Bill's pick of six on 2026-11-04.
 const style: HexStyle = STYLE;
 let tiltOn = h.get('tilt') === null ? style.tiltShift : h.get('tilt') === '1';
@@ -82,7 +88,7 @@ let packPlants: PackPlants | null = null;
 /** The full models within this far of the camera, map metres; simplified ones beyond. */
 const NEAR_M = 140;
 const back = new URLSearchParams(h);
-for (const k of ['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around', 'plants']) back.delete(k);
+for (const k of ['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around', 'plants', 'houses']) back.delete(k);
 $<HTMLAnchorElement>('back').href = '/#' + back.toString();
 /** Inside the planet page (main.ts): the planet stays loaded underneath, so "← planet" just
  * uncovers it, and new hexes arrive by message instead of by loading this page again. */
@@ -105,7 +111,7 @@ function applyHash(hash: string) {
   cell = Number(q.get('cell') ?? -1);
   if (game) gameSeen = new Set((q.get('seen') ?? '').split('.').filter(Boolean).map(Number));
   for (const k of [...back.keys()]) back.delete(k);
-  for (const [k, v] of q) if (!['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around', 'plants'].includes(k)) back.set(k, v);
+  for (const [k, v] of q) if (!['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around', 'plants', 'houses'].includes(k)) back.set(k, v);
 }
 
 // --- Scene ---
@@ -831,83 +837,9 @@ function build(m: LocalMap) {
   // A cold open can beat the pack: draw with the planet's models, then swap once it is here.
   if (!pack) void fetchPack().then(() => { if (map === m) redrawPlants(); });
 
-  // Houses (placeholders where the history put towns): walls and a pitched roof, instanced, in the
-  // style's colours; scaled up a little in the stylised looks, like the trees.
-  const HS = m.houses, nh = HS.length / HOUSE_STRIDE;
-  if (nh) {
-    const keep: number[] = [];
-    for (let k = 0; k < nh; k++) if (inFrame(HS[k * HOUSE_STRIDE], HS[k * HOUSE_STRIDE + 1])) keep.push(k);
-    const wallGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
-    // A roof: a triangular prism along x, 1 wide, 1 deep, 1 tall, eaves overhanging a little.
-    const roofGeo = new THREE.BufferGeometry();
-    const rv = [-0.55, 0, -0.6, 0.55, 0, -0.6, 0, 1, -0.6, -0.55, 0, 0.6, 0, 1, 0.6, 0.55, 0, 0.6];
-    roofGeo.setAttribute('position', new THREE.Float32BufferAttribute([
-      // gable ends
-      rv[0], rv[1], rv[2], rv[3], rv[4], rv[5], rv[6], rv[7], rv[8],
-      rv[9], rv[10], rv[11], rv[15], rv[16], rv[17], rv[12], rv[13], rv[14],
-      // slopes
-      rv[0], rv[1], rv[2], rv[6], rv[7], rv[8], rv[9], rv[10], rv[11], rv[9], rv[10], rv[11], rv[6], rv[7], rv[8], rv[12], rv[13], rv[14],
-      rv[3], rv[4], rv[5], rv[15], rv[16], rv[17], rv[6], rv[7], rv[8], rv[6], rv[7], rv[8], rv[15], rv[16], rv[17], rv[12], rv[13], rv[14],
-    ], 3));
-    roofGeo.rotateY(Math.PI / 2);
-    roofGeo.computeVertexNormals();
-    const walls = new THREE.InstancedMesh(wallGeo, new THREE.MeshStandardMaterial({ roughness: 0.9 }), keep.length);
-    const roofs = new THREE.InstancedMesh(roofGeo, new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true, side: THREE.DoubleSide }), keep.length);
-    const hm = new THREE.Matrix4(), hq = new THREE.Quaternion(), hs = new THREE.Vector3(), hp = new THREE.Vector3(), hc = new THREE.Color();
-    const up2 = new THREE.Vector3(0, 1, 0), K = st.town.scale;
-    keep.forEach((k, n) => {
-      const o = k * HOUSE_STRIDE, x = HS[o], y = HS[o + 1], gy = HS[o + 2], rot = HS[o + 3];
-      const wd = HS[o + 4] * K, dp = HS[o + 5] * K, wh = HS[o + 6] * K, ch = HS[o + 7];
-      hq.setFromAxisAngle(up2, rot);
-      walls.setMatrixAt(n, hm.compose(hp.set(x, gy - 0.6, -y), hq, hs.set(wd, wh + 0.6, dp)));
-      walls.setColorAt(n, hc.setHex(st.town.walls[Math.floor(ch * 7919) % st.town.walls.length]));
-      roofs.setMatrixAt(n, hm.compose(hp.set(x, gy + wh, -y), hq, hs.set(dp * 1.0, Math.min(wd, dp) * 0.55, wd * 1.0)));
-      roofs.setColorAt(n, hc.setHex(st.town.roofs[Math.floor(ch * st.town.roofs.length) % st.town.roofs.length]));
-    });
-    // Chimneys on most houses, at one end of the ridge.
-    const withChim = keep.filter((k) => HS[k * HOUSE_STRIDE + 7] < 0.7);
-    const chims = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ roughness: 0.9 }), Math.max(1, withChim.length));
-    chims.count = withChim.length;
-    const cOff = new THREE.Vector3();
-    withChim.forEach((k, n) => {
-      const o = k * HOUSE_STRIDE, x = HS[o], y = HS[o + 1], gy = HS[o + 2], rot = HS[o + 3];
-      const wd = HS[o + 4] * K, dp = HS[o + 5] * K, wh = HS[o + 6] * K;
-      hq.setFromAxisAngle(up2, rot);
-      cOff.set(wd * 0.3, 0, dp * 0.15).applyQuaternion(hq);
-      chims.setMatrixAt(n, hm.compose(hp.set(x + cOff.x, gy + wh, -y + cOff.z), hq, hs.set(0.9 * K, Math.min(wd, dp) * 0.55 + 1.2 * K, 0.9 * K)));
-      chims.setColorAt(n, hc.setHex(0x6a5a50));
-    });
-    for (const im of [walls, roofs, chims]) { im.castShadow = true; im.receiveShadow = true; world.add(im); }
-    // Windows: two square lights through each lit house, showing on both long walls. Three in four
-    // houses are lit. Unlit material, brightened at night (applyTime).
-    const lit = keep.filter((k) => (HS[k * HOUSE_STRIDE + 7] * 7.31) % 1 < 0.75);
-    const win = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xffb060 }), Math.max(1, lit.length * 2));
-    win.count = lit.length * 2;
-    win.name = 'windows';
-    const wOff = new THREE.Vector3();
-    lit.forEach((k, n) => {
-      const o = k * HOUSE_STRIDE, x = HS[o], y = HS[o + 1], gy = HS[o + 2], rot = HS[o + 3];
-      const wd = HS[o + 4] * K, dp = HS[o + 5] * K, wh = HS[o + 6] * K;
-      hq.setFromAxisAngle(up2, rot);
-      const sz = Math.min(0.9 * K, wh * 0.35);
-      for (const side of [0, 1]) {
-        wOff.set((side * 2 - 1) * wd * 0.24, 0, 0).applyQuaternion(hq);
-        win.setMatrixAt(n * 2 + side, hm.compose(hp.set(x + wOff.x, gy + wh * 0.45, -y + wOff.z), hq, hs.set(sz, sz, dp + 0.15)));
-      }
-    });
-    windows = win;
-    world.add(win);
-    const gp = new Float32Array(lit.length * 3);
-    lit.forEach((k, n) => {
-      const o = k * HOUSE_STRIDE;
-      gp[n * 3] = HS[o]; gp[n * 3 + 1] = HS[o + 2] + HS[o + 6] * K * 0.6; gp[n * 3 + 2] = -HS[o + 1];
-    });
-    const gg = new THREE.BufferGeometry();
-    gg.setAttribute('position', new THREE.BufferAttribute(gp, 3));
-    glow = new THREE.Points(gg, new THREE.PointsMaterial({ map: glowTex, size: 45 * K, color: 0xff9440, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-    glow.name = 'glow';
-    world.add(glow);
-  }
+  // Houses where the history put towns: CC0 models (hexhouses.ts) or plain boxes.
+  houseFrame = inFrame;
+  drawHouses(m);
 
   // Wind lines drifting through the air (hexwind.ts).
   windLines?.dispose();
@@ -1051,6 +983,124 @@ function refWidth(kind: number): number {
  * The plants, life-size: the pack's models (hexplants.ts) where it has one for the kind, else the
  * planet's own (flora.ts), one instanced mesh per model.
  */
+let houseFrame: (x: number, y: number) => boolean = () => true;
+/** The towns' buildings, in their own group so the Houses setting can swap them without a rebuild.
+ * Plain: walls and a pitched roof, instanced, in the style's colours; scaled up a little in the
+ * stylised looks, like the trees. Otherwise the CC0 models, once their pack is in (until then the
+ * boxes stand in). Lit windows and a glow over lit houses at night either way. */
+function drawHouses(m: LocalMap) {
+  if (housesGroup) {
+    world.remove(housesGroup);
+    housesGroup.traverse((o) => { const im = o as THREE.InstancedMesh; if (im.isInstancedMesh) { im.dispose(); if (o.name === 'house-models') im.geometry.dispose(); } });
+  }
+  windows = null; glow = null;
+  const group = new THREE.Group();
+  housesGroup = group;
+  world.add(group);
+  const inFrame = houseFrame, st = style;
+  const models = houseMode !== 'plain' && housePack;
+  if (houseMode !== 'plain' && !housePack) void loadHouses().then((p) => { housePack = p; if (map === m) drawHouses(m); });
+  const HS = m.houses, nh = HS.length / HOUSE_STRIDE;
+  if (models && nh) {
+    const bs: Building[] = [];
+    for (let k = 0; k < nh; k++) {
+      const o = k * HOUSE_STRIDE;
+      if (!inFrame(HS[o], HS[o + 1])) continue;
+      bs.push({ x: HS[o], y: HS[o + 1], gy: HS[o + 2], rot: HS[o + 3], wd: HS[o + 4], dp: HS[o + 5], ch: HS[o + 7], kind: HS[o + 8], culture: HS[o + 9] });
+    }
+    group.add(buildHouses(housePack!, houseMode, bs, st.town.scale));
+    if (m.props?.length) group.add(buildProps(housePack!, m.props, PROP_STRIDE, inFrame));
+    // The glow over lit houses, as for the boxes.
+    const K = st.town.scale;
+    const lit = bs.filter((b) => (b.ch * 7.31) % 1 < 0.75);
+    const gp = new Float32Array(lit.length * 3);
+    lit.forEach((b, n) => { gp[n * 3] = b.x; gp[n * 3 + 1] = b.gy + 4 * K; gp[n * 3 + 2] = -b.y; });
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute('position', new THREE.BufferAttribute(gp, 3));
+    glow = new THREE.Points(gg, new THREE.PointsMaterial({ map: glowTex, size: 45 * K, color: 0xff9440, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    glow.name = 'glow';
+    group.add(glow);
+    applyTime();
+    return;
+  }
+  if (nh) {
+    const keep: number[] = [];
+    for (let k = 0; k < nh; k++) if (inFrame(HS[k * HOUSE_STRIDE], HS[k * HOUSE_STRIDE + 1])) keep.push(k);
+    const wallGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+    // A roof: a triangular prism along x, 1 wide, 1 deep, 1 tall, eaves overhanging a little.
+    const roofGeo = new THREE.BufferGeometry();
+    const rv = [-0.55, 0, -0.6, 0.55, 0, -0.6, 0, 1, -0.6, -0.55, 0, 0.6, 0, 1, 0.6, 0.55, 0, 0.6];
+    roofGeo.setAttribute('position', new THREE.Float32BufferAttribute([
+      // gable ends
+      rv[0], rv[1], rv[2], rv[3], rv[4], rv[5], rv[6], rv[7], rv[8],
+      rv[9], rv[10], rv[11], rv[15], rv[16], rv[17], rv[12], rv[13], rv[14],
+      // slopes
+      rv[0], rv[1], rv[2], rv[6], rv[7], rv[8], rv[9], rv[10], rv[11], rv[9], rv[10], rv[11], rv[6], rv[7], rv[8], rv[12], rv[13], rv[14],
+      rv[3], rv[4], rv[5], rv[15], rv[16], rv[17], rv[6], rv[7], rv[8], rv[6], rv[7], rv[8], rv[15], rv[16], rv[17], rv[12], rv[13], rv[14],
+    ], 3));
+    roofGeo.rotateY(Math.PI / 2);
+    roofGeo.computeVertexNormals();
+    const walls = new THREE.InstancedMesh(wallGeo, new THREE.MeshStandardMaterial({ roughness: 0.9 }), keep.length);
+    const roofs = new THREE.InstancedMesh(roofGeo, new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true, side: THREE.DoubleSide }), keep.length);
+    const hm = new THREE.Matrix4(), hq = new THREE.Quaternion(), hs = new THREE.Vector3(), hp = new THREE.Vector3(), hc = new THREE.Color();
+    const up2 = new THREE.Vector3(0, 1, 0), K = st.town.scale;
+    keep.forEach((k, n) => {
+      const o = k * HOUSE_STRIDE, x = HS[o], y = HS[o + 1], gy = HS[o + 2], rot = HS[o + 3];
+      const wd = HS[o + 4] * K, dp = HS[o + 5] * K, wh = HS[o + 6] * K, ch = HS[o + 7];
+      hq.setFromAxisAngle(up2, rot);
+      walls.setMatrixAt(n, hm.compose(hp.set(x, gy - 0.6, -y), hq, hs.set(wd, wh + 0.6, dp)));
+      walls.setColorAt(n, hc.setHex(st.town.walls[Math.floor(ch * 7919) % st.town.walls.length]));
+      roofs.setMatrixAt(n, hm.compose(hp.set(x, gy + wh, -y), hq, hs.set(dp * 1.0, Math.min(wd, dp) * 0.55, wd * 1.0)));
+      roofs.setColorAt(n, hc.setHex(st.town.roofs[Math.floor(ch * st.town.roofs.length) % st.town.roofs.length]));
+    });
+    // Chimneys on most houses, at one end of the ridge.
+    const withChim = keep.filter((k) => HS[k * HOUSE_STRIDE + 7] < 0.7);
+    const chims = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ roughness: 0.9 }), Math.max(1, withChim.length));
+    chims.count = withChim.length;
+    const cOff = new THREE.Vector3();
+    withChim.forEach((k, n) => {
+      const o = k * HOUSE_STRIDE, x = HS[o], y = HS[o + 1], gy = HS[o + 2], rot = HS[o + 3];
+      const wd = HS[o + 4] * K, dp = HS[o + 5] * K, wh = HS[o + 6] * K;
+      hq.setFromAxisAngle(up2, rot);
+      cOff.set(wd * 0.3, 0, dp * 0.15).applyQuaternion(hq);
+      chims.setMatrixAt(n, hm.compose(hp.set(x + cOff.x, gy + wh, -y + cOff.z), hq, hs.set(0.9 * K, Math.min(wd, dp) * 0.55 + 1.2 * K, 0.9 * K)));
+      chims.setColorAt(n, hc.setHex(0x6a5a50));
+    });
+    for (const im of [walls, roofs, chims]) { im.castShadow = true; im.receiveShadow = true; group.add(im); }
+    // Windows: two square lights through each lit house, showing on both long walls. Three in four
+    // houses are lit. Unlit material, brightened at night (applyTime).
+    const lit = keep.filter((k) => (HS[k * HOUSE_STRIDE + 7] * 7.31) % 1 < 0.75);
+    const win = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xffb060 }), Math.max(1, lit.length * 2));
+    win.count = lit.length * 2;
+    win.name = 'windows';
+    const wOff = new THREE.Vector3();
+    lit.forEach((k, n) => {
+      const o = k * HOUSE_STRIDE, x = HS[o], y = HS[o + 1], gy = HS[o + 2], rot = HS[o + 3];
+      const wd = HS[o + 4] * K, dp = HS[o + 5] * K, wh = HS[o + 6] * K;
+      hq.setFromAxisAngle(up2, rot);
+      const sz = Math.min(0.9 * K, wh * 0.35);
+      for (const side of [0, 1]) {
+        wOff.set((side * 2 - 1) * wd * 0.24, 0, 0).applyQuaternion(hq);
+        win.setMatrixAt(n * 2 + side, hm.compose(hp.set(x + wOff.x, gy + wh * 0.45, -y + wOff.z), hq, hs.set(sz, sz, dp + 0.15)));
+      }
+    });
+    windows = win;
+    group.add(win);
+    const gp = new Float32Array(lit.length * 3);
+    lit.forEach((k, n) => {
+      const o = k * HOUSE_STRIDE;
+      gp[n * 3] = HS[o]; gp[n * 3 + 1] = HS[o + 2] + HS[o + 6] * K * 0.6; gp[n * 3 + 2] = -HS[o + 1];
+    });
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute('position', new THREE.BufferAttribute(gp, 3));
+    glow = new THREE.Points(gg, new THREE.PointsMaterial({ map: glowTex, size: 45 * K, color: 0xff9440, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    glow.name = 'glow';
+    group.add(glow);
+  }
+
+  applyTime();
+}
+
 function buildPlants(m: LocalMap, inFrame: (x: number, y: number) => boolean): THREE.Group {
   const st = style, group = new THREE.Group();
   group.name = 'plantgroup';
@@ -1257,6 +1307,7 @@ function applyTime() {
     glow.visible = L.windows > 0.01;
     (glow.material as THREE.PointsMaterial).opacity = 0.5 * L.windows;
   }
+  houseNight.value = L.windows;
   if (windows) {
     windows.visible = L.windows > 0.01;
     (windows.material as THREE.MeshBasicMaterial).color.setRGB(1.7 * L.windows, 0.85 * L.windows, 0.28 * L.windows);
@@ -1325,6 +1376,18 @@ $<HTMLSelectElement>('vsoft').onchange = (e) => { opts.vSoft = Number((e.target 
 $<HTMLSelectElement>('river').onchange = (e) => { opts.riverMode = (e.target as HTMLSelectElement).value as LocalOptions['riverMode']; custom(); };
 $<HTMLInputElement>('crags').onchange = (e) => { opts.crags = (e.target as HTMLInputElement).checked; custom(); };
 $<HTMLSelectElement>('res').onchange = (e) => { opts.res = Number((e.target as HTMLSelectElement).value); request(); };
+{
+  // Houses: which buildings stand in the towns (no rebuild: only the buildings are redrawn).
+  const sel = document.createElement('select');
+  sel.id = 'houses';
+  for (const [k, label] of HOUSE_MODES) sel.add(new Option(label, k));
+  sel.value = houseMode;
+  sel.onchange = () => { houseMode = sel.value as HouseMode; if (map) drawHouses(map); writeHash(); };
+  const row = document.createElement('label');
+  row.className = 'row';
+  row.append('Houses ', sel, document.createElement('span'));
+  $('res').closest('label')?.before(row);
+}
 
 function writeHash() {
   const o = new URLSearchParams(back);
@@ -1340,6 +1403,7 @@ function writeHash() {
   if (opts.res !== D.res) o.set('res', String(opts.res));
   if (userHour !== null) o.set('time', userHour.toFixed(2));
   if (!showCtx) o.set('around', '0');
+  if (houseMode !== 'people') o.set('houses', houseMode);
   history.replaceState(null, '', location.pathname + '#' + o.toString());
 }
 

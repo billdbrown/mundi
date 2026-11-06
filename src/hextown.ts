@@ -11,7 +11,7 @@
 import type { World } from './world.ts';
 import { WATER_OCEAN } from './world.ts';
 import type { History } from './civ.ts';
-import { popAt, HISTORY_YEARS } from './civ.ts';
+import { popAt, realmAt, HISTORY_YEARS } from './civ.ts';
 import type { Noise3 } from './noise.ts';
 
 export interface TownContext {
@@ -34,10 +34,20 @@ export interface TownContext {
   sea: boolean;
 }
 
-/** Per house: x, y, h (ground), rotation, width, depth, wall height, colour (0..1). */
-export const HOUSE_STRIDE = 8;
+/** Per house: x, y, h (ground), rotation, width, depth, wall height, colour (0..1), kind (0 a house,
+ * 1..3 the landmark on a village's, town's or city's square), people (the realm + 1, 0 for none). */
+export const HOUSE_STRIDE = 10;
 
-export interface Towns { houses: Float32Array; names: string[] }
+/** The small things of town life (hexhouses.ts draws them from the pack's props, in this order):
+ * per prop x, y, ground, heading, kind, size (the wider side, metres). */
+export const PROP_STRIDE = 6;
+export const PROPS = ['Well', 'MarketStand_1', 'MarketStand_2', 'Bench_1', 'Cart', 'Barrel', 'Crate', 'Bags', 'Hay', 'Logs', 'Fence'];
+const [P_WELL, P_STALL, P_STALL2, P_BENCH, P_CART, P_BARREL, P_CRATE, P_BAGS, P_HAY, P_LOGS, P_FENCE] = PROPS.map((_, i) => i);
+const PROP_SIZE = [2.4, 3.2, 3.2, 1.8, 2.6, 0.7, 0.9, 1.0, 1.6, 2.4, 2.4];
+/** One fence panel's length, metres. */
+const FENCE_M = 2.4;
+
+export interface Towns { houses: Float32Array; props: Float32Array; names: string[] }
 
 const smooth = (a: number, b: number, x: number) => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
@@ -69,7 +79,7 @@ export function layoutTowns(c: TownContext): Towns {
     .map((s) => {
       const i = indexOf.get(s.cell)!, pop = popAt(s, HISTORY_YEARS);
       const n = Math.round(Math.max(8, Math.min(220, Math.sqrt(pop) * 2.2)));
-      return { s, x: cellXY[i * 2], y: cellXY[i * 2 + 1], pop, n, r: 45 + 10 * Math.sqrt(n) };
+      return { s, x: cellXY[i * 2], y: cellXY[i * 2 + 1], pop, n, r: 45 + 10 * Math.sqrt(n), people: realmAt(s, HISTORY_YEARS) + 1 };
     });
 
   // --- Roads: the history's road network, cell centre through the shared edge's middle to the next
@@ -101,14 +111,66 @@ export function layoutTowns(c: TownContext): Towns {
       }
     }
   }
-  // Streets in towns with no road: a short cross through the centre.
-  for (const t of towns) {
-    const ang = c.rng() * Math.PI;
-    for (const a of [ang, ang + Math.PI / 2]) {
-      const dx = Math.cos(a) * t.r * 0.9, dy = Math.sin(a) * t.r * 0.9;
-      roadSegs.push(t.x - dx, t.y - dy, t.x + dx, t.y + dy, 5);
+  // --- Streets (2026-11-06, Bill: "city centres, streets, small yards with veg gardens"): from a
+  // square in the middle, a main street out along each way the roads leave the town (or two, for
+  // a town no road reaches), wandering a little; in bigger places, lanes off the main streets.
+  // Every street is a polyline, for the houses to front.
+  interface Street { pts: [number, number][]; width: number; main: boolean; town: number }
+  const streets: Street[] = [];
+  const blocked = (x: number, y: number) => wet(x, y) || slopeAt(x, y) > 0.5 || idxAt(x, y) < 0;
+  towns.forEach((t, ti) => {
+    // The ways out: towards the next cell along each road through this one.
+    const outs: number[] = [];
+    for (const road of history.roads) {
+      const k = road.cells.indexOf(t.s.cell);
+      if (k < 0) continue;
+      for (const nb of [road.cells[k - 1], road.cells[k + 1]]) {
+        if (nb == null || !indexOf.has(nb)) continue;
+        const j = indexOf.get(nb)!, a = Math.atan2(cellXY[j * 2 + 1] - t.y, cellXY[j * 2] - t.x);
+        if (outs.every((o) => Math.abs(Math.atan2(Math.sin(a - o), Math.cos(a - o))) > 0.6)) outs.push(a);
+      }
     }
-  }
+    if (outs.length < 2) {
+      const a0 = outs[0] ?? c.rng() * Math.PI * 2;
+      if (!outs.length) outs.push(a0);
+      outs.push(a0 + Math.PI + (c.rng() - 0.5) * 0.6);
+      if (t.n > 70) outs.push(a0 + Math.PI / 2 + (c.rng() - 0.5) * 0.5);
+    }
+    const mainW = t.n > 120 ? 8 : 7;      // (as wide as the roads they carry on from)
+    for (const a0 of outs) {
+      const pts: [number, number][] = [];
+      let a = a0, x = t.x + Math.cos(a) * 14, y = t.y + Math.sin(a) * 14;
+      for (let d = 14; d < t.r * 1.25; d += 10) {
+        if (blocked(x, y)) break;
+        pts.push([x, y]);
+        a += 0.35 * c.noise(x / 70, y / 70, 311 + ti) - 0.08 * Math.atan2(Math.sin(a - a0), Math.cos(a - a0));
+        x += Math.cos(a) * 10; y += Math.sin(a) * 10;
+      }
+      if (pts.length < 2) continue;
+      streets.push({ pts: [[t.x, t.y], ...pts], width: mainW, main: true, town: ti });
+      // Lanes, both ways off the main street, in places big enough to need them.
+      if (t.n < 30) continue;
+      for (let k = 3; k < pts.length - 1; k += 4 + Math.floor(c.rng() * 2)) {
+        for (const side of [-1, 1]) {
+          if (c.rng() < 0.35) continue;
+          const [px, py] = pts[k], [qx, qy] = pts[k + 1];
+          let b = Math.atan2(qy - py, qx - px) + side * (Math.PI / 2 + (c.rng() - 0.5) * 0.4);
+          const lane: [number, number][] = [[px, py]];
+          let lx = px, ly = py;
+          const len = t.r * (0.25 + 0.3 * c.rng());
+          for (let d = 0; d < len; d += 8) {
+            lx += Math.cos(b) * 8; ly += Math.sin(b) * 8;
+            if (blocked(lx, ly)) break;
+            lane.push([lx, ly]);
+            b += 0.25 * c.noise(lx / 50, ly / 50, 377 + ti);
+          }
+          if (lane.length > 2) streets.push({ pts: lane, width: 3.6, main: false, town: ti });
+        }
+      }
+    }
+  });
+  for (const st of streets) for (let k = 0; k + 1 < st.pts.length; k++) roadSegs.push(st.pts[k][0], st.pts[k][1], st.pts[k + 1][0], st.pts[k + 1][1], st.width);
+
   // Paint and flatten paths, and keep plants off them.
   const pathNear = new Float32Array(N).fill(Infinity);
   for (let k = 0; k < roadSegs.length; k += 5) {
@@ -132,57 +194,151 @@ export function layoutTowns(c: TownContext): Towns {
     if (pathNear[v] < 2) c.grow[v] = 0;
   }
 
-  // --- Houses: first along the roads near each town, facing them; then filling in round a square.
+  // --- What stands where: an occupancy grid (one sample a cell), so houses, yards and streets
+  // don't overlap. A rectangle is centre, the unit axis along its width, width and depth.
+  const occ = new Uint8Array(N);
+  const rectCells = (cx: number, cy: number, ax: number, ay: number, w: number, d: number, pad: number, f: (v: number, u: number, s: number) => void) => {
+    const R = Math.hypot(w, d) / 2 + pad;
+    const iA = Math.max(0, Math.floor((cx - R + half) / step)), iB = Math.min(res - 1, Math.ceil((cx + R + half) / step));
+    const jA = Math.max(0, Math.floor((cy - R + half) / step)), jB = Math.min(res - 1, Math.ceil((cy + R + half) / step));
+    for (let j = jA; j <= jB; j++) for (let i = iA; i <= iB; i++) {
+      const x = -half + i * step - cx, y = -half + j * step - cy;
+      const u = x * ax + y * ay, s = -x * ay + y * ax;       // along the width, along the depth
+      if (Math.abs(u) <= w / 2 + pad && Math.abs(s) <= d / 2 + pad) f(j * res + i, u, s);
+    }
+  };
+  const rectFree = (cx: number, cy: number, ax: number, ay: number, w: number, d: number) => {
+    let ok = true;
+    rectCells(cx, cy, ax, ay, w, d, 0, (v) => { if (occ[v] || pathNear[v] < 0.9 || wet(-half + (v % res) * step, -half + Math.floor(v / res) * step)) ok = false; });
+    return ok;
+  };
+  const claim = (cx: number, cy: number, ax: number, ay: number, w: number, d: number, what: number) => rectCells(cx, cy, ax, ay, w, d, 0, (v) => { occ[v] = what; });
+
+  // --- Houses: along both sides of every street, facing it, shoulder to shoulder near the middle
+  // and further apart out towards the fields; each with a yard behind, most with a vegetable
+  // garden in rows and a hedge or a fence round it. Around the square, the bigger houses.
   const houses: number[] = [];
-  const taken: [number, number, number][] = [];
-  const free = (x: number, y: number, r: number) => {
-    for (const [hx, hy, hr] of taken) if ((x - hx) ** 2 + (y - hy) ** 2 < (r + hr) ** 2) return false;
-    return true;
+  const props: number[] = [];
+  const gardens: { cx: number; cy: number; ax: number; ay: number; w: number; d: number; hedge: boolean; town: number }[] = [];
+  /** A prop (hexhouses.ts PROPS): x, y, ground, heading, kind, size in metres. */
+  const prop = (x: number, y: number, rot: number, kind: number, size: number) => {
+    if (wet(x, y) || idxAt(x, y) < 0) return;
+    props.push(x, y, hAt(x, y), rot, kind, size);
   };
-  const clearOfRoad = (x: number, y: number, r: number) => {
-    const v = idxAt(x, y);
-    return v >= 0 && pathNear[v] * 2.5 > r * 0.9;
-  };
-  const place = (x: number, y: number, rot: number, big: number) => {
-    const wd = 6 + 3 * c.rng() + big * 3, dp = 5 + 2 * c.rng() + big, wallH = 3 + 1.5 * c.rng() + big * 2.5;
-    const r = Math.hypot(wd, dp) / 2 + 1;
-    if (wet(x, y) || slopeAt(x, y) > 0.35 || !free(x, y, r) || !clearOfRoad(x, y, r)) return false;
-    taken.push([x, y, r]);
-    houses.push(x, y, hAt(x, y), rot, wd, dp, wallH, c.rng());
-    return true;
-  };
+  /** Facing a map direction (fx, fy): the heading that turns a model's front (+z) to it. */
+  const facing = (fx: number, fy: number) => Math.atan2(fx, -fy);
+  const counts = towns.map(() => 0);
   for (const t of towns) {
-    let placed = 0;
-    taken.push([t.x, t.y, 9]);           // the square
-    // Along the roads: walk each segment near the town, both sides, facing the road.
-    for (let k = 0; k < roadSegs.length && placed < t.n * 0.6; k += 5) {
-      const x0 = roadSegs[k], y0 = roadSegs[k + 1], x1 = roadSegs[k + 2], y1 = roadSegs[k + 3];
-      const len = Math.hypot(x1 - x0, y1 - y0);
-      if (len < 1) continue;
-      const dx = (x1 - x0) / len, dy = (y1 - y0) / len, rot = Math.atan2(dy, dx);
-      for (let s = 0; s < len; s += 15) {
-        const cx = x0 + dx * s, cy = y0 + dy * s;
-        const dist = Math.hypot(cx - t.x, cy - t.y);
-        if (dist > t.r * 1.2 || c.rng() > 1.1 - dist / (t.r * 1.2)) continue;
-        for (const side of [-1, 1]) {
-          const off = 9 + 2 * c.rng();
-          if (place(cx - dy * off * side, cy + dx * off * side, rot, dist < t.r * 0.35 ? 1 : 0)) placed++;
+    // The square, and on it the place's landmark: a well, a hall, a great building, by its size.
+    const tier = t.pop < 1500 ? 1 : t.pop < 5000 ? 2 : 3, lw = [8, 12, 16][tier - 1];
+    claim(t.x, t.y, 1, 0, 26, 26, 2);
+    if (!wet(t.x, t.y)) houses.push(t.x, t.y, hAt(t.x, t.y), c.rng() * Math.PI * 2, lw, lw, 6 + tier * 3, c.rng(), tier, t.people);
+    // Life on the square: a well beside the hall, stalls in a market town, a cart, benches.
+    const sa = c.rng() * Math.PI * 2;
+    if (tier > 1) prop(t.x + Math.cos(sa) * 10, t.y + Math.sin(sa) * 10, c.rng() * 6.28, P_WELL, 2.4);
+    const stalls = tier === 1 ? 0 : tier === 2 ? 3 : 6;
+    for (let k = 0; k < stalls; k++) {
+      const a = sa + 1 + (k / stalls) * 4.2, rr = 9 + c.rng() * 2;
+      const x = t.x + Math.cos(a) * rr, y = t.y + Math.sin(a) * rr;
+      prop(x, y, facing(t.x - x, t.y - y), k % 2 ? P_STALL2 : P_STALL, 3.2);
+    }
+    for (let k = 0; k < 2 + tier; k++) {
+      const a = c.rng() * Math.PI * 2, rr = 7 + c.rng() * 4;
+      const kinds = [P_BENCH, P_CART, P_BARREL, P_CRATE, P_BAGS];
+      const kind = kinds[Math.floor(c.rng() * kinds.length)];
+      prop(t.x + Math.cos(a) * rr, t.y + Math.sin(a) * rr, c.rng() * 6.28, kind, PROP_SIZE[kind]);
+    }
+  }
+  for (const st of streets) {
+    const t = towns[st.town], ti = st.town;
+    // Walk the street at a steady pace, both sides.
+    for (const side of [-1, 1]) {
+      let k = 0, along = side < 0 ? 6 : 10 + c.rng() * 4;
+      const segLen = (i: number) => Math.hypot(st.pts[i + 1][0] - st.pts[i][0], st.pts[i + 1][1] - st.pts[i][1]);
+      let into = along;
+      while (k + 1 < st.pts.length && counts[ti] < t.n) {
+        const L = segLen(k);
+        if (into > L) { into -= L; k++; continue; }
+        const [x0, y0] = st.pts[k], [x1, y1] = st.pts[k + 1];
+        const ux = (x1 - x0) / (L || 1), uy = (y1 - y0) / (L || 1);
+        const px = x0 + ux * into, py = y0 + uy * into;
+        const dist = Math.hypot(px - t.x, py - t.y), inner = dist < t.r * 0.4;
+        if (dist > t.r * 1.15) break;
+        // Fewer houses the further out; terraced in the middle of a town.
+        const big = inner && t.n > 40 ? 1 : 0;
+        const w = 6 + 3 * c.rng() + big * 2, d = 5 + 2.5 * c.rng() + big;
+        const nx = -uy * side, ny = ux * side;                 // away from the street
+        const back = st.width / 2 + 1.2 + c.rng() * 1.2 + d / 2;
+        const hx = px + nx * back, hy = py + ny * back;
+        const keep = c.rng() < 1.25 - dist / (t.r * 1.15);
+        let placed = false;
+        if (keep && slopeAt(hx, hy) < 0.45 && rectFree(hx, hy, ux, uy, w, d)) {
+          claim(hx, hy, ux, uy, w, d, 1);
+          houses.push(hx, hy, hAt(hx, hy), facing(-nx, -ny), w, d, 3 + 1.5 * c.rng() + big * 2.5, c.rng(), 0, t.people);
+          counts[ti]++;
+          placed = true;
+          // The yard behind: a garden in most, smaller in the middle of a town.
+          const gd = (inner && t.n > 80 ? 5 : 8) + c.rng() * (inner ? 5 : 10), gw = w + (inner ? 0 : c.rng() * 4);
+          const gx = hx + nx * (d / 2 + 0.8 + gd / 2), gy = hy + ny * (d / 2 + 0.8 + gd / 2);
+          if (rectFree(gx, gy, ux, uy, gw, gd)) {
+            claim(gx, gy, ux, uy, gw, gd, 3);
+            const garden = c.rng() < (inner ? 0.55 : 0.85);
+            if (garden) gardens.push({ cx: gx, cy: gy, ax: ux, ay: uy, w: gw, d: gd, hedge: c.rng() < 0.5, town: ti });
+            // Something by the back door: a woodpile, barrels, a cart, hay.
+            const kinds = [P_LOGS, P_BARREL, P_CRATE, P_HAY, P_CART, P_BAGS];
+            const kind = kinds[Math.floor(c.rng() * kinds.length)];
+            const sx = (c.rng() - 0.5) * w * 0.7;
+            prop(hx + nx * (d / 2 + 1.4) + ux * sx, hy + ny * (d / 2 + 1.4) + uy * sx, facing(ux, uy), kind, PROP_SIZE[kind]);
+            // Fences round half the gardens without a hedge.
+            if (garden && !gardens[gardens.length - 1].hedge && c.rng() < 0.7) {
+              const g = gardens[gardens.length - 1];
+              const edges: [number, number, number, number, number][] = [
+                [g.cx + nx * g.d / 2, g.cy + ny * g.d / 2, ux, uy, g.w],          // far end
+                [g.cx - ux * g.w / 2, g.cy - uy * g.w / 2, nx, ny, g.d],          // sides
+                [g.cx + ux * g.w / 2, g.cy + uy * g.w / 2, nx, ny, g.d],
+              ];
+              for (const [ex, ey, dx, dy, len] of edges) {
+                const n = Math.max(1, Math.round(len / FENCE_M));
+                for (let f = 0; f < n; f++) {
+                  const s = (f + 0.5) / n - 0.5;
+                  prop(ex + dx * s * len, ey + dy * s * len, facing(-dy, dx), P_FENCE, len / n);
+                }
+              }
+            }
+          }
         }
+        // On along the street: next door, or a gap.
+        into += (placed ? w : 4) + (inner ? 0.6 + c.rng() * 1.2 : 3 + c.rng() * 9);
       }
     }
-    // Filling in: denser near the centre.
-    for (let tries = 0; tries < t.n * 30 && placed < t.n; tries++) {
-      const a = c.rng() * Math.PI * 2, rr = t.r * Math.sqrt(c.rng());
-      const x = t.x + Math.cos(a) * rr, y = t.y + Math.sin(a) * rr;
-      const rot = Math.atan2(y - t.y, x - t.x) + (c.rng() < 0.5 ? 0 : Math.PI / 2);
-      if (place(x, y, rot, rr < t.r * 0.3 ? 1 : 0)) placed++;
+  }
+  // Where the streets couldn't hold a town (hills, water), the rest of it round the square, facing
+  // in, with yards behind as space allows.
+  towns.forEach((t, ti) => {
+    for (let tries = 0; tries < t.n * 25 && counts[ti] < t.n * 0.7; tries++) {
+      const a = c.rng() * Math.PI * 2, rr = 18 + (t.r - 18) * Math.sqrt(c.rng());
+      const hx = t.x + Math.cos(a) * rr, hy = t.y + Math.sin(a) * rr;
+      const nx = Math.cos(a), ny = Math.sin(a), ux = -ny, uy = nx;
+      const w = 6 + 3 * c.rng(), d = 5 + 2.5 * c.rng();
+      if (slopeAt(hx, hy) > 0.45 || !rectFree(hx, hy, ux, uy, w, d)) continue;
+      claim(hx, hy, ux, uy, w, d, 1);
+      houses.push(hx, hy, hAt(hx, hy), facing(-nx, -ny), w, d, 3 + 1.5 * c.rng(), c.rng(), 0, t.people);
+      counts[ti]++;
+      const gd = 6 + c.rng() * 8, gx = hx + nx * (d / 2 + 0.8 + gd / 2), gy = hy + ny * (d / 2 + 0.8 + gd / 2);
+      if (c.rng() < 0.7 && rectFree(gx, gy, ux, uy, w, gd)) { claim(gx, gy, ux, uy, w, gd, 3); gardens.push({ cx: gx, cy: gy, ax: ux, ay: uy, w, d: gd, hedge: c.rng() < 0.6, town: ti }); }
     }
-    // The square: a paved patch.
-    for (let v = 0; v < N; v++) {
-      const i = v % res, j = Math.floor(v / res), x = -half + i * step, y = -half + j * step;
-      const d = Math.hypot(x - t.x, y - t.y);
-      if (d < 12) { layers[v * LAYERS + c.L_PATH] = Math.max(layers[v * LAYERS + c.L_PATH], smooth(12, 9, d)); c.grow[v] = 0; }
-    }
+  });
+  // Gardens: rows of vegetables (a field the grass shader sows in rows), hedged or not.
+  for (const g of gardens) {
+    rectCells(g.cx, g.cy, g.ax, g.ay, g.w, g.d, 0, (v, u, s) => {
+      if (layers[v * LAYERS + 9] > 0) return;
+      const edge = Math.min(g.w / 2 - Math.abs(u), g.d / 2 - Math.abs(s));
+      layers[v * LAYERS + c.L_FIELD] = 1;
+      // (Kind: its colour, and the rows' heading. Greens.)
+      layers[v * LAYERS + c.L_FIELDKIND] = 0.27 + 0.2 * ((g.cx * 0.13 + g.cy * 0.07) % 1 + 1) % 1;
+      layers[v * LAYERS + c.L_HEDGE] = g.hedge ? smooth(2.5, 0.8, edge) : 0;
+      c.grow[v] = 0;
+    });
   }
   // No plants in the houses' yards; the ground under each house levelled to its centre.
   for (let k = 0; k < houses.length; k += HOUSE_STRIDE) {
@@ -194,6 +350,26 @@ export function layoutTowns(c: TownContext): Towns {
       if (d < r) { c.grow[v] = 0; heights[v] += (houses[k + 2] - heights[v]) * smooth(r, r * 0.5, d); }
     }
   }
+  // Inside a town the woods are cleared: a tree or two left in the yards, more towards the edge.
+  for (const t of towns) {
+    const R = t.r * 1.05;
+    const iA = Math.max(0, Math.floor((t.x - R + half) / step)), iB = Math.min(res - 1, Math.ceil((t.x + R + half) / step));
+    const jA = Math.max(0, Math.floor((t.y - R + half) / step)), jB = Math.min(res - 1, Math.ceil((t.y + R + half) / step));
+    for (let j = jA; j <= jB; j++) for (let i = iA; i <= iB; i++) {
+      const d = Math.hypot(-half + i * step - t.x, -half + j * step - t.y);
+      if (d < R) c.grow[j * res + i] *= 0.08 + 0.92 * smooth(t.r * 0.55, R, d);
+    }
+  }
+  // The squares: paved.
+  for (const t of towns) {
+    for (let v = 0; v < N; v++) {
+      const i = v % res, j = Math.floor(v / res), x = -half + i * step, y = -half + j * step;
+      const d = Math.hypot(x - t.x, y - t.y);
+      if (d < 16) { layers[v * LAYERS + c.L_PATH] = Math.max(layers[v * LAYERS + c.L_PATH], smooth(16, 11, d)); c.grow[v] = 0; }
+    }
+  }
+  // Props stand on the ground as levelled.
+  for (let k = 0; k < props.length; k += PROP_STRIDE) props[k + 2] = hAt(props[k], props[k + 1]);
 
   // --- Fields: parcels round each town (cells of scattered seed points), on flat, arable, dry
   // ground; each a crop, with a hedge along its edges. Fewer further out.
@@ -239,5 +415,5 @@ export function layoutTowns(c: TownContext): Towns {
       c.grow[v] = 0;
     }
   }
-  return { houses: new Float32Array(houses), names: towns.map((t) => t.s.name) };
+  return { houses: new Float32Array(houses), props: new Float32Array(props), names: towns.map((t) => t.s.name) };
 }
