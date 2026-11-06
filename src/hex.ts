@@ -455,16 +455,18 @@ function addContext(aerial: boolean) {
   // The occluder: every triangle outside the hex (inside, it would fight the tile's own ground).
   if (ctxOccluder) { world.remove(ctxOccluder); ctxOccluder.geometry.dispose(); (ctxOccluder.material as THREE.Material).dispose(); }
   const shape = hexShape(map), oidx: number[] = [];
-  // Only triangles wholly outside: one straddling the edge (centre outside) reached into the tile,
-  // and over water, level with the tile's own, hid it in triangular teeth along the edge (Bill,
-  // 2026-11-06: a sawtooth on a coral reef).
   for (let t = 0; t < idx.length; t += 3) {
-    let anyIn = false;
-    for (let k = 0; k < 3; k++) if (shape.inside(pos[idx[t + k] * 3], -pos[idx[t + k] * 3 + 2])) anyIn = true;
-    if (!anyIn) oidx.push(idx[t], idx[t + 1], idx[t + 2]);
+    let cx = 0, cy = 0;
+    for (let k = 0; k < 3; k++) { cx += pos[idx[t + k] * 3]; cy -= pos[idx[t + k] * 3 + 2]; }
+    if (!shape.inside(cx / 3, cy / 3)) oidx.push(idx[t], idx[t + 1], idx[t + 2]);
   }
   const og = new THREE.BufferGeometry();
-  og.setAttribute('position', geo.getAttribute('position'));
+  // Sunk a little: triangles straddling the edge reach into the tile, and at the backdrop's own
+  // height they hid the tile's water in triangular teeth along the edge (Bill, 2026-11-06: a
+  // sawtooth on a coral reef). Lower, they still hide the skirt hanging under the edge.
+  const opos = pos.slice();
+  for (let v = 1; v < opos.length; v += 3) opos[v] -= 1.5;
+  og.setAttribute('position', new THREE.BufferAttribute(opos, 3));
   og.setIndex(oidx);
   ctxOccluder = new THREE.Mesh(og, new THREE.MeshBasicMaterial({ colorWrite: false }));
   ctxOccluder.name = 'occluder';
