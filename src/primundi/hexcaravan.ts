@@ -203,7 +203,12 @@ export class Nav {
 
 /** A part of town you can walk to: which of the town card's tabs it opens, where its door is, and
  * where its label floats. */
-export interface TownSpot { tab: string; label: string; door: [number, number]; top: [number, number, number]; centre: [number, number]; radius: number }
+export interface TownSpot {
+  tab: string; label: string; door: [number, number]; top: [number, number, number]; centre: [number, number]; radius: number;
+  /** A thing to find (finds.ts kind) rather than part of a town: hidden until the caravan comes near
+   * (`seen`), its label gone once it's been used. */
+  find?: string; seen?: boolean; used?: boolean; obj?: THREE.Object3D;
+}
 
 /** What a town's landmark is, by the family it's drawn in and its tier (hexhouses.ts and
  * scripts/housepack.mjs: the families' three halls), so it can be what it looks like. */
@@ -486,4 +491,68 @@ export class Caravan {
     this.marker.position.set(this.x, gy + 2.6 * K, -this.y);
     if (this.ring.visible) (this.ring.material as THREE.MeshBasicMaterial).opacity = 0.55 + 0.35 * Math.sin(this.t * 5);
   }
+}
+
+/** Things to find in the hex (finds.ts), as small models: a cairn with a pennant, a spring ringed
+ * with stones, berry bushes, broken walls, a cold camp. Each faces +z, a few metres across. */
+export function findModel(kind: string, K: number, seed: number): THREE.Group {
+  const g = new THREE.Group();
+  let s = seed >>> 0;
+  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  const mat = (c: number, extra: Partial<THREE.MeshStandardMaterialParameters> = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.9, flatShading: true, ...extra });
+  const stone = mat(0x8a877e), stoneD = mat(0x6e6b63), wood = mat(0x6b4a2f), leaf = mat(0x4f7a2c), cloth = mat(0xb0403a);
+  const add = (geo: THREE.BufferGeometry, m: THREE.Material, x = 0, y = 0, z = 0, ry = 0) => {
+    const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.rotation.y = ry; o.castShadow = true; o.receiveShadow = true; g.add(o); return o;
+  };
+  if (kind === 'lookout') {
+    let y = 0;
+    for (let k = 0; k < 5; k++) {
+      const r = 0.62 - k * 0.1;
+      add(new THREE.DodecahedronGeometry(r, 0), k % 2 ? stoneD : stone, (rnd() - 0.5) * 0.2, y + r * 0.7, (rnd() - 0.5) * 0.2, rnd() * 6);
+      y += r * 1.1;
+    }
+    add(new THREE.CylinderGeometry(0.035, 0.045, 2.2, 5), wood, 0, y + 0.9, 0);
+    const flag = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(1.1, -0.25, 0), new THREE.Vector3(0, -0.55, 0)]);
+    flag.computeVertexNormals();
+    add(flag, mat(0xe0b040, { side: THREE.DoubleSide }), 0.04, y + 1.95, 0);
+  } else if (kind === 'spring') {
+    add(new THREE.CircleGeometry(1.5, 14).rotateX(-Math.PI / 2), mat(0x3f7f8f, { roughness: 0.15, metalness: 0.1, emissive: 0x0c2a30 }), 0, 0.12, 0);
+    for (let k = 0; k < 9; k++) {
+      const a = (k / 9) * Math.PI * 2 + rnd() * 0.3, r = 0.3 + rnd() * 0.2;
+      add(new THREE.DodecahedronGeometry(r, 0), k % 3 ? stone : stoneD, Math.cos(a) * 1.75, r * 0.5, Math.sin(a) * 1.75, rnd() * 6);
+    }
+    for (let k = 0; k < 4; k++) add(new THREE.ConeGeometry(0.08, 0.9, 4), leaf, Math.cos(k * 1.7) * 2.1, 0.45, Math.sin(k * 1.7) * 2.1);
+  } else if (kind === 'forage') {
+    const berry = mat(0x9a2848, { roughness: 0.5 });
+    for (let k = 0; k < 6; k++) {
+      const x = (rnd() - 0.5) * 4, z = (rnd() - 0.5) * 4, r = 0.55 + rnd() * 0.4;
+      add(new THREE.IcosahedronGeometry(r, 0), leaf, x, r * 0.8, z, rnd() * 6);
+      for (let b = 0; b < 5; b++) {
+        const a = rnd() * Math.PI * 2, h = rnd() * 0.8;
+        add(new THREE.IcosahedronGeometry(0.09, 0), berry, x + Math.cos(a) * r * 0.85, r * 0.8 + (h - 0.4) * r, z + Math.sin(a) * r * 0.85);
+      }
+    }
+    // A basket left by the bushes.
+    add(new THREE.CylinderGeometry(0.35, 0.28, 0.35, 8), mat(0xa58a5c), 1.4, 0.18, 1.6);
+  } else if (kind === 'ruin') {
+    const walls: [number, number, number, number, number][] = [[-2, 0, 4.2, 2.6, 0], [2.1, 0.4, 3, 1.4, Math.PI / 2], [0, 2.2, 2.4, 0.9, 0.1]];
+    for (const [x, z, w, h, r] of walls) {
+      add(new THREE.BoxGeometry(w, h, 0.6), stone, x, h / 2, z, r);
+      for (let k = 0; k < 3; k++) add(new THREE.BoxGeometry(0.5 + rnd() * 0.4, 0.3, 0.5), stoneD, x + (rnd() - 0.5) * w, 0.15, z + 0.9 + rnd() * 0.8, rnd() * 3);
+    }
+    const col = add(new THREE.CylinderGeometry(0.35, 0.4, 3.4, 8), stone, 0.6, 0.35, -1.6);
+    col.rotation.z = Math.PI / 2; col.rotation.y = 0.5;
+    add(new THREE.CylinderGeometry(0.42, 0.45, 1.6, 8), stone, -0.6, 0.8, 1.0);
+  } else {
+    // A cold hearth, a fallen lean-to, a crate.
+    for (let k = 0; k < 7; k++) { const a = (k / 7) * Math.PI * 2; add(new THREE.DodecahedronGeometry(0.22, 0), stoneD, Math.cos(a) * 0.7, 0.12, Math.sin(a) * 0.7, rnd() * 6); }
+    add(new THREE.CylinderGeometry(0.5, 0.5, 0.06, 10), mat(0x222018), 0, 0.04, 0);
+    const tent = add(new THREE.ConeGeometry(1.4, 1.8, 4, 1, true), mat(0xa89a74, { side: THREE.DoubleSide }), -2.2, 0.7, -0.6, 0.6);
+    tent.rotation.z = 0.35;
+    add(new THREE.BoxGeometry(0.8, 0.6, 0.6), wood, 1.6, 0.3, -0.9, 0.4);
+    add(new THREE.CylinderGeometry(0.06, 0.06, 1.8, 5).rotateZ(Math.PI / 2), wood, 0.2, 0.08, 1.3, 0.3);
+    void cloth;
+  }
+  g.scale.setScalar(K);
+  return g;
 }

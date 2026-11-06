@@ -65,4 +65,7 @@ the ground: tap the ground to walk there (A* on a 2 m grid round houses, fences,
 preferring streets), tap a town building or its label to walk to its door, and the hex posts
 `primundi-spot` with the town card's tab to open. A town's landmark is what its model is (a market,
 an inn), a notice board stands on the square, the nearest houses are the inn, tavern and stores.
+`finds.ts` is what there is to find in a hex (lookout, spring, forage, ruin, camp: seeded per cell,
+cards in the encounter shape, `save.finds` remembers what's used); the hex view places them
+(`placeFinds`), hides all but lookouts until the caravan is near, and posts `primundi-find`.
 `window.primundi` is its debug handle (`travelTo(cell)`, `setSpeed(n)`, `encounter(id)`, `revealRing()`).

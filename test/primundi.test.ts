@@ -197,3 +197,20 @@ test('in the hex, the caravan walks round houses and the sea, keeping to a stree
   const q = nav.find(0, 60, -90, 60)!;
   assert.ok(q[q.length - 1][0] >= -62, 'stops at the shore');
 });
+
+import { findsIn, findReady, FINDS, type FindKind } from '../src/primundi/finds.ts';
+test('finds in a hex are the same every time, never ruins in a town, and some hexes have each kind', () => {
+  const seen = new Set<FindKind>();
+  for (let c = 0; c < hw.grid.count; c++) {
+    const f = findsIn(hw, atlas, c, 99);
+    assert.deepEqual(f, findsIn(hw, atlas, c, 99));
+    if (atlas.placeAt[c] >= 0) assert.ok(!f.includes('ruin') && !f.includes('camp'));
+    if (hw.water[c] !== WATER_LAND) assert.equal(f.length, 0);
+    for (const k of f) seen.add(k);
+  }
+  for (const k of ['lookout', 'spring', 'forage', 'ruin', 'camp'] as const) assert.ok(seen.has(k), k);
+  // A spring fills again; a lookout is once only.
+  assert.ok(findReady('spring', undefined, 3) && !findReady('spring', 1, 3) && findReady('spring', 1, 6));
+  assert.ok(!findReady('lookout', 0, 400));
+  for (const k of Object.keys(FINDS) as FindKind[]) assert.ok(FINDS[k].title);
+});

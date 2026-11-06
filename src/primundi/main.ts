@@ -33,6 +33,7 @@ import { pickHome, BIASES, type StartBias } from './start.ts';
 import { buildAtlas, findPath, GOODS, G, hasWater, ringCells, seasonalTemp, SNOW_TEMP, stepDays, walkable, type Atlas, type Place } from './atlas.ts';
 import { bestKnownSell, quotes, rationPrice, remember, trade, type Known, type Stocks } from './market.ts';
 import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, cargoUsed, leader, living, newCaravan, pace, passDay, sight, waterCap, thirst, type Caravan, type Origin, type Role } from './caravan.ts';
+import { FINDS, FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
 import { ENCOUNTERS, QUEST_ENCOUNTERS, applyEffect, contextAt, drawEncounter, type Choice, type Encounter, type Outcome } from './encounters.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -67,6 +68,8 @@ interface Save {
   jobsDone: number;
   /** Places whose local map you've bought. */
   maps: number[];
+  /** Things found in hexes (finds.ts), by `cell:kind`: the day each was last used. */
+  finds: Record<string, number>;
   log: { day: number; text: string }[];
   speed: number;
   draws: number;
@@ -78,7 +81,7 @@ function loadSave(): Save | null {
     const s = JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null') as Save | null;
     if (!s || s.v !== 2 || typeof s.world !== 'string' || s.over) return null;
     // Saves from before several jobs at once.
-    s.jobs ??= []; s.taken ??= []; s.maps ??= [];
+    s.jobs ??= []; s.taken ??= []; s.maps ??= []; s.finds ??= {};
     delete (s as unknown as { job?: unknown }).job;
     return s;
   } catch { return null; }
@@ -235,7 +238,7 @@ function newGame(w: World, a: Atlas, n: { name: string; origin: Origin; bias: St
   const caravan = newCaravan(n.name, n.origin, params.seed);
   const s: Save = {
     v: 2, world: n.world, bias: n.bias, home: home.id, caravan, day: 0, cell: home.cell, route: [], progress: 0,
-    revealed: [], charted: 0, known: {}, stocks: {}, jobs: [], taken: [], jobsDone: 0, maps: [], log: [], speed: 0, draws: 0, over: false,
+    revealed: [], charted: 0, known: {}, stocks: {}, jobs: [], taken: [], jobsDone: 0, maps: [], finds: {}, log: [], speed: 0, draws: 0, over: false,
   };
   const seen = new Set(ringCells(w, home.cell, 2));
   // You know home's market and its nearest neighbours', and where they are.
@@ -547,7 +550,10 @@ function enter(cell: number) {
     if (questsAt(cell)) { syncBar(); return; }
     // A town: into its hex, walking in to the square; its buildings are the menus (and the bar's
     // Town button, for the whole card at once).
-    if (pid >= 0) { openHex(cell); toast(`${a.places[pid].name}. Tap the market, the inn or the notice board to go there.`, 6000); } else toast('Arrived.');
+    if (pid >= 0) { openHex(cell); toast(`${a.places[pid].name}. Tap the market, the inn or the notice board to go there.`, 6000); }
+    // Out in the country with something here to find: into the hex, to look for it.
+    else if (findsIn(w, a, cell, params.seed).some((k) => findReady(k, s.finds[`${cell}:${k}`], s.day))) { openHex(cell); toast('Arrived. There is something to find here: walk the hex.', 5000); }
+    else toast('Arrived.');
     syncBar();
     return;
   }
@@ -747,6 +753,12 @@ function hexHash(cell: number) {
   const pid = atlas ? atlas.placeAt[cell] : -1;
   if (pid >= 0) h.set('town', pid === save?.home ? 'home' : 'town');
   if (cameFrom >= 0 && cameFrom !== cell) h.set('from', String(cameFrom));
+  if (world && atlas && save) {
+    const f = findsIn(world, atlas, cell, params.seed);
+    if (f.length) h.set('finds', f.join('.'));
+    const used = f.filter((k) => !findReady(k, save!.finds[`${cell}:${k}`], save!.day));
+    if (used.length) h.set('used', used.join('.'));
+  }
   const near = world ? ringCells(world, cell, 4) : [cell];
   h.set('seen', near.filter((c) => revealed.has(c)).join('.'));
   return h.toString();
@@ -790,6 +802,9 @@ addEventListener('message', (e) => {
     if (hexPending) { hexSend({ type: 'mundi-hex-open', hash: hexPending }); hexPending = null; }
     sendValleys();
   }
+  // The caravan reached something to find in the hex: its card; or came within sight of one.
+  if (e.data.type === 'primundi-find' && hexOpen && save && hexCell === save.cell && !modal) showFind(String(e.data.kind) as FindKind);
+  if (e.data.type === 'primundi-spotted' && hexOpen && FIND_NAMES[e.data.kind as FindKind]) toast(SPOTTED[e.data.kind as FindKind], 4000);
   // The caravan reached a building's door in the town's hex: that part of the town.
   if (e.data.type === 'primundi-spot' && hexOpen && atlas && save) {
     const pid = atlas.placeAt[hexCell];
@@ -900,9 +915,24 @@ function showHexCard(c: number) {
   showPanel('hex', `${close}${head(place ? `${place.town ? 'Town' : 'Village'}${place.realm ? ` · ${esc(place.realm)}` : ''}` : about.where || 'Hex',
       place ? esc(place.name) : about.title, place ? about.title + (place.id === save.home ? ' · <b>your home</b>' : '') : here ? 'You are here' : '')}
     <p>${about.text}</p>${chips(facts)}
+    ${findHints(c)}
     ${save.jobs.filter((q) => questTarget(q, atlas!) === c).map((q) => `<p class="note">◆ ${esc(questTitle(q, atlas!))} · ${esc(questStatus(q, atlas!, save!.caravan.cargo))}</p>`).join('')}
     ${here ? `${place ? `<button class="go" data-act="town">Enter ${esc(place.name)}</button>` : ''}<button class="ghost" data-act="look">Look around</button>`
       : p ? `<button class="go" data-act="travel" data-cell="${c}">Travel here<span>${p.guess ? 'perhaps ' : ''}${daysText(p.days)}</span></button>` : '<p class="dim">No way there that you know of.</p>'}`);
+}
+/** What can be made out of a hex's finds from a distance: reasons to walk into it. */
+function findHints(c: number): string {
+  if (!world || !atlas || !save) return '';
+  const HINT: Record<FindKind, string> = {
+    lookout: 'High ground: you could see a long way from the top.',
+    spring: 'A line of green in dry country: water, perhaps.',
+    forage: 'Game sign, and thickets in fruit.',
+    ruin: 'Something old stands out there.',
+    camp: 'Smoke stains on a rock: someone camped here once.',
+  };
+  const s = save;
+  const open = findsIn(world, atlas, c, params.seed).filter((k) => findReady(k, s.finds[`${c}:${k}`], s.day));
+  return open.map((k) => `<p class="note">◇ ${HINT[k]}</p>`).join('');
 }
 const daysText = (d: number) => (d < 1 ? 'under a day' : d < 1.5 ? 'a day' : `${Math.round(d)} days`);
 const agoText = (d: number) => (d < 1 ? 'today' : d < 2 ? 'yesterday' : `${Math.floor(d)} days ago`);
@@ -1016,6 +1046,21 @@ function roadKicker() {
   if (!world || !save) return 'On the road';
   return `On the road · ${BIOMES[world.biome[save.cell]].name} · ${dateText(save.day, north())}`;
 }
+const SPOTTED: Record<FindKind, string> = {
+  lookout: 'High ground: a cairn on the top.', spring: 'You spot a spring.', forage: 'Berries and a game trail nearby.',
+  ruin: 'Old stones, through the trees: ruins.', camp: 'Someone camped here once.',
+};
+/** A thing found in the hex, walked to: its card, unless it's been used (a spring fills again in a
+ * few days, foraging with the month). */
+function showFind(kind: FindKind) {
+  if (!world || !atlas || !save) return;
+  const s = save, key = `${s.cell}:${kind}`;
+  if (!findReady(kind, s.finds[key], s.day)) { toast(kind === 'spring' ? 'You drew from it lately. It needs a few days.' : 'Nothing more here for now.'); return; }
+  const rng = makeRng((params.seed * 7919 + ++s.draws * 104729) >>> 0);
+  const ctx = contextAt(world, s.cell, !!atlas.road[s.cell], seasonalTemp(world, s.cell, doyOf(s.day)) < SNOW_TEMP, false, s.caravan, rng, nameMaker(params.seed * 31 + s.draws));
+  showEncounter(FINDS[kind], ctx);
+  pendingChoices!.find = kind;
+}
 function showEncounter(e: Encounter, ctx: ReturnType<typeof contextAt>, quest?: string) {
   speed = 0;
   const choices = e.choices(ctx);
@@ -1023,7 +1068,7 @@ function showEncounter(e: Encounter, ctx: ReturnType<typeof contextAt>, quest?: 
     <div class="opts">${choices.map((ch, i) => opt('choose', esc(ch.label), ch.hint ? esc(ch.hint) : '', '', `data-i="${i}"`)).join('')}</div>`, true);
   pendingChoices = { e, ctx, choices, quest };
 }
-let pendingChoices: { e: Encounter; ctx: ReturnType<typeof contextAt>; choices: Choice[]; quest?: string } | null = null;
+let pendingChoices: { e: Encounter; ctx: ReturnType<typeof contextAt>; choices: Choice[]; quest?: string; find?: FindKind } | null = null;
 /** What changed, as chips: good news green, bad news red. */
 function fxChips(lines: string[]) {
   if (!lines.length) return '';
@@ -1032,9 +1077,14 @@ function fxChips(lines: string[]) {
 }
 function choose(i: number) {
   if (!pendingChoices || !save) return;
-  const { e, ctx, choices, quest } = pendingChoices;
+  const { e, ctx, choices, quest, find } = pendingChoices;
   pendingChoices = null;
   const out: Outcome = choices[i].resolve(ctx);
+  // A find is used once something comes of it (walking away leaves it for later).
+  if (find && Object.keys(out.effect).length) {
+    save.finds[`${save.cell}:${find}`] = save.day;
+    hexSend({ type: 'primundi-used', kind: find });
+  }
   const lines = applyEffect(save.caravan, out.effect, ctx.name, save.day);
   const q = quest ? save.jobs.find((x) => x.id === quest) : undefined;
   if (q && out.effect.questDone) { q.done = true; lines.push(`job done: back to ${atlas!.places[q.from].name}`); labels.rebuild(); }
@@ -1344,6 +1394,8 @@ function toast(text: string, ms = 3500) {
   reveal: (cells: number[]) => reveal(cells),
   revealRing: () => reveal(frontier()),
   travelTo, setSpeed, advance, openTown, openHex, closeHex, plan,
+  /** What there is to find in a hex (finds.ts). */
+  findsIn: (c: number) => (world && atlas ? findsIn(world, atlas, c, params.seed) : []),
   encounter: (id?: string) => {
     if (!world || !atlas || !save) return;
     const rng = makeRng(Date.now() >>> 0);

@@ -32,7 +32,8 @@ import { PROP_STRIDE } from './hextown.ts';
 import { familyOf, loadHouses, buildHouses, buildProps, houseMaterial, houseNight, HOUSE_MODES, type HouseMode, type HousePack, type Building } from './hexhouses.ts';
 import { snowGround, snowContext } from './hexsnow.ts';
 import { HexFog } from './primundi/hexfog.ts';
-import { Nav, Caravan, townSpots, townLandmark, noticeBoard, LANDMARKS, type TownSpot } from './primundi/hexcaravan.ts';
+import { Nav, Caravan, townSpots, townLandmark, noticeBoard, findModel, LANDMARKS, type TownSpot } from './primundi/hexcaravan.ts';
+import { makeRng } from './rng.ts';
 import { noiseTexture } from './primundi/fog.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -73,6 +74,9 @@ let gameSeen = new Set((h.get('seen') ?? '').split('.').filter(Boolean).map(Numb
  * caravan came in from. */
 let gameTown = h.get('town') ?? '';
 let gameFrom = Number(h.get('from') ?? -1);
+/** Primundi: what there is to find in this hex (finds.ts kinds), and which of them are used up. */
+let gameFinds = (h.get('finds') ?? '').split('.').filter(Boolean);
+let gameUsed = new Set((h.get('used') ?? '').split('.').filter(Boolean));
 const hexFog = game ? new HexFog(noiseTexture()) : null;
 if (game) {
   document.body.classList.add('primundi');
@@ -114,7 +118,8 @@ function applyHash(hash: string) {
   }
   opts.radiusKm = Number(q.get('radius')) || LOCAL_DEFAULTS.radiusKm;
   cell = Number(q.get('cell') ?? -1);
-  if (game) { gameSeen = new Set((q.get('seen') ?? '').split('.').filter(Boolean).map(Number)); gameTown = q.get('town') ?? ''; gameFrom = Number(q.get('from') ?? -1); }
+  if (game) { gameSeen = new Set((q.get('seen') ?? '').split('.').filter(Boolean).map(Number)); gameTown = q.get('town') ?? ''; gameFrom = Number(q.get('from') ?? -1);
+    gameFinds = (q.get('finds') ?? '').split('.').filter(Boolean); gameUsed = new Set((q.get('used') ?? '').split('.').filter(Boolean)); }
   for (const k of [...back.keys()]) back.delete(k);
   for (const [k, v] of q) if (!['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around', 'plants', 'houses'].includes(k)) back.set(k, v);
 }
@@ -1615,6 +1620,19 @@ function navFor(m: LocalMap): Nav {
   navMap = m;
   return nav;
 }
+/** The view's atmosphere and shadows on materials added after a build (the caravan's, the finds'),
+ * once each: adding them twice breaks a shader (see houseMaterial). */
+function dress(root: THREE.Object3D) {
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    for (const mat of [mesh.material].flat()) {
+      if (mat.userData.dressed || (mat as THREE.MeshBasicMaterial).isMeshBasicMaterial || (mat as THREE.ShaderMaterial).isShaderMaterial) continue;
+      mat.userData.dressed = true;
+      applyAerial(mat, true); csmMaterial(mat);
+    }
+  });
+}
 function setupCaravan(m: LocalMap) {
   nav = null;
   const K = houseMode === 'plain' ? 1 : style.town.scale;
@@ -1627,7 +1645,7 @@ function setupCaravan(m: LocalMap) {
   caravan.markerScale(1 / world.matrixWorld.getMaxScaleOnAxis());
   if (!cartName) {
     const c = caravan;
-    void loadHouses().then((p) => { const n = p.index.props.find((k) => k.endsWith('/Cart')); if (n && caravan === c) c.setCart(p.geos.get(n)!.clone()); });
+    void loadHouses().then((p) => { const n = p.index.props.find((k) => k.endsWith('/Cart')); if (n && caravan === c) { c.setCart(p.geos.get(n)!.clone()); dress(c.group); } });
   }
   const n = navFor(m);
   spots = [];
@@ -1645,6 +1663,8 @@ function setupCaravan(m: LocalMap) {
       n.block(bx, by, br, 2.2 * K, 0.8 * K);
     }
   }
+  placeFinds(m, n, K);
+  dress(caravan.group);
   spotLayer.replaceChildren(...spots.map((s, n) => {
     const b = document.createElement('button');
     b.textContent = s.label;
@@ -1677,6 +1697,56 @@ function setupCaravan(m: LocalMap) {
     arrival = null;
   }
 }
+const FIND_LABELS: Record<string, string> = { lookout: 'Lookout', spring: 'Spring', forage: 'Foraging', ruin: 'Ruins', camp: 'Old camp' };
+/** The hex's finds (finds.ts) on the ground: a lookout on the high point, a spring in a hollow,
+ * foraging where it's wooded, ruins and old camps out in the country. Where is the same every visit. */
+function placeFinds(m: LocalMap, n: Nav, K: number) {
+  if (!gameFinds.length) return;
+  const rng = makeRng((m.cell * 2246822519 + 3266489917) >>> 0);
+  const { res, size, layers } = m, step = size / (res - 1), half = size / 2;
+  const wood = (x: number, y: number) => layers[(Math.max(0, Math.min(res - 1, Math.round((y + half) / step))) * res + Math.max(0, Math.min(res - 1, Math.round((x + half) / step)))) * LAYERS + L_FOREST];
+  const R0 = m.localWidth * 0.5;
+  // Away from the town, if there is one, and from each other.
+  const lm = townLandmark(m.houses);
+  const town: [number, number, number] | null = lm >= 0 && gameTown ? [m.houses[lm], m.houses[lm + 1], 140] : null;
+  const taken: [number, number][] = [];
+  const clear = (x: number, y: number) => n.ok(x, y) && (!town || Math.hypot(x - town[0], y - town[1]) > town[2]) && taken.every(([a, b]) => Math.hypot(x - a, y - b) > 110);
+  const samples = (count: number, lo: number, hi: number) => {
+    const out: [number, number][] = [];
+    for (let k = 0; k < count * 4 && out.length < count; k++) {
+      const a = rng() * Math.PI * 2, r = (lo + (hi - lo) * Math.sqrt(rng())) * R0;
+      const x = Math.cos(a) * r, y = Math.sin(a) * r;
+      if (clear(x, y)) out.push([x, y]);
+    }
+    return out;
+  };
+  for (const kind of gameFinds) {
+    let at: [number, number] | null = null;
+    if (kind === 'lookout') {
+      let best = -Infinity;
+      for (const [x, y] of samples(260, 0.05, 0.85)) { const g = groundAtMap(m, x, y); if (g > best) { best = g; at = [x, y]; } }
+    } else if (kind === 'spring') {
+      let best = Infinity;
+      for (const [x, y] of samples(120, 0.2, 0.8)) { const g = groundAtMap(m, x, y) + rng() * 4; if (g < best) { best = g; at = [x, y]; } }
+    } else if (kind === 'forage') {
+      let best = -1;
+      for (const [x, y] of samples(80, 0.15, 0.8)) { const v = wood(x, y) + rng() * 0.3; if (v > best) { best = v; at = [x, y]; } }
+    } else at = samples(1, 0.3, 0.85)[0] ?? null;
+    if (!at) continue;
+    const [x, y] = at;
+    taken.push(at);
+    const obj = findModel(kind, K, m.cell * 31 + kind.length);
+    obj.position.set(x, groundAtMap(m, x, y) - 0.05, -y);
+    obj.rotation.y = rng() * Math.PI * 2;
+    const seen = kind === 'lookout';
+    obj.visible = seen;
+    caravan!.group.add(obj);
+    n.block(x, y, 0, 3 * K, 3 * K);
+    const tall = kind === 'lookout' ? 6.5 : kind === 'ruin' ? 3.5 : 2.5;
+    spots.push({ tab: '', label: FIND_LABELS[kind] ?? kind, door: [x, y - 3 * K], top: [x, y, groundAtMap(m, x, y) + tall * K], centre: [x, y], radius: 2.5 * K,
+      find: kind, seen, used: gameUsed.has(kind), obj });
+  }
+}
 /** Once the view has settled on a new hex: the walk in. */
 function arriveCaravan() {
   const f = arrival; arrival = null;
@@ -1695,7 +1765,8 @@ function goSpot(s: TownSpot) {
   const b = spotLayer.children[spots.indexOf(s)];
   const ok = goTo(s.door[0], s.door[1], () => {
     b?.classList.remove('going');
-    parent.postMessage({ type: 'primundi-spot', tab: s.tab }, location.origin);
+    if (s.find) parent.postMessage({ type: 'primundi-find', kind: s.find }, location.origin);
+    else parent.postMessage({ type: 'primundi-spot', tab: s.tab }, location.origin);
   });
   if (ok) b?.classList.add('going');
 }
@@ -1713,6 +1784,7 @@ function tap(cx: number, cy: number) {
   let best: TownSpot | null = null, bd = Infinity;
   camera.updateMatrixWorld();
   for (const s of spots) {
+    if (s.find && (!s.seen || s.used)) continue;
     const mid = (groundAt(s.centre[0], s.centre[1]) + s.top[2]) / 2;
     const c = onScreen(s.centre[0], s.centre[1], mid), e = onScreen(s.centre[0] + s.radius, s.centre[1], mid);
     if (!c || !e) continue;
@@ -1753,8 +1825,15 @@ function updateCaravan(dt: number) {
   if (caravan.moving && controls.touched < followFrom) controls.glideTo(caravan.x, -caravan.y);
   camera.updateMatrixWorld();
   const far = Math.max(600, map.localWidth * 0.5);
+  const sight = 110 * Math.sqrt(style.town.scale);
   spots.forEach((s, n) => {
     const b = spotLayer.children[n] as HTMLElement;
+    if (s.find && !s.seen && Math.hypot(caravan!.x - s.centre[0], caravan!.y - s.centre[1]) < sight) {
+      s.seen = true;
+      if (s.obj) s.obj.visible = true;
+      parent.postMessage({ type: 'primundi-spotted', kind: s.find }, location.origin);
+    }
+    if (s.find && (!s.seen || s.used)) { b.classList.add('far'); return; }
     const c = onScreen(s.top[0], s.top[1], s.top[2]);
     const d = camera.position.distanceTo(tmpV.set(s.top[0], s.top[2], -s.top[1]));
     const show = !!c && c[0] > -40 && c[0] < innerWidth + 40 && c[1] > 0 && c[1] < innerHeight + 40 && d < far;
@@ -1930,6 +2009,11 @@ if (embedded) {
     if (e.data.type === 'mundi-hex-warm') { applyHash(e.data.hash); warm(); }
     if (e.data.type === 'mundi-hex-snapshot') snapshot(e.data.hash);
     if (e.data.type === 'mundi-hex-valleys') takeValleys(e.data.hash, e.data.n, e.data.half);
+    // Primundi: a find has been used; its label goes.
+    if (e.data.type === 'primundi-used') {
+      gameUsed.add(String(e.data.kind));
+      for (const s of spots) if (s.find === e.data.kind) s.used = true;
+    }
     // Primundi: more cells revealed while the hex is open; the fog over them clears.
     if (e.data.type === 'primundi-seen' && hexFog) {
       const more = (e.data.cells as number[]).filter((c) => !gameSeen.has(c));
