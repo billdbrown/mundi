@@ -16,6 +16,7 @@ import { treeGeometry, treeMaterial, TUFT } from './flora.ts';
 import { FIRST, FAMILIES, VARIANTS } from './species.ts';
 import { loadPack, packModel, packMaterial, packStill, PackPlants, type Pack } from './hexplants.ts';
 import { wind, WindLines, clouds, cloudMaterial } from './hexwind.ts';
+import { Grass, grassField } from './hexgrass.ts';
 import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
 import { parseSeed } from './seedname.ts';
 import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, L_FOREST, L_SNOW, L_LUSH, HOUSE_STRIDE, type LocalMap, type LocalOptions, H_LOG, H_LILYPAD, isFlower, H_FERN, H_STUMP, isHexKind } from './hexlocal.ts';
@@ -253,6 +254,7 @@ resize();
 
 let map: LocalMap | null = null;
 let windLines: WindLines | null = null;
+let grass: Grass | null = null;
 let world = new THREE.Group();
 scene.add(world);
 let outline: THREE.Line | null = null;
@@ -811,6 +813,12 @@ function build(m: LocalMap) {
   canopy.tCanopy.value?.dispose();
   canopy.tCanopy.value = canopyMap(m);
   canopy.uCanopyBox.value.set(half, size);
+  // The grass carpet (hexgrass.ts), from the ground as painted.
+  grass?.dispose();
+  const gf = grassField(m, tg.getAttribute('color').array as Float32Array, tg.getAttribute('grain').array as Float32Array,
+    canopy.tCanopy.value.image.data as Uint8Array, CANOPY_RES);
+  grass = new Grass(gf, m);
+  world.add(grass.group);
   // A cold open can beat the pack: draw with the planet's models, then swap once it is here.
   if (!pack) void fetchPack().then(() => { if (map === m) redrawPlants(); });
 
@@ -1022,6 +1030,9 @@ function buildPlants(m: LocalMap, inFrame: (x: number, y: number) => boolean): T
       continue;
     }
     if (isHexKind(k)) continue;   // (the pack's alone: until it loads, or where it has none)
+    // Cold tufts (the pack has no snowy grass): the grass carpet stands in; the planet's own tuft
+    // model, life-size, was a black slab up close.
+    if (k === TUFT && usePack) continue;
     // Grass tufts and reeds are too fine for the stylised looks: scribbles at this distance.
     if (!st.plants.tufts && (k === TUFT || (k >= FIRST && FAMILIES[Math.floor((k - FIRST) / VARIANTS)] === 'reeds'))) continue;
     if (!byKind.has(k)) byKind.set(k, []);
@@ -1416,13 +1427,17 @@ const loop = () => {
   frames++; fpsT += dt;
   waterTime.value += dt;
   wind.uWindT.value += dt;
+  if (map && grass) grass.update(camera.position, camera.position.y - waterAt(camera.position.x, -camera.position.z));
   if (map && windLines) {
-    // Around where the camera looks, sized to how far off it is (from up high, longer and fewer
-    // would be lost anyway: they fade out past a few hundred metres).
-    const t = controls.target, dist = camera.position.distanceTo(t);
-    const sc = Math.max(0.5, Math.min(4, dist / 120));
-    windLines.mesh.visible = dist < map.size * 0.9;
-    windLines.update(wind.uWindT.value, t.x, -t.z, Math.min(map.size * 0.4, 40 + dist * 0.7), sc, groundAt);
+    // Sized by the camera's height over the ground, placed a little way ahead of it: near enough
+    // to read as air moving past, not contrails across the far hills.
+    const hAG = Math.max(1.5, camera.position.y - waterAt(camera.position.x, -camera.position.z));
+    const sc = Math.max(0.35, Math.min(3, hAG / 14));
+    camera.getWorldDirection(fwd);
+    const ahead = Math.min(camera.position.distanceTo(controls.target), 25 + hAG * 2.5);
+    const ax = camera.position.x + fwd.x * ahead, ay = -(camera.position.z + fwd.z * ahead);
+    windLines.mesh.visible = hAG < map.size * 0.4;
+    windLines.update(wind.uWindT.value, ax, ay, 15 + hAG * 2, sc, groundAt);
   }
   // Playing: a day in 48 seconds.
   if (playing && map) { userHour = (hourNow() + dt * 0.5) % 24; applyTime(); }

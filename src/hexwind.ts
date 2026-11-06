@@ -85,7 +85,7 @@ export class WindLines {
   private readonly oAttr: THREE.InstancedBufferAttribute;
   private readonly pAttr: THREE.InstancedBufferAttribute;
   private readonly born: Float32Array;
-  readonly uniforms = { uTime: wind.uWindT, uWindDir: wind.uWindDir, uScale: { value: 1 }, uColor: { value: new THREE.Color(1, 1, 1) }, uOpacity: { value: 0.55 } };
+  readonly uniforms = { uTime: wind.uWindT, uWindDir: wind.uWindDir, uScale: { value: 1 }, uColor: { value: new THREE.Color(1, 1, 1) }, uOpacity: { value: 0.42 } };
 
   constructor(n = 28, seg = 40) {
     this.n = n;
@@ -134,7 +134,7 @@ export class WindLines {
           vec4 wp = modelMatrix * vec4(p, 1.0), wp2 = modelMatrix * vec4(p2, 1.0);
           vec3 t = normalize(wp2.xyz - wp.xyz), toCam = normalize(cameraPosition - wp.xyz);
           vec3 side = normalize(cross(t, toCam));
-          float w = 0.09 * uScale * sin(3.14159 * position.x) * length(modelMatrix[0].xyz);
+          float w = 0.07 * uScale * sin(3.14159 * position.x) * length(modelMatrix[0].xyz);
           wp.xyz += side * position.y * w;
           vA = sin(3.14159 * clamp(age, 0.0, 1.0)) * smoothstep(0.0, 0.25, position.x) * (s >= 0.0 && s <= 1.0 ? 1.0 : 0.0);
           gl_Position = projectionMatrix * viewMatrix * wp;
