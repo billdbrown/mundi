@@ -23,6 +23,7 @@ import type { HexJob, ValleyJob } from './hexworker.ts';
 import type { Spot } from './debug.ts';
 import { HexCamera, FEEL } from './hexcamera.ts';
 import { Walker, pegman } from './hexwalk.ts';
+import { mountHud } from './hexui.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -1394,6 +1395,11 @@ if (embedded) {
   });
   parent.postMessage({ type: 'mundi-hex-ready' }, location.origin);
 }
+// The screen furniture as a HUD (hexui.ts); #ui=classic keeps the old panel.
+if (h.get('ui') !== 'classic') mountHud({
+  heading: () => controls.heading,
+  faceNorth: () => controls.turnTo(0),
+});
 void LAYERS; void L_DEPTH;
 (window as unknown as Record<string, unknown>).hex = {
   get map() { return map; },

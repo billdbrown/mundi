@@ -343,6 +343,13 @@ export class HexCamera {
     if (this.camera.position.y < clear) { this.camera.position.y = clear; this.camera.lookAt(this.target); }
   }
 
+  /** Turn (eased) to face a heading, the short way round (the compass: north up). */
+  turnTo(yaw: number) {
+    const d = THREE.MathUtils.euclideanModulo(yaw - this.yawGoal + Math.PI, TAU) - Math.PI;
+    this.yawGoal += d;
+    this.yawVel = 0;
+    this.free = false;
+  }
   /** The camera's heading (0: north), for whoever takes over from it (walking). */
   get heading() { return this.yaw; }
 }
