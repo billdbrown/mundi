@@ -1,0 +1,14 @@
+# primundi.bill.computer: Primundi, the game (primundi.html), as static files from its own build
+# directory (deploy-primundi.sh copies dist/ and makes primundi.html the index). No Worker and no
+# Durable Object: games are saved in the browser, so it shares nothing with mundi.bill.computer.
+name = "primundi"
+compatibility_date = "2026-10-31"
+# Pinned because the API token has no account-level enumerate. Not a credential.
+account_id = "af045bb950d46af2b6aee70965d97f0a"
+
+[assets]
+directory = "./dist-primundi"
+
+[[routes]]
+pattern = "primundi.bill.computer"
+custom_domain = true

@@ -499,6 +499,19 @@ export class PlanetView {
   private clockRate = 0;
   /** When set, animation stops at this time, so renders are repeatable (visual tests). */
   private frozen: number | null = null;
+  /**
+   * Hooks for pages built on this view (Primundi). Each frame, after the camera has moved and
+   * before drawing: (seconds since the last frame, camera distance, sun direction, time).
+   */
+  readonly onFrame: ((dt: number, d: number, sun: THREE.Vector3, time: number) => void)[] = [];
+  /** Where the camera may go: given the (untilted) camera position each frame, moves it back in
+   * bounds. Null, the default, leaves it free. */
+  constrain: ((pos: THREE.Vector3) => void) | null = null;
+  /** How far the view tilts toward the horizon coming down: 1 as Mundi has it, less to look more
+   * straight down (Primundi, where the horizon is all fog). */
+  tiltScale = 1;
+  /** Something drawn with the planet, in its coordinates (radius 1 = sea level). */
+  addToPlanet(o: THREE.Object3D) { this.planet.add(o); }
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -752,7 +765,7 @@ export class PlanetView {
     // zooming in always closes on the spot you were looking at.
     const t = 1 - s(1.012, 1.5);
     // Up to ~75° at the lowest: with a 40° view the horizon stays in frame.
-    this.tilt = 1.3 * t * t;
+    this.tilt = 1.3 * t * t * this.tiltScale;
     this.tiltActive = this.tilt > 1e-4;
     if (this.tiltActive) {
       const up = this.camera.position.clone().normalize();
@@ -1160,6 +1173,7 @@ export class PlanetView {
       // Slow the orbit as you close in, so ground-level views stay controllable.
       this.controls.rotateSpeed = Math.min(1, (d - 1) * 0.55);
       this.controls.update();
+      if (this.constrain) { this.constrain(this.camera.position); d = this.camera.position.length(); }
       this.virtualPos.copy(this.camera.position);
       this.applyTilt(d);
       // The patch centres on the point in the middle of the view: the untilted camera's nadir.
@@ -1229,6 +1243,7 @@ export class PlanetView {
     const civOn = this.cloudU.uYear.value >= 0;
     this.civ.group.visible = civOn;
     if (civOn) this.civ.setVisibility(this.mapMode ? 2 : d, this.civBorders);
+    for (const f of this.onFrame) f(dt, d, this.sunDir, this.time);
     const cam = this.mapMode ? this.mapCam : this.camera;
     if (!this.gateReady) { this.renderStandIn(cam); return; }
     // The orbit terrain while it draws the same, or while the full one is still compiling.

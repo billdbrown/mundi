@@ -44,3 +44,13 @@ running dev server (`SPOT=coast|river|mountain`, `ALT=`, `ZOOM=`).
   (`wrangler secret put`); locally they come from `.dev.vars` (gitignored). To try claims
   locally: `npm run build && npx wrangler@4 dev` (serves dist/ and the Worker; `npm run dev` has no claims).
   Remove a claim: `curl -X DELETE https://mundi.bill.computer/api/claims/<seed> -H "x-mundi-key: <ADMIN_KEY>"`.
+
+## Primundi (the game)
+
+`primundi.html` + `src/primundi/` is **Primundi**, Mundi as a fog-of-war game, live at
+**https://primundi.bill.computer** (decided 2026-11-06; vault `wiki/decisions/2026-11-06-primundi.md`).
+Same build; `./deploy-primundi.sh` copies `dist/` to `dist-primundi/` with `primundi.html` as the
+index and deploys it with `wrangler.primundi.toml` (static only, saves live in the browser).
+It reaches into the shared code only through hooks that do nothing for Mundi: `PlanetView.onFrame`,
+`constrain`, `tiltScale`, `addToPlanet` (render.ts) and the hex view's `game=1&seen=` link
+parameters (hex.ts). `window.primundi` is its debug handle (`revealRing()`, `reveal([cells])`).

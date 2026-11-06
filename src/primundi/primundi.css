@@ -1,0 +1,81 @@
+/* Primundi (primundi.html). Mundi's style.css comes first, for the loader and the hex frame. */
+
+body.primundi { background: #0b0d12; }
+
+/* --- The launch screen: a parchment card over a dark storm, after Teklek's setup. --- */
+#launch { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; overflow: auto;
+  background:
+    radial-gradient(ellipse 60% 45% at 30% 30%, rgba(120, 130, 150, .16), transparent 70%),
+    radial-gradient(ellipse 55% 40% at 75% 70%, rgba(90, 100, 125, .14), transparent 70%),
+    radial-gradient(ellipse at 50% 120%, #1d2029, #0b0d12 70%);
+  animation: pm-storm 18s ease-in-out infinite alternate; }
+@keyframes pm-storm { from { background-position: 0 0, 0 0, 0 0; } to { background-position: 40px -20px, -50px 25px, 0 0; } }
+#launch[hidden] { display: none; }
+#launch .card { width: min(440px, calc(100vw - 32px)); box-sizing: border-box; margin: 24px 0;
+  background: #f3e8d2; color: #2b2116; border: 1px solid #d9c49c; border-radius: 10px; padding: 28px 28px 26px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .55); font: 14px/1.45 Georgia, 'Iowan Old Style', 'Palatino Linotype', serif; }
+#launch h1 { margin: 0; font-size: 34px; font-variant: small-caps; letter-spacing: .04em; font-weight: 600; }
+#launch .tag { margin: 2px 0 18px; font-style: italic; color: #7a6650; }
+#launch fieldset { border: 1px solid #d3bd92; border-radius: 8px; margin: 0 0 14px; padding: 10px 14px 12px; }
+#launch legend { color: #2b2116; font-variant: small-caps; font-weight: 600; font-size: 15px; letter-spacing: .03em; padding: 0 6px; }
+#launch input[type=text] { width: 100%; box-sizing: border-box; font: inherit; font-size: 15px; color: #2b2116;
+  background: #fbf5e8; border: 1px solid #cdb68a; border-radius: 6px; padding: 7px 9px; }
+#launch input[type=text]:focus { outline: 2px solid #a55a2f55; border-color: #a55a2f; }
+#launch .seed { display: flex; gap: 6px; }
+#launch #dice { font-size: 20px; line-height: 1; background: #fbf5e8; color: #5b4630; border: 1px solid #cdb68a; border-radius: 6px; padding: 0 10px; cursor: pointer; }
+#launch .bias { display: block; margin: 3px 0; cursor: pointer; }
+#launch .bias span { color: #8a7660; font-size: 12.5px; margin-left: 4px; font-style: italic; }
+#launch .go { display: block; width: 100%; font: 600 15px system-ui, sans-serif; color: #fff; background: #a5532d;
+  border: 1px solid #7e3b1d; border-radius: 7px; padding: 11px; cursor: pointer; }
+#launch .go:hover { background: #b65f37; }
+#launch .go span { display: block; font-weight: 400; font-size: 12px; opacity: .85; margin-top: 2px; }
+#launch .or { text-align: center; color: #8a7660; font-style: italic; margin: 12px 0 10px; }
+
+/* --- The bar: bottom centre, over the planet and the hex alike. --- */
+#bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 70; display: flex; align-items: center; gap: 8px;
+  padding: 6px; border-radius: 16px; background: rgba(13, 17, 24, .78); backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, .11); box-shadow: 0 8px 26px rgba(0, 0, 0, .35);
+  font: 13px system-ui, sans-serif; color: #dfe6ee; user-select: none; }
+#launch:not([hidden]) ~ #bar, body:has(#launch:not([hidden])) #bar { display: none; }
+#bar svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+#bar button { font: inherit; color: inherit; background: transparent; border: 0; border-radius: 11px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 11px; }
+#bar button:hover { background: rgba(255, 255, 255, .08); }
+#bar .civ { display: flex; flex-direction: column; padding: 0 10px 0 8px; line-height: 1.2; min-width: 70px; }
+#bar .civ b#civname { font-family: Georgia, serif; font-size: 14px; color: #f3e8d2; font-weight: 600; }
+#bar .civ span { font-size: 11px; color: #9aa8b5; }
+#bar .civ span b { color: #dfe6ee; font-weight: 600; }
+#bar .seg { display: flex; background: rgba(255, 255, 255, .06); border-radius: 12px; padding: 2px; }
+#bar .seg button.on { background: rgba(242, 193, 78, .18); color: #f2c14e; }
+#bar .end { background: #a5532d; color: #fff; font-weight: 600; padding: 9px 16px; }
+#bar .end:hover { background: #b65f37; }
+#bar .end.flash { animation: pm-end .4s ease-out; }
+@keyframes pm-end { from { box-shadow: 0 0 0 0 rgba(242, 193, 78, .7); } to { box-shadow: 0 0 0 14px rgba(242, 193, 78, 0); } }
+#bar .tools { display: flex; border-left: 1px solid rgba(255, 255, 255, .1); padding-left: 4px; }
+#bar .tools button { padding: 8px; }
+#bar .debug.on { background: rgba(120, 190, 255, .2); color: #9cd0ff; }
+#b-sound .off-ico, #b-sound.off .on-ico { display: none; }
+#b-sound.off .off-ico { display: block; }
+#b-sound.off { color: #7d8b95; }
+@media (max-width: 560px) {
+  #bar { bottom: 10px; gap: 4px; }
+  #bar .civ { display: none; }
+  #bar .seg button { padding: 8px; }
+}
+
+/* The hex frame sits under the bar. */
+#hexframe { z-index: 50; }
+/* Hover readout and labels: Mundi's look. */
+body.primundi #info span { color: #9aa8b5; }
+body.revealing #view canvas { cursor: crosshair; }
+#labels { position: fixed; inset: 0; pointer-events: none; z-index: 20; }
+body.in-hex #labels { display: none; }
+.lbl { position: absolute; left: 0; top: 0; white-space: nowrap; font: 600 13px Georgia, serif; color: #f3e8d2;
+  padding: 2px 8px; border-radius: 6px; background: rgba(20, 16, 12, .62); border: 1px solid rgba(243, 232, 210, .25);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
+.lbl.own { color: #f2c14e; border-color: rgba(242, 193, 78, .45); }
+.lbl.other { font-weight: 400; font-style: italic; }
+
+/* While the planet's shaders compile (first visit only): cover the unfogged stand-in. */
+body.gathering::after { content: 'The storm gathers…'; position: fixed; inset: 0; z-index: 45; display: grid; place-items: center;
+  background: radial-gradient(ellipse at 50% 60%, #262a33, #0b0d12 70%); color: #9aa8b5; font: italic 16px Georgia, serif; }

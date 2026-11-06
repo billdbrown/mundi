@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-primundi/
 *.log
 .DS_Store
 test/visual/current/

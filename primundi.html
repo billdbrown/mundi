@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Primundi</title>
+  <meta name="description" content="A world under storm. Settle one hex, push out, learn its shape." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%2214%22 fill=%22%23353a44%22/%3E%3Cpath d=%22M16 9l6 3.5v7L16 23l-6-3.5v-7z%22 fill=%22%23d9b44a%22/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/src/style.css" />
+  <link rel="stylesheet" href="/src/primundi/primundi.css" />
+</head>
+<body class="primundi">
+  <div id="view"></div>
+  <div id="labels"></div>
+  <div id="info" hidden></div>
+
+  <nav id="bar" aria-label="Game">
+    <span class="civ"><b id="civname"></b><span>Turn <b id="turn">1</b></span></span>
+    <span class="seg">
+      <button id="b-hex" title="Down into the hex">
+        <svg viewBox="0 0 24 24"><path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z"/></svg>Hex</button>
+      <button id="b-planet" title="Up to the planet">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c3 3 3 14 0 17M12 3.5c-3 3-3 14 0 17"/></svg>Planet</button>
+    </span>
+    <button id="b-end" class="end">End turn</button>
+    <span class="tools">
+      <button id="b-reveal" class="debug" title="Debug: reveal a tile (on the planet, click a storm hex beside your land; in a hex, clears one neighbour)">
+        <svg viewBox="0 0 24 24"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg></button>
+      <button id="b-sound" title="Sound">
+        <svg viewBox="0 0 24 24" class="on-ico"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4.5 4.5 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11"/></svg>
+        <svg viewBox="0 0 24 24" class="off-ico"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg></button>
+      <button id="b-menu" title="Menu">
+        <svg viewBox="0 0 24 24"><path d="M4.5 7h15M4.5 12h15M4.5 17h15"/></svg></button>
+    </span>
+  </nav>
+
+  <div id="launch" hidden></div>
+  <script type="module" src="/src/primundi/main.ts"></script>
+</body>
+</html>

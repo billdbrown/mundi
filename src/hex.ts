@@ -29,6 +29,8 @@ import { HexCamera, FEEL } from './hexcamera.ts';
 import { Walker, pegman } from './hexwalk.ts';
 import { mountHud } from './hexui.ts';
 import { snowGround, snowContext } from './hexsnow.ts';
+import { HexFog } from './primundi/hexfog.ts';
+import { noiseTexture } from './primundi/fog.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -55,6 +57,19 @@ let userHour: number | null = h.get('time') !== null && h.get('time') !== '' ? (
 let playing = false;
 /** The fill light's strength, as a share of the sun's. */
 const fillK = h.get('fill') !== null ? Number(h.get('fill')) : 0.28;
+/** Primundi (primundi.html): the hex is a game's, and neighbours not yet revealed (not in `seen` in the link)
+ * stand in fog. The game's own bar replaces "← planet", and the inset map, which would show what
+ * the fog hides, is gone. */
+const game = h.get('game') === '1';
+let gameSeen = new Set((h.get('seen') ?? '').split('.').filter(Boolean).map(Number));
+const hexFog = game ? new HexFog(noiseTexture()) : null;
+if (game) {
+  document.body.classList.add('primundi');
+  const css = document.createElement('style');
+  css.textContent = '.primundi .hud-back, .primundi #back, .primundi #inset, .primundi .hud-time { display: none !important; }';
+  document.head.appendChild(css);
+  hexFog!.onStrike = (near) => parent.postMessage({ type: 'primundi-thunder', near }, location.origin);
+}
 /** The neighbouring hexes, drawn blurred behind the tile (N, or the panel). */
 let showCtx = h.get('around') !== '0';
 /** Plant models from the free Ultimate Nature pack (hexplants.ts; Bill's pick of four, 2026-11-05),
@@ -88,6 +103,7 @@ function applyHash(hash: string) {
   }
   opts.radiusKm = Number(q.get('radius')) || LOCAL_DEFAULTS.radiusKm;
   cell = Number(q.get('cell') ?? -1);
+  if (game) gameSeen = new Set((q.get('seen') ?? '').split('.').filter(Boolean).map(Number));
   for (const k of [...back.keys()]) back.delete(k);
   for (const [k, v] of q) if (!['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around', 'plants'].includes(k)) back.set(k, v);
 }
@@ -456,6 +472,18 @@ function addContext(aerial: boolean) {
   mesh.layers.set(1);
   world.add(mesh);
   ctxMesh = mesh;
+  if (hexFog) {
+    // The ground the fog stands on: as drawn here (the tile's own near it), water at its surface.
+    const tileR = reach;
+    const fogGround = (x: number, y: number) => {
+      const own = 1 - THREE.MathUtils.smoothstep(Math.hypot(x, y) / tileR, 1.05, 1.25);
+      let g = groundAtMap(c, x, y);
+      if (own > 0) g += (groundAtMap(map!, x, y) - g) * own;
+      return c.sea ? Math.max(g, 0) : g;
+    };
+    hexFog.set(c, map.localWidth, fogGround, [...gameSeen, map.cell]);
+    world.add(hexFog.mesh);
+  }
 
   // The occluder: every triangle outside the hex (inside, it would fight the tile's own ground).
   if (ctxOccluder) { world.remove(ctxOccluder); ctxOccluder.geometry.dispose(); (ctxOccluder.material as THREE.Material).dispose(); }
@@ -1509,7 +1537,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'BracketLeft') { playing = false; setTime(hourNow() - 0.5); }
   if (e.code === 'BracketRight') { playing = false; setTime(hourNow() + 0.5); }
   if (e.code === 'KeyP') $('play').click();
-  if (e.code === 'Escape' && embedded) goBack();
+  if (e.code === 'Escape' && embedded && !game) goBack();
   if (e.code === 'KeyT') setTilt(!tiltOn);
   if (e.code === 'KeyN') setAround(!showCtx);
   if (e.code === 'KeyH' && outline) outline.visible = !outline.visible;
@@ -1566,8 +1594,18 @@ const loop = () => {
     renderPass.camera = camera;
   }
   fitShadows(renderPass.camera as THREE.PerspectiveCamera);
+  if (hexFog && map) {
+    // The fog works in the map's own space: the camera brought into it, and local → clip.
+    const rc = renderPass.camera as THREE.PerspectiveCamera;
+    world.updateMatrixWorld(); rc.updateMatrixWorld();
+    fogCam.copy(rc.position);
+    world.worldToLocal(fogCam);
+    fogMvp.multiplyMatrices(rc.projectionMatrix, rc.matrixWorldInverse).multiply(world.matrixWorld);
+    hexFog.update(fogCam, fogMvp, realSun, dt, timer.getElapsed());
+  }
   renderFrame();
 };
+const fogCam = new THREE.Vector3(), fogMvp = new THREE.Matrix4();
 renderer.setAnimationLoop(embedded && cell < 0 ? null : loop);
 
 function renderFrame() {
@@ -1621,6 +1659,12 @@ if (embedded) {
     if (e.data.type === 'mundi-hex-warm') { applyHash(e.data.hash); warm(); }
     if (e.data.type === 'mundi-hex-snapshot') snapshot(e.data.hash);
     if (e.data.type === 'mundi-hex-valleys') takeValleys(e.data.hash, e.data.n, e.data.half);
+    // Primundi: more cells revealed while the hex is open; the fog over them clears.
+    if (e.data.type === 'primundi-seen' && hexFog) {
+      const more = (e.data.cells as number[]).filter((c) => !gameSeen.has(c));
+      for (const c of more) gameSeen.add(c);
+      hexFog.reveal(more);
+    }
     if (e.data.type === 'mundi-hex-prefetch') {
       // The world settings may be new; which hex is shown is not, until it is opened.
       const shown = cell;
