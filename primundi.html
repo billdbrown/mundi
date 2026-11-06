@@ -2,9 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0d12" />
   <title>Primundi</title>
-  <meta name="description" content="A world under storm. Settle one hex, push out, learn its shape." />
+  <meta name="description" content="A world under storm. Take to the road with a caravan, trade, and learn its shape." />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%2214%22 fill=%22%23353a44%22/%3E%3Cpath d=%22M16 9l6 3.5v7L16 23l-6-3.5v-7z%22 fill=%22%23d9b44a%22/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/src/style.css" />
   <link rel="stylesheet" href="/src/primundi/primundi.css" />
@@ -14,18 +15,37 @@
   <div id="labels"></div>
   <div id="info" hidden></div>
 
+  <header id="hud" hidden>
+    <span class="date" id="date"></span>
+    <span class="stat" title="Orrels"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2.5"/></svg><b id="s-orrels"></b></span>
+    <span class="stat" title="Water: days left"><svg viewBox="0 0 24 24"><path d="M12 3.5c3.5 4.5 6 7.6 6 10.5a6 6 0 0 1-12 0c0-2.9 2.5-6 6-10.5z"/></svg><b id="s-water"></b></span>
+    <span class="stat" title="Rations: days left"><svg viewBox="0 0 24 24"><path d="M5 11h14l-1.5 8h-11zM8 11V8a4 4 0 0 1 8 0v3"/></svg><b id="s-rations"></b></span>
+    <span class="stat" title="Cargo: loads carried, of what the beasts can take"><svg viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/></svg><b id="s-cargo"></b></span>
+    <span class="stat" title="People"><svg viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19c.6-3.4 2.7-5.2 5.5-5.2s4.9 1.8 5.5 5.2"/><circle cx="16.5" cy="9.5" r="2.4"/><path d="M15.5 14c2.6 0 4.3 1.6 4.9 4.6"/></svg><b id="s-people"></b></span>
+  </header>
+  <div id="me" hidden><i></i></div>
+  <aside id="card" hidden></aside>
+  <div id="toast"></div>
+
   <nav id="bar" aria-label="Game">
-    <span class="civ"><b id="civname"></b><span>Turn <b id="turn">1</b></span></span>
-    <span class="seg">
-      <button id="b-hex" title="Down into the hex">
-        <svg viewBox="0 0 24 24"><path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z"/></svg>Hex</button>
-      <button id="b-planet" title="Up to the planet">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c3 3 3 14 0 17M12 3.5c-3 3-3 14 0 17"/></svg>Planet</button>
+    <button class="civ" title="Find the caravan"><b id="civname"></b></button>
+    <span class="seg speed">
+      <button id="b-s0" title="Pause (space)"><svg viewBox="0 0 24 24"><path d="M8.5 6v12M15.5 6v12"/></svg></button>
+      <button id="b-s1" title="Walk (1)"><svg viewBox="0 0 24 24"><path d="M9 6l7 6-7 6z"/></svg></button>
+      <button id="b-s2" title="Faster (2)"><svg viewBox="0 0 24 24"><path d="M5 6l6.5 6L5 18zM12.5 6l6.5 6-6.5 6z"/></svg></button>
+      <button id="b-s3" title="Fastest (3)"><svg viewBox="0 0 24 24"><path d="M2.5 7l5 5-5 5zM9.5 7l5 5-5 5zM16.5 7l5 5-5 5z"/></svg></button>
     </span>
-    <button id="b-end" class="end">End turn</button>
+    <button id="b-stop" class="stop" hidden title="Stop here"><svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg></button>
+    <button id="b-town" class="town" hidden title="The town here"><svg viewBox="0 0 24 24"><path d="M4 20V10l5-4 5 4v10M14 20v-7h6v7M3 20h18M8 20v-4h2v4"/></svg><span>Town</span></button>
+    <span class="seg">
+      <button id="b-hex" title="Look around this hex">
+        <svg viewBox="0 0 24 24"><path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z"/></svg><span>Look</span></button>
+      <button id="b-planet" title="The world map">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c3 3 3 14 0 17M12 3.5c-3 3-3 14 0 17"/></svg><span>Map</span></button>
+    </span>
     <span class="tools">
-      <button id="b-reveal" class="debug" title="Debug: reveal a tile (on the planet, click a storm hex beside your land; in a hex, clears one neighbour)">
-        <svg viewBox="0 0 24 24"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg></button>
+      <button id="b-journal" title="Journal: the caravan, your ambition, what has happened">
+        <svg viewBox="0 0 24 24"><path d="M6 4h11a1 1 0 0 1 1 1v15H7a1 1 0 0 1-1-1zM6 17h12M9.5 8h5M9.5 11h5"/></svg></button>
       <button id="b-sound" title="Sound">
         <svg viewBox="0 0 24 24" class="on-ico"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4.5 4.5 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11"/></svg>
         <svg viewBox="0 0 24 24" class="off-ico"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg></button>

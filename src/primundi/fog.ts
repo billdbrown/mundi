@@ -194,8 +194,19 @@ export class PlanetFog {
   fogged(cell: number) { return this.next[cell] > 0.5; }
 
   /** Clear these cells: animated unless `instant` (loading a save). */
-  reveal(cells: Iterable<number>, instant = false) {
-    if (this.anim >= 0) this.now.set(this.next);   // a reveal in progress finishes at once
+  /** Cells waiting for the reveal in progress to finish (travel reveals a little at a time). */
+  private queued: number[] = [];
+  /** Seconds the reveal in progress takes. */
+  private dur = PlanetFog.REVEAL_S;
+  /** Clear these cells: animated over `seconds` (quicker while travelling), or at once. */
+  reveal(cells: Iterable<number>, instant = false, seconds = PlanetFog.REVEAL_S) {
+    this.dur = seconds;
+    if (!instant && this.anim >= 0) {
+      for (const c of cells) if (this.next[c] > 0) this.queued.push(c);
+      return;
+    }
+    if (instant && this.queued.length) { for (const c of this.queued) this.next[c] = 0; this.queued = []; }
+    if (this.anim >= 0) this.now.set(this.next);   // an instant reveal finishes the one in progress
     let any = false;
     for (const c of cells) if (this.next[c] > 0) { this.next[c] = 0; any = true; }
     if (!any) return;
@@ -217,10 +228,13 @@ export class PlanetFog {
     u.uSun.value.copy(sun);
     u.uTime.value = time;
     if (this.anim >= 0) {
-      this.anim += dt / PlanetFog.REVEAL_S;
+      this.anim += dt / this.dur;
       const e = Math.min(1, this.anim);
       u.uMix.value = e * e * (3 - 2 * e);
-      if (this.anim >= 1) { this.now.set(this.next); this.anim = -1; this.fill(); u.uMix.value = 1; }
+      if (this.anim >= 1) {
+        this.now.set(this.next); this.anim = -1; this.fill(); u.uMix.value = 1;
+        if (this.queued.length) { const q = this.queued; this.queued = []; this.reveal(q, false, this.dur); }
+      }
     }
   }
 }

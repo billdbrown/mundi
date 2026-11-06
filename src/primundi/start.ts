@@ -57,3 +57,26 @@ export function pickStart(w: World, gd: GameData, bias: StartBias, seed: number)
   for (let i = 0; i < cells.length; i++) { r -= weights[i]; if (r <= 0) return cells[i]; }
   return cells[cells.length - 1];
 }
+
+/** The caravan's hometown: a real place from the history, leaned by the bias like pickStart.
+ * Middling places are likelier than capitals or hamlets: somewhere with a market, not the centre
+ * of the world. */
+export function pickHome(w: World, places: { id: number; cell: number; pop: number }[], bias: StartBias, seed: number): number {
+  const rng = makeRng((seed ^ (bias === 'gentle' ? 0x93 : bias === 'harsh' ? 0x2d : 0x61)) >>> 0);
+  const ids: number[] = [], weights: number[] = [];
+  for (const p of places) {
+    const hard = harshness(w, p.cell);
+    const size = 1 / (1 + Math.abs(Math.log(p.pop / 1500)));
+    let wt: number;
+    if (bias === 'gentle') wt = hard < 0.3 ? size * (1.3 - hard) : 0;
+    else if (bias === 'harsh') wt = hard > 0.45 ? size * hard : 0;
+    else wt = size;
+    if (wt > 0) { ids.push(p.id); weights.push(wt); }
+  }
+  if (!ids.length) return bias === 'any' ? (places[0]?.id ?? -1) : pickHome(w, places, 'any', seed);
+  let total = 0;
+  for (const x of weights) total += x;
+  let r = rng() * total;
+  for (let i = 0; i < ids.length; i++) { r -= weights[i]; if (r <= 0) return ids[i]; }
+  return ids[ids.length - 1];
+}

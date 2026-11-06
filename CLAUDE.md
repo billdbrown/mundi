@@ -48,9 +48,16 @@ running dev server (`SPOT=coast|river|mountain`, `ALT=`, `ZOOM=`).
 ## Primundi (the game)
 
 `primundi.html` + `src/primundi/` is **Primundi**, Mundi as a fog-of-war game, live at
-**https://primundi.bill.computer** (decided 2026-11-06; vault `wiki/decisions/2026-11-06-primundi.md`).
+**https://primundi.bill.computer**. You are a caravan exploring and trading, not a civilisation
+(vault `wiki/decisions/2026-11-06-primundi-caravan.md`, which supersedes `…-primundi.md`).
+Pure, tested modules: `atlas.ts` (places from the history sim's last year, a thinned road backbone,
+goods and equilibrium prices, hex crossing costs, A*), `market.ts` (lazy stocks, quotes, trade),
+`caravan.ts` (people, supplies, the daily tick; supplies never kill), `encounters.ts` (text-and-dice
+events: add an entry to `ENCOUNTERS`). `main.ts` is the clock (pause/1/2/3, `RATES` days per second),
+travel, the cards and the map marks. Currency: orrels. Saves under `primundi.save2`. Mobile portrait
+is a target: cards become a bottom sheet under 640 px.
 Same build; `./deploy-primundi.sh` copies `dist/` to `dist-primundi/` with `primundi.html` as the
 index and deploys it with `wrangler.primundi.toml` (static only, saves live in the browser).
 It reaches into the shared code only through hooks that do nothing for Mundi: `PlanetView.onFrame`,
 `constrain`, `tiltScale`, `addToPlanet` (render.ts) and the hex view's `game=1&seen=` link
-parameters (hex.ts). `window.primundi` is its debug handle (`revealRing()`, `reveal([cells])`).
+parameters (hex.ts). `window.primundi` is its debug handle (`travelTo(cell)`, `setSpeed(n)`, `encounter(id)`, `revealRing()`).
