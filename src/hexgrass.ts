@@ -8,7 +8,7 @@
  * and from high up, where the ground's own texture is the grass.
  */
 import * as THREE from 'three';
-import { LAYERS, L_DEPTH, L_FIELD, L_PATH, L_LUSH, L_HEDGE, L_ALPINE, type LocalMap } from './hexlocal.ts';
+import { LAYERS, L_DEPTH, L_FIELD, L_FIELDKIND, L_PATH, L_LUSH, L_HEDGE, L_ALPINE, type LocalMap } from './hexlocal.ts';
 import { SWAY_GLSL, wind } from './hexwind.ts';
 
 /** Per tile: where grass grows and how, as textures over the map square. */
@@ -22,7 +22,7 @@ export interface GrassField { col: THREE.DataTexture; hgt: THREE.DataTexture }
 export function grassField(m: LocalMap, paint: Float32Array, grain: Float32Array, shade: Uint8Array, shadeRes: number,
   inFrame: (x: number, y: number) => boolean): GrassField {
   const R = m.res, N = R * R;
-  const col = new Uint8Array(N * 4), hgt = new Float32Array(N * 2);
+  const col = new Uint8Array(N * 4), hgt = new Float32Array(N * 4);
   for (let v = 0; v < N; v++) {
     const L = v * LAYERS, ly = (k: number) => m.layers[L + k];
     const i = v % R, j = (v / R) | 0;
@@ -44,11 +44,14 @@ export function grassField(m: LocalMap, paint: Float32Array, grain: Float32Array
     col[v * 4 + 1] = Math.round(255 * Math.sqrt(Math.min(1, g * k * (field > 0.5 ? 1 : 1.06))));
     col[v * 4 + 2] = Math.round(255 * Math.sqrt(Math.min(1, b * k)));
     col[v * 4 + 3] = Math.round(255 * Math.min(1, dens));
-    hgt[v * 2] = h;
-    hgt[v * 2 + 1] = Math.max(0.12, tall);
+    // (r: ground, g: blade height, b: a field, a: which crop, which also turns its rows.)
+    hgt[v * 4] = h;
+    hgt[v * 4 + 1] = Math.max(0.12, tall);
+    hgt[v * 4 + 2] = field > 0.5 && on && ly(L_HEDGE) < 0.5 ? 1 : 0;
+    hgt[v * 4 + 3] = ly(L_FIELDKIND);
   }
   const ct = new THREE.DataTexture(col, R, R, THREE.RGBAFormat, THREE.UnsignedByteType);
-  const ht = new THREE.DataTexture(hgt, R, R, THREE.RGFormat, THREE.FloatType);
+  const ht = new THREE.DataTexture(hgt, R, R, THREE.RGBAFormat, THREE.FloatType);
   ct.magFilter = ct.minFilter = THREE.LinearFilter;
   // (Float textures aren't filterable everywhere; the shader filters heights itself.)
   ht.magFilter = ht.minFilter = THREE.NearestFilter;
@@ -132,19 +135,31 @@ export class Grass {
               vec2 wc = floor(base / uGSpacing) + cell;          // the cell in map-wide terms: stable
               vec2 p = (wc + vec2(gHash(wc), gHash(wc + 17.3))) * uGSpacing;
               vec2 uv0 = vec2(p.x + uGMap.x, -p.y + uGMap.x) / uGMap.y, uv = (uv0 * (uGMap.z - 1.0) + 0.5) / uGMap.z;
+              // In a field, the crop stands in rows: each field its own way and spacing.
+              vec4 fk = texture2D(tGrassHgt, (floor(uv * uGMap.z) + 0.5) / uGMap.z);
+              float inField = fk.b;
+              if (inField > 0.5) {
+                float ang = fk.a * 3.14159, sp = 0.6 + 0.5 * fract(fk.a * 7.3);
+                vec2 ax = vec2(cos(ang), sin(ang)), ay = vec2(-ax.y, ax.x);
+                float u = dot(p, ax), w = dot(p, ay);
+                w = (floor(w / sp) + 0.5) * sp + (gHash(wc + 2.2) - 0.5) * sp * 0.15;
+                p = ax * u + ay * w;
+                uv0 = vec2(p.x + uGMap.x, -p.y + uGMap.x) / uGMap.y; uv = (uv0 * (uGMap.z - 1.0) + 0.5) / uGMap.z;
+              }
               float r = gHash(wc + 3.1);
               vec4 c = texture2D(tGrassCol, uv);
               float d = length(p - uGCam.xz), R = uGN * uGSpacing * 0.5;
               float fade = (1.0 - smoothstep(R * 0.6, R * 0.95, d)) * smoothstep(uGInner * 0.8, uGInner * 1.1, d) * uGShow;
               if (uv0.x > 0.0 && uv0.x < 1.0 && uv0.y > 0.0 && uv0.y < 1.0 && r < c.a && fade > 0.01) {
                 vec2 hg = gHgt(uv);
-                float tall = hg.y * (0.6 + 0.8 * gHash(wc + 7.7)) * fade;
+                // (Crops grow even; grass any height.)
+                float tall = hg.y * (inField > 0.5 ? 0.9 + 0.2 * gHash(wc + 7.7) : 0.6 + 0.8 * gHash(wc + 7.7)) * fade;
                 float a = gHash(wc + 9.2) * 6.283, ca = cos(a), sa = sin(a);
                 float wd = uGWidth * (0.7 + 0.6 * r / max(c.a, 0.01));
                 vec3 q = vec3(position.x * wd, position.y * tall, position.z * wd);
                 q = vec3(q.x * ca - q.z * sa, q.y, q.x * sa + q.z * ca);
                 // Leaning a little at random, then the wind on top.
-                vec2 lean = vec2(gHash(wc + 4.4) - 0.5, gHash(wc + 5.5) - 0.5) * 0.5;
+                vec2 lean = vec2(gHash(wc + 4.4) - 0.5, gHash(wc + 5.5) - 0.5) * (inField > 0.5 ? 0.15 : 0.5);
                 q.xz += lean * position.y * position.y * tall;
                 q += windSway(p, position.y, 1.0, 0.55) * tall * 3.0;
                 gPos = vec3(p.x, hg.x, p.y) + q;

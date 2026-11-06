@@ -20,7 +20,7 @@ import { Grass, grassField } from './hexgrass.ts';
 import { waterMaterial, waterUniforms, shoreUniforms, SHORE_GLSL } from './hexwater.ts';
 import { DEFAULT_PARAMS, type WorldParams } from './world.ts';
 import { parseSeed } from './seedname.ts';
-import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, L_FOREST, L_SNOW, L_LUSH, HOUSE_STRIDE, type LocalMap, type LocalOptions, H_LOG, H_LILYPAD, isFlower, H_FERN, H_STUMP, isHexKind } from './hexlocal.ts';
+import { LOCAL_DEFAULTS, localHeights, LAYERS, L_DEPTH, L_FOREST, L_SNOW, L_LUSH, L_FIELD, L_HEDGE, L_PATH, HOUSE_STRIDE, type LocalMap, type LocalOptions, H_LOG, H_LILYPAD, isFlower, H_FERN, H_STUMP, isHexKind } from './hexlocal.ts';
 import { STYLE, paintGround, groundGrain, STYLE_GRADE, TILT_SHIFT, type HexStyle } from './hexstyle.ts';
 import { daylight, hourForElevation, type RGB } from './daylight.ts';
 import type { HexJob, ValleyJob } from './hexworker.ts';
@@ -886,6 +886,66 @@ function build(m: LocalMap) {
   windLines = new WindLines();
   world.add(windLines.mesh);
 
+  // Bridges (2026-11-06): where a path comes down to a river on both banks, a timber bridge across.
+  {
+    const layerAt = (x: number, y: number, L: number) => {
+      const i = Math.max(0, Math.min(res - 1, Math.round((x + half) / step))), j = Math.max(0, Math.min(res - 1, Math.round((y + half) / step)));
+      return m.layers[(j * res + i) * LAYERS + L];
+    };
+    const spans: [number, number, number, number, number, number][] = [];   // x, y, angle, length, deck height, width
+    for (const r of m.rivers) {
+      const p = r.pts, k = p.length / 4;
+      for (let s2 = 1; s2 < k - 1; s2++) {
+        const x = p[s2 * 4], y = p[s2 * 4 + 1], lv = p[s2 * 4 + 2], w = p[s2 * 4 + 3];
+        if (w > 40 || !inFrame(x, y)) continue;
+        let tx = p[s2 * 4 + 4] - p[s2 * 4 - 4], ty = p[s2 * 4 + 5] - p[s2 * 4 - 3];
+        const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
+        const nx = -ty, ny = tx, reach = w * 0.5 + 4;
+        // A path on both banks, within a few metres of the water.
+        let pa = 0, pb = 0;
+        for (let d = w * 0.5; d < w * 0.5 + 10; d += 1.5) { pa = Math.max(pa, layerAt(x + nx * d, y + ny * d, L_PATH)); pb = Math.max(pb, layerAt(x - nx * d, y - ny * d, L_PATH)); }
+        if (pa < 0.4 || pb < 0.4) continue;
+        const ax = x + nx * reach, ay = y + ny * reach, bx = x - nx * reach, by = y - ny * reach;
+        if (spans.some((q) => Math.hypot(q[0] - x, q[1] - y) < 30)) continue;
+        const ga = groundAtMap(m, ax, ay), gb = groundAtMap(m, bx, by);
+        let top = lv;
+        for (let o = Math.max(0, s2 - 4); o <= Math.min(k - 1, s2 + 4); o++) top = Math.max(top, p[o * 4 + 2]);
+        spans.push([x, y, Math.atan2(ny, nx), reach * 2 + 2, Math.max(top + 1.2, (ga + gb) / 2 + 0.3), 3.6]);
+      }
+    }
+    if (spans.length) {
+      const box = new THREE.BoxGeometry(1, 1, 1);
+      const parts: [number, number, number, number, number, number, number][] = [];   // cx, cy, h, along, across, thick, angle
+      for (const [x, y, ang, len, hgt, wd] of spans) {
+        const ca = Math.cos(ang), sa = Math.sin(ang);
+        parts.push([x, y, hgt, len, wd, 0.35, ang]);                         // the deck
+        for (const sd of [-1, 1]) {
+          const ox = -sa * wd * 0.46 * sd, oy = ca * wd * 0.46 * sd;
+          parts.push([x + ox, y + oy, hgt + 0.95, len, 0.12, 0.12, ang]);    // a rail
+          for (let t = -0.5; t <= 0.501; t += 1 / Math.max(2, Math.round(len / 3))) {
+            parts.push([x + ox + ca * len * t, y + oy + sa * len * t, hgt + 0.5, 0.16, 0.16, 0.9, ang]);   // posts
+          }
+        }
+        // Piers into the water, under each end of the channel.
+        for (const t of [-0.25, 0.25]) {
+          const px2 = x + ca * len * t, py2 = y + sa * len * t, g = groundAtMap(m, px2, py2);
+          parts.push([px2, py2, (hgt + g) / 2 - 0.5, 0.6, wd * 0.9, Math.max(0.5, hgt - g + 1), ang]);
+        }
+      }
+      const im = new THREE.InstancedMesh(box, new THREE.MeshStandardMaterial({ color: 0x8a6a48, roughness: 0.9 }), parts.length);
+      const bm = new THREE.Matrix4(), bq = new THREE.Quaternion(), bs = new THREE.Vector3(), bp = new THREE.Vector3(), yAx = new THREE.Vector3(0, 1, 0);
+      const shade = new THREE.Color();
+      parts.forEach(([cx, cy, hh, al, ac, th, ang], n) => {
+        // (Map angle is from east toward north; three.js turns the other way about y.)
+        bq.setFromAxisAngle(yAx, ang);
+        im.setMatrixAt(n, bm.compose(bp.set(cx, hh, -cy), bq, bs.set(al, th, ac)));
+        im.setColorAt(n, shade.setHex(0x8a6a48).multiplyScalar(0.8 + 0.4 * (((n * 2654435761) >>> 0) / 4294967296)));
+      });
+      im.castShadow = true; im.receiveShadow = true; im.name = 'bridges';
+      world.add(im);
+    }
+  }
+
   // A person (1.8 m) beside the centre, for scale.
   const person = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 1.3, 4, 8), new THREE.MeshStandardMaterial({ color: 0xc0392b }));
   person.position.set(6, groundAtMap(m, 6, 0) + 0.9, 0); person.castShadow = true;
@@ -1049,6 +1109,32 @@ function buildPlants(m: LocalMap, inFrame: (x: number, y: number) => boolean): T
     mesh.castShadow = true; mesh.receiveShadow = true;
     mesh.name = 'plants';
     group.add(mesh);
+  }
+  // Hedgerows (2026-11-06): bushes along the fields' edges, now and then a tree standing in them.
+  if (usePack) {
+    const H = st.town.hedge, hc = new THREE.Color(H);
+    for (let j = 0; j < res; j++) for (let i = 0; i < res; i++) {
+      const v = j * res + i;
+      if (layers[v * LAYERS + L_HEDGE] < 0.75 || layers[v * LAYERS + L_FIELD] < 0.5) continue;
+      const r = (((v * 2654435761) >>> 0) / 4294967296), r2 = (((v * 2246822519) >>> 0) / 4294967296);
+      if (r > 0.62) continue;
+      const x = -half + i * step + (r2 - 0.5) * step * 0.6, y = -half + j * step + (r - 0.3) * step * 0.6;
+      if (!inFrame(x, y)) continue;
+      const tree = r2 < 0.035;
+      const set = pack!.index.sets[tree ? 'broadleaf' : r2 < 0.2 ? 'bushBerries' : 'bush'];
+      const name = set[Math.floor(r * 97) % set.length];
+      const sz = tree ? 8 + 5 * r : 1.6 + 1.2 * ((r2 * 7) % 1);
+      q.setFromAxisAngle(up, r * 40);
+      mtx.compose(ps.set(x, groundAtMap(m, x, y) - 0.1, -y), q, sc3.setScalar(sz * st.plants.scale * (tree ? 1 : 0.9)));
+      const w = pack!.index.models[name].w;
+      if (tree && w > 0.7) mtx.scale(sc3.setScalar(0.7 / w));
+      const vb = 0.85 + 0.3 * r2;
+      pc.setRGB(hc.r * 1.5 * vb, hc.g * 1.5 * vb, hc.b * 1.5 * vb);
+      if (!byModel.has(name)) byModel.set(name, { mtx: [], col: [] });
+      const d = byModel.get(name)!;
+      for (let e = 0; e < 16; e++) d.mtx.push(mtx.elements[e]);
+      d.col.push(pc.r, pc.g, pc.b);
+    }
   }
   if (byModel.size) {
     packPlants = new PackPlants(pack!, byModel, NEAR_M);
