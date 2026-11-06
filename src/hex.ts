@@ -24,6 +24,7 @@ import type { Spot } from './debug.ts';
 import { HexCamera, FEEL } from './hexcamera.ts';
 import { Walker, pegman } from './hexwalk.ts';
 import { mountHud } from './hexui.ts';
+import { snowGround, snowContext } from './hexsnow.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -307,6 +308,7 @@ function texturedGround(mat: THREE.MeshStandardMaterial) {
           float det = mix(mix(g, d, max(soil * 0.5, vGrain.x)), r, max(steep, vGrain.y));
           diffuseColor.rgb *= mix(1.0, clamp(det, 0.4, 1.8), uTexAmt * (1.0 - 0.55 * vGrain.z));
         }`);
+    snowGround(sh);   // last: snow and the rock among it, per pixel (hexsnow.ts)
   };
   mat.customProgramCacheKey = () => 'hexground';
 }
@@ -391,6 +393,7 @@ function addContext(aerial: boolean) {
   geo.computeVertexNormals();
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, roughness: 1 });
   if (aerial) applyAerial(mat, true);
+  snowContext(mat);   // snow out there lit as on the hex (hexsnow.ts)
   const mesh = new THREE.Mesh(geo, mat);
   mesh.name = 'context';
   mesh.layers.set(1);

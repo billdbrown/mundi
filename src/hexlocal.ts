@@ -1152,7 +1152,10 @@ export function buildLocalMap(w: World, cell: number, opts: Partial<LocalOptions
       // (Mostly the plain terrain's slope, as the planet's patch: its relief is steep nearly
       // everywhere and snow shed off all but flat tops.)
       const slopeS = (1 - 1 / Math.sqrt(1 + meshSlope[v] * meshSlope[v])) * 0.45 + slopeP * 0.55;
-      const lie = (1 - 0.9 * smooth(0.08, 0.3, slopeS)) * smooth(0.25, 0.65, streak + snow * 0.35);
+      // Only the steepest faces shed it here (the ground shader, hexsnow.ts, decides per pixel which
+      // faces show rock); well above the line it covers all, streaky only near the line. (Was shed
+      // from 23° and streaky everywhere: peaks came out mostly bare and blotched, 2026-11-06.)
+      const lie = (1 - 0.95 * smooth(0.3, 0.6, slopeS)) * smooth(0.25, 0.65, streak + snow * 0.9);
       // Glaciers (sky.ts): ice fills the high valleys where it is cold, down past the snow line.
       // A valley is ground lower than the ring around it, ~1 km and ~3 km out (real metres).
       let glacier = 0;

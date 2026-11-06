@@ -82,7 +82,7 @@ export const STYLE: HexStyle = {
   hemi: { sky: 0xb0c4e0, ground: 0x7a6048, intensity: 1.5 }, exposure: 1.15,
   ground: 'palette',
   palette: {
-    keepBase: 0.75, grass: 0x7a8a42, grassDry: 0xb09a58, forest: 0x34502a, clearing: 0x8a8f4a, rock: 0x8a7c6c, snow: 0xf0ece4,
+    keepBase: 0.75, grass: 0x7a8a42, grassDry: 0xb09a58, forest: 0x34502a, clearing: 0x8a8f4a, rock: 0x8a7c6c, snow: 0xeef2f8,
     sand: 0xd8c08c, bed: 0x5a4a38, lush: 0x5e8a36, alpine: 0x8a8462, seaShallow: 0x5aa0a0, seaDeep: 0x24506a,
     soil: 0x7e5c3e, scree: 0x86847e, gravel: 0xaca89c, pavement: 0x7a5440,
     sat: 1.0, mottle: 0.7, ao: 0.6, grain: 0.12, peaks: 0.5,
