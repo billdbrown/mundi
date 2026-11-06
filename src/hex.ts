@@ -1314,12 +1314,14 @@ worker.onmessage = (e: MessageEvent<{ map: LocalMap; ms: { world: number; local:
   const rel = map && !firstBuild ? { p: camera.position.clone().divideScalar(map.size), t: controls.target.clone().divideScalar(map.size) } : null;
   cell = m.cell;
   map = m;
+  const tb = performance.now();
   build(m);
+  const drawMs = performance.now() - tb;
   drawInset(m); facts(m);
   if (rel) { camera.position.copy(rel.p.multiplyScalar(m.size)); controls.target.copy(rel.t.multiplyScalar(m.size)); controls.snap(); }
   else resetView();
   firstBuild = false;
-  $('timing').textContent = `world ${Math.round(e.data.ms.world)} ms · hex ${Math.round(e.data.ms.local)} ms${(e.data as { prebuilt?: boolean }).prebuilt ? ' (prebuilt)' : ''} · ${(m.trees.length / 6).toLocaleString()} plants`;
+  $('timing').textContent = `world ${Math.round(e.data.ms.world)} ms · hex ${Math.round(e.data.ms.local)} ms${(e.data as { prebuilt?: boolean }).prebuilt ? ' (prebuilt)' : ''} · draw ${Math.round(drawMs)} ms · ${(m.trees.length / 6).toLocaleString()} plants`;
   writeHash();
   if (again) { again = false; request(); } else $('busy').hidden = true;
 };
