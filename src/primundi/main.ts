@@ -125,7 +125,7 @@ function showLaunch() {
       <div class="field"><span class="lab">Who you are</span>
         <div class="tiles">${ORIGINS.map((o, i) => `<label class="tile"><input type="radio" name="origin" value="${o.id}" ${i === 0 ? 'checked' : ''} /><b>${o.label}</b><small>${o.note}</small><em>${o.ambition}</em></label>`).join('')}</div></div>
       <div class="field"><span class="lab">Home</span>
-        <div class="seg">${BIASES.map((b) => `<label><input type="radio" name="bias" value="${b.id}" ${b.id === (prev?.bias ?? 'any') ? 'checked' : ''} /><span>${b.label}</span></label>`).join('')}</div>
+        <div class="seg">${BIASES.map((b) => `<label><input type="radio" name="bias" value="${b.id}" ${b.id === (prev && prev.bias !== 'any' ? prev.bias : 'gentle') ? 'checked' : ''} /><span>${b.label}</span></label>`).join('')}</div>
         <small class="bias-note" id="bias-note"></small></div>
       <div class="field"><span class="lab">World</span>
         <span class="seed"><input id="seed" type="text" maxlength="40" spellcheck="false" placeholder="a random world" title="A name (letters) or a number: the same seed always makes the same world and home" />
@@ -140,7 +140,7 @@ function showLaunch() {
     e.preventDefault();
     thunder.unlock();
     const typed = $<HTMLInputElement>('seed').value.trim();
-    const bias = (el.querySelector<HTMLInputElement>('input[name=bias]:checked')?.value ?? 'any') as StartBias;
+    const bias = (el.querySelector<HTMLInputElement>('input[name=bias]:checked')?.value ?? 'gentle') as StartBias;
     const origin = (el.querySelector<HTMLInputElement>('input[name=origin]:checked')?.value ?? 'traders') as Origin;
     const world = typed || randomName();
     pendingNew = { name: $<HTMLInputElement>('civ').value.trim() || nameDefault, origin, bias, world };

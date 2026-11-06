@@ -8,7 +8,7 @@ const w = generateWorld({ ...DEFAULT_PARAMS, detail: 30, seed: 77 });
 const gd = gameData(w);
 
 test('a start is on habitable land and the same every time for the same seed', () => {
-  for (const bias of ['gentle', 'any', 'harsh'] as const) {
+  for (const bias of ['gentle', 'harsh', 'inhospitable', 'any'] as const) {
     const a = pickStart(w, gd, bias, 1234), b = pickStart(w, gd, bias, 1234);
     assert.equal(a, b);
     assert.equal(w.water[a], WATER_LAND);
@@ -82,7 +82,7 @@ test('a path between two places walks land, and roads make it quicker', () => {
 });
 
 test('a hometown is a real place, and the same for the same seed', () => {
-  for (const bias of ['gentle', 'any', 'harsh'] as const) {
+  for (const bias of ['gentle', 'harsh', 'inhospitable', 'any'] as const) {
     const id = pickHome(hw, atlas.places, bias, 99);
     assert.equal(id, pickHome(hw, atlas.places, bias, 99));
     assert.ok(atlas.places[id]);
@@ -156,4 +156,11 @@ test('a job is handed in where it should be, and only when it is done', () => {
   assert.ok(canHandIn({ id: 'b', kind: 'procure', giver: 'X', from: 0, good: G.salt, qty: 3, reward: 1, taken: 0 }, 0, cargo));
   assert.ok(!canHandIn({ id: 'c', kind: 'bounty', giver: 'X', from: 0, cell: 5, reward: 1, taken: 0 }, 0, cargo));
   assert.ok(canHandIn({ id: 'c', kind: 'bounty', giver: 'X', from: 0, cell: 5, reward: 1, taken: 0, done: true }, 0, cargo));
+});
+
+import { harshness as hardness } from '../src/primundi/start.ts';
+test('hometowns get harder from gentle to harsh to inhospitable', () => {
+  const avg = (b: 'gentle' | 'harsh' | 'inhospitable') => { let t = 0; for (let k = 0; k < 20; k++) t += hardness(hw, atlas.places[pickHome(hw, atlas.places, b, k)].cell); return t / 20; };
+  const g = avg('gentle'), h = avg('harsh'), i = avg('inhospitable');
+  assert.ok(g < h && h < i, `gentle ${g.toFixed(2)}, harsh ${h.toFixed(2)}, inhospitable ${i.toFixed(2)}`);
 });

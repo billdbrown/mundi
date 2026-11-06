@@ -5,8 +5,9 @@
  *
  * - gentle: good land in a mild, wet climate, often by a river or coast;
  * - any: anywhere people could live, weighted a little toward better land;
- * - harsh: a hard climate (dry, cold or hot and dry) that can still just support a settlement,
- *   such as a thin river through desert.
+ * - harsh: a hard climate (dry, cold or hot and dry);
+ * - inhospitable: the very edge of what can support a settlement, such as a thin river through
+ *   desert.
  *
  * Pure and deterministic: the same world, bias and seed always give the same cell.
  */
@@ -16,12 +17,16 @@ import { makeRng } from '../rng.ts';
 import { WATER_LAND, type World } from '../world.ts';
 import type { GameData } from '../gamedata.ts';
 
-export type StartBias = 'gentle' | 'any' | 'harsh';
+/** The home's country (Bill, 2026-11-06: Gentle, Harsh, Inhospitable). 'any' is kept for old saves
+ * and as the last fallback, not offered. */
+export type StartBias = 'gentle' | 'harsh' | 'inhospitable' | 'any';
 export const BIASES: { id: StartBias; label: string; note: string }[] = [
-  { id: 'gentle', label: 'Gentle', note: 'Mild, well-watered land' },
-  { id: 'any', label: 'Any', note: 'Wherever people could live' },
+  { id: 'gentle', label: 'Gentle', note: 'Mild, well-watered country' },
   { id: 'harsh', label: 'Harsh', note: 'Dry, cold or scorched: hard going' },
+  { id: 'inhospitable', label: 'Inhospitable', note: 'The very edge of where people can live' },
 ];
+/** Too strict for a world: try the next milder. */
+const MILDER: Record<StartBias, StartBias> = { inhospitable: 'harsh', harsh: 'gentle', gentle: 'any', any: 'any' };
 
 const HARSH = new Set<number>([B.DESERT, B.COLD_DESERT, B.DESERT_SCRUB, B.SALT_FLAT, B.BADLANDS, B.CANYONS, B.TUNDRA, B.POLAR_DESERT, B.STEPPE, B.TAIGA, B.LARCH, B.HEATH, B.KARST]);
 
@@ -36,7 +41,7 @@ export function harshness(w: World, c: number): number {
 
 /** The start cell for this world, bias and game seed. */
 export function pickStart(w: World, gd: GameData, bias: StartBias, seed: number): number {
-  const rng = makeRng((seed ^ (bias === 'gentle' ? 0x51 : bias === 'harsh' ? 0xa7 : 0x3c)) >>> 0);
+  const rng = makeRng((seed ^ (bias === 'gentle' ? 0x51 : bias === 'harsh' ? 0xa7 : bias === 'inhospitable' ? 0xc5 : 0x3c)) >>> 0);
   const cells: number[] = [], weights: number[] = [];
   for (let c = 0; c < w.grid.count; c++) {
     if (w.water[c] !== WATER_LAND) continue;
@@ -45,12 +50,13 @@ export function pickStart(w: World, gd: GameData, bias: StartBias, seed: number)
     const hard = harshness(w, c);
     let wt: number;
     if (bias === 'gentle') wt = hard < 0.25 && s >= 1.2 ? s * s : 0;
-    else if (bias === 'harsh') wt = hard > 0.5 ? hard * Math.min(s, 2) : 0;
+    else if (bias === 'harsh') wt = hard > 0.3 && hard <= 0.65 ? Math.min(s, 2) : 0;
+    else if (bias === 'inhospitable') wt = hard > 0.7 ? hard * Math.min(s, 2) : 0;
     else wt = s;
     if (wt > 0) { cells.push(c); weights.push(wt); }
   }
   // Too strict for this world: fall back to anywhere habitable.
-  if (!cells.length) return bias === 'any' ? (gd.sites[0]?.cell ?? 0) : pickStart(w, gd, 'any', seed);
+  if (!cells.length) return bias === 'any' ? (gd.sites[0]?.cell ?? 0) : pickStart(w, gd, MILDER[bias], seed);
   let total = 0;
   for (const x of weights) total += x;
   let r = rng() * total;
@@ -62,18 +68,19 @@ export function pickStart(w: World, gd: GameData, bias: StartBias, seed: number)
  * Middling places are likelier than capitals or hamlets: somewhere with a market, not the centre
  * of the world. */
 export function pickHome(w: World, places: { id: number; cell: number; pop: number }[], bias: StartBias, seed: number): number {
-  const rng = makeRng((seed ^ (bias === 'gentle' ? 0x93 : bias === 'harsh' ? 0x2d : 0x61)) >>> 0);
+  const rng = makeRng((seed ^ (bias === 'gentle' ? 0x93 : bias === 'harsh' ? 0x2d : bias === 'inhospitable' ? 0xe7 : 0x61)) >>> 0);
   const ids: number[] = [], weights: number[] = [];
   for (const p of places) {
     const hard = harshness(w, p.cell);
     const size = 1 / (1 + Math.abs(Math.log(p.pop / 1500)));
     let wt: number;
-    if (bias === 'gentle') wt = hard < 0.3 ? size * (1.3 - hard) : 0;
-    else if (bias === 'harsh') wt = hard > 0.45 ? size * hard : 0;
+    if (bias === 'gentle') wt = hard < 0.2 ? size : 0;
+    else if (bias === 'harsh') wt = hard > 0.3 && hard <= 0.65 ? size : 0;
+    else if (bias === 'inhospitable') wt = hard > 0.7 ? size * hard : 0;
     else wt = size;
     if (wt > 0) { ids.push(p.id); weights.push(wt); }
   }
-  if (!ids.length) return bias === 'any' ? (places[0]?.id ?? -1) : pickHome(w, places, 'any', seed);
+  if (!ids.length) return bias === 'any' ? (places[0]?.id ?? -1) : pickHome(w, places, MILDER[bias], seed);
   let total = 0;
   for (const x of weights) total += x;
   let r = rng() * total;
