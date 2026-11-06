@@ -41,9 +41,10 @@ export function loadHouses(): Promise<HousePack> {
 
 /** Night, 0..1, for the windows (set by the hex view's time of day). */
 export const houseNight = { value: 0 };
-let material: THREE.MeshStandardMaterial | null = null;
-function houseMaterial(): THREE.MeshStandardMaterial {
-  if (material) return material;
+/** A new material for one drawing of the towns. Not shared across drawings: the hex view adds its
+ * atmosphere and shadow code to a material each time it builds, and adding it twice breaks the
+ * shader (the buildings vanished on a second hex, leaving only their shadows). */
+export function houseMaterial(): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.85 });
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uNight = houseNight;
@@ -58,7 +59,6 @@ function houseMaterial(): THREE.MeshStandardMaterial {
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vWin * uNight * vec3(1.7, 0.85, 0.28);');
   };
   m.customProgramCacheKey = () => 'mundi-houses';
-  material = m;
   return m;
 }
 
@@ -83,7 +83,7 @@ export function familyOf(mode: HouseMode, culture: number): Family {
 }
 
 /** Instanced meshes for the buildings, one per model used. `K` scales them like the style's trees. */
-export function buildHouses(pack: HousePack, mode: HouseMode, bs: Building[], K: number): THREE.Group {
+export function buildHouses(pack: HousePack, mode: HouseMode, bs: Building[], K: number, mat: THREE.Material): THREE.Group {
   const group = new THREE.Group();
   group.name = 'houses';
   const byModel = new Map<string, { b: Building; s: number }[]>();
@@ -107,7 +107,7 @@ export function buildHouses(pack: HousePack, mode: HouseMode, bs: Building[], K:
     if (!byModel.has(name)) byModel.set(name, []);
     byModel.get(name)!.push({ b, s });
   }
-  const mat = houseMaterial(), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), p = new THREE.Vector3(), sc = new THREE.Vector3(), c = new THREE.Color();
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), p = new THREE.Vector3(), sc = new THREE.Vector3(), c = new THREE.Color();
   for (const [name, list] of byModel) {
     const geo = pack.geos.get(name)!.clone();
     const roof = new Float32Array(list.length * 3), wall = new Float32Array(list.length * 3);
@@ -133,7 +133,7 @@ export function buildHouses(pack: HousePack, mode: HouseMode, bs: Building[], K:
 
 /** The towns' small things (hextown.ts PROPS, PROP_STRIDE values each), one mesh per kind. Their
  * own colours, but for canvas and cloth: stalls get a striped-awning red or green. */
-export function buildProps(pack: HousePack, props: Float32Array, stride: number, keep: (x: number, y: number) => boolean): THREE.Group {
+export function buildProps(pack: HousePack, props: Float32Array, stride: number, keep: (x: number, y: number) => boolean, mat: THREE.Material): THREE.Group {
   const group = new THREE.Group();
   group.name = 'props';
   const byKind = new Map<number, number[]>();
@@ -143,7 +143,7 @@ export function buildProps(pack: HousePack, props: Float32Array, stride: number,
     if (!byKind.has(k)) byKind.set(k, []);
     byKind.get(k)!.push(o);
   }
-  const mat = houseMaterial(), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), p = new THREE.Vector3(), sc = new THREE.Vector3(), c = new THREE.Color();
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), p = new THREE.Vector3(), sc = new THREE.Vector3(), c = new THREE.Color();
   const CLOTH = [0xb0403a, 0x5f7a3a, 0xc9a24a, 0x3f6f8a];
   for (const [kind, list] of byKind) {
     const name = pack.index.props[kind];

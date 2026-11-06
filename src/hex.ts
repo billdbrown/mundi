@@ -29,7 +29,7 @@ import { HexCamera, FEEL } from './hexcamera.ts';
 import { Walker, pegman } from './hexwalk.ts';
 import { mountHud } from './hexui.ts';
 import { PROP_STRIDE } from './hextown.ts';
-import { loadHouses, buildHouses, buildProps, houseNight, HOUSE_MODES, type HouseMode, type HousePack, type Building } from './hexhouses.ts';
+import { loadHouses, buildHouses, buildProps, houseMaterial, houseNight, HOUSE_MODES, type HouseMode, type HousePack, type Building } from './hexhouses.ts';
 import { snowGround, snowContext } from './hexsnow.ts';
 import { HexFog } from './primundi/hexfog.ts';
 import { noiseTexture } from './primundi/fog.ts';
@@ -934,12 +934,12 @@ function build(m: LocalMap) {
   // The atmosphere on everything (a no-op outside the Earth style).
   world.traverse((o) => {
     const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh || o.name === 'plants' || o.name === 'sides' || o.name === 'windows' || o.name === 'occluder' || o.name === 'ctxlines' || o.name === 'windlines') return;
+    if (!mesh.isMesh || o.name === 'plants' || o.name === 'sides' || o.name === 'windows' || o.name === 'occluder' || o.name === 'ctxlines' || o.name === 'windlines' || o.name === 'house-models') return;
     for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) applyAerial(mat, true);
   });
   world.traverse((o) => {
     const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh) return;
+    if (!mesh.isMesh || o.name === 'house-models') return;
     for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) if (!(mat as THREE.MeshBasicMaterial).isMeshBasicMaterial && !(mat as THREE.ShaderMaterial).isShaderMaterial) csmMaterial(mat);
   });
   // Where the map sits on the planet: x east, y up, z south (three.js), metres to radii.
@@ -991,7 +991,7 @@ let houseFrame: (x: number, y: number) => boolean = () => true;
 function drawHouses(m: LocalMap) {
   if (housesGroup) {
     world.remove(housesGroup);
-    housesGroup.traverse((o) => { const im = o as THREE.InstancedMesh; if (im.isInstancedMesh) { im.dispose(); if (o.name === 'house-models') im.geometry.dispose(); } });
+    housesGroup.traverse((o) => { const im = o as THREE.InstancedMesh; if (im.isInstancedMesh) { im.dispose(); if (o.name === 'house-models') { im.geometry.dispose(); (im.material as THREE.Material).dispose(); } } });
   }
   windows = null; glow = null;
   const group = new THREE.Group();
@@ -1008,8 +1008,13 @@ function drawHouses(m: LocalMap) {
       if (!inFrame(HS[o], HS[o + 1])) continue;
       bs.push({ x: HS[o], y: HS[o + 1], gy: HS[o + 2], rot: HS[o + 3], wd: HS[o + 4], dp: HS[o + 5], ch: HS[o + 7], kind: HS[o + 8], culture: HS[o + 9] });
     }
-    group.add(buildHouses(housePack!, houseMode, bs, st.town.scale));
-    if (m.props?.length) group.add(buildProps(housePack!, m.props, PROP_STRIDE, inFrame));
+    // One new material for this drawing, given the atmosphere and the shadows once, here (the
+    // build's own passes skip the house models).
+    const mat = houseMaterial();
+    applyAerial(mat, true);
+    csmMaterial(mat);
+    group.add(buildHouses(housePack!, houseMode, bs, st.town.scale, mat));
+    if (m.props?.length) group.add(buildProps(housePack!, m.props, PROP_STRIDE, inFrame, mat));
     // The glow over lit houses, as for the boxes.
     const K = st.town.scale;
     const lit = bs.filter((b) => (b.ch * 7.31) % 1 < 0.75);
