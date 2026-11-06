@@ -74,7 +74,7 @@ export function newCaravan(name: string, origin: Origin, seed: number): Caravan 
 }
 
 /** How many days of water a caravan can carry. */
-export const WATER_DAYS = 8;
+export const WATER_DAYS = 12;
 export const living = (c: Caravan) => c.members.filter((m) => m.alive);
 export const leader = (c: Caravan) => c.members.find((m) => m.alive && m.role === 'leader') ?? null;
 export const cargoUsed = (c: Caravan) => c.cargo.reduce((a, b) => a + b, 0);

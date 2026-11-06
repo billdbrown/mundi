@@ -248,33 +248,34 @@ export function stepDays(w: World, atlas: Atlas, a: number, b: number, doy: numb
 }
 
 /** Cheapest path from a to b (both included), A* on the hex grid. `ok` says which cells may be
- * walked; the goal is always allowed. Gives up past `maxCost` (in the cost's units). */
-export function findPath(w: World, a: number, b: number, cost: (a: number, b: number) => number, ok: (c: number) => boolean, maxCost = Infinity): number[] | null {
+ * walked; the goal is always allowed. Gives up past `maxCost` (in the cost's units). `minStep` is
+ * the cheapest any step can be, for the heuristic (a bigger one is faster and a little less exact). */
+export function findPath(w: World, a: number, b: number, cost: (a: number, b: number) => number, ok: (c: number) => boolean, maxCost = Infinity, minStep = 0.3): number[] | null {
   if (a === b) return [a];
   if (!walkable(w, b)) return null;
-  const P = w.grid.centers, N = w.grid.count;
+  const P = w.grid.centers, N = w.grid.count, nb = w.grid.neighbors;
   const cellA = Math.sqrt((4 * Math.PI) / N);
-  const h = (c: number) => Math.acos(Math.min(1, P[c * 3] * P[b * 3] + P[c * 3 + 1] * P[b * 3 + 1] + P[c * 3 + 2] * P[b * 3 + 2])) / cellA * 0.22;
-  const g = new Map<number, number>([[a, 0]]), from = new Map<number, number>();
+  const bx = P[b * 3], by = P[b * 3 + 1], bz = P[b * 3 + 2];
+  const h = (c: number) => (Math.acos(Math.min(1, P[c * 3] * bx + P[c * 3 + 1] * by + P[c * 3 + 2] * bz)) / cellA) * minStep;
+  const g = new Float64Array(N).fill(Infinity), from = new Int32Array(N).fill(-1), done = new Uint8Array(N);
+  g[a] = 0;
   const heap = new Heap();
   heap.push(a, h(a));
-  const done = new Set<number>();
   while (heap.size) {
     const c = heap.pop();
     if (c === b) {
       const out = [b];
       let x = b;
-      while (x !== a) { x = from.get(x)!; out.push(x); }
+      while (x !== a) { x = from[x]; out.push(x); }
       return out.reverse();
     }
-    if (done.has(c)) continue;
-    done.add(c);
-    const gc = g.get(c)!;
-    if (gc > maxCost) return null;
-    for (const n of w.grid.neighbors[c]) {
-      if (done.has(n) || !walkable(w, n) || (n !== b && !ok(n))) continue;
-      const gn = gc + cost(c, n);
-      if (gn < (g.get(n) ?? Infinity)) { g.set(n, gn); from.set(n, c); heap.push(n, gn + h(n)); }
+    if (done[c]) continue;
+    done[c] = 1;
+    if (g[c] > maxCost) return null;
+    for (const n of nb[c]) {
+      if (done[n] || !walkable(w, n) || (n !== b && !ok(n))) continue;
+      const gn = g[c] + cost(c, n);
+      if (gn < g[n]) { g[n] = gn; from[n] = c; heap.push(n, gn + h(n)); }
     }
   }
   return null;
@@ -317,5 +318,7 @@ class Heap {
 /** Is there fresh water here (river, lake shore, or a town's wells)? */
 export function hasWater(w: World, atlas: Atlas, c: number): boolean {
   if (w.river[c] || atlas.placeAt[c] >= 0) return true;
+  // Wet country has streams and springs enough: water only runs short in dry land.
+  if (w.moisture[c] > 0.45) return true;
   return w.grid.neighbors[c].some((n) => w.water[n] === WATER_LAKE || w.river[n]);
 }

@@ -1,155 +1,261 @@
-/* Primundi (primundi.html). Mundi's style.css comes first, for the loader and the hex frame. */
+/* Primundi (primundi.html). Mundi's style.css comes first; this follows its look: dark glass
+   (the hex card, the drawer), the system font, small spaced capitals for headings, muted
+   blue-grey for the quiet text, and gold for the one thing to press. */
 
-body.primundi { background: #0b0d12; }
+body.primundi {
+  background: #05070d;
+  --glass: rgba(12, 17, 25, 0.86);
+  --glass-2: rgba(10, 14, 22, 0.62);
+  --edge: rgba(255, 255, 255, 0.13);
+  --ink: #e7edf3;
+  --quiet: #9aa9b8;
+  --gold: #f2c14e;
+  --gold-hi: #ffd36b;
+  --good: #8fd19e;
+  --bad: #ff9a7a;
+  --chip: rgba(255, 255, 255, 0.07);
+}
+.primundi button { font: inherit; color: inherit; }
 
-/* --- The launch screen: a parchment card over a dark storm, after Teklek's setup. --- */
+/* --- The launch screen: a glass card over a slow storm. --- */
 #launch { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; overflow: auto;
   background:
     radial-gradient(ellipse 60% 45% at 30% 30%, rgba(120, 130, 150, .16), transparent 70%),
     radial-gradient(ellipse 55% 40% at 75% 70%, rgba(90, 100, 125, .14), transparent 70%),
-    radial-gradient(ellipse at 50% 120%, #1d2029, #0b0d12 70%);
+    radial-gradient(ellipse at 50% 120%, #1d2029, #05070d 70%);
   animation: pm-storm 18s ease-in-out infinite alternate; }
 @keyframes pm-storm { from { background-position: 0 0, 0 0, 0 0; } to { background-position: 40px -20px, -50px 25px, 0 0; } }
 #launch[hidden] { display: none; }
-#launch .card { width: min(440px, calc(100vw - 32px)); box-sizing: border-box; margin: 24px 0;
-  background: #f3e8d2; color: #2b2116; border: 1px solid #d9c49c; border-radius: 10px; padding: 28px 28px 26px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, .55); font: 14px/1.45 Georgia, 'Iowan Old Style', 'Palatino Linotype', serif; }
-#launch h1 { margin: 0; font-size: 34px; font-variant: small-caps; letter-spacing: .04em; font-weight: 600; }
-#launch .tag { margin: 2px 0 18px; font-style: italic; color: #7a6650; }
-#launch fieldset { border: 1px solid #d3bd92; border-radius: 8px; margin: 0 0 14px; padding: 10px 14px 12px; }
-#launch legend { color: #2b2116; font-variant: small-caps; font-weight: 600; font-size: 15px; letter-spacing: .03em; padding: 0 6px; }
-#launch input[type=text] { width: 100%; box-sizing: border-box; font: inherit; font-size: 15px; color: #2b2116;
-  background: #fbf5e8; border: 1px solid #cdb68a; border-radius: 6px; padding: 7px 9px; }
-#launch input[type=text]:focus { outline: 2px solid #a55a2f55; border-color: #a55a2f; }
-#launch .seed { display: flex; gap: 6px; }
-#launch #dice { font-size: 20px; line-height: 1; background: #fbf5e8; color: #5b4630; border: 1px solid #cdb68a; border-radius: 6px; padding: 0 10px; cursor: pointer; }
-#launch .bias { display: block; margin: 3px 0; cursor: pointer; }
-#launch .bias span { color: #8a7660; font-size: 12.5px; margin-left: 4px; font-style: italic; }
-#launch .go { display: block; width: 100%; font: 600 15px system-ui, sans-serif; color: #fff; background: #a5532d;
-  border: 1px solid #7e3b1d; border-radius: 7px; padding: 11px; cursor: pointer; }
-#launch .go:hover { background: #b65f37; }
-#launch .go span { display: block; font-weight: 400; font-size: 12px; opacity: .85; margin-top: 2px; }
-#launch .or { text-align: center; color: #8a7660; font-style: italic; margin: 12px 0 10px; }
+.launch-card { width: min(440px, calc(100vw - 24px)); margin: 24px 0; padding: 26px 24px 22px; color: var(--ink);
+  background: var(--glass); backdrop-filter: blur(14px); border: 1px solid var(--edge); border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .5); display: grid; gap: 14px; }
+.launch-card .wordmark { font-size: 11px; letter-spacing: .42em; color: rgba(255, 255, 255, .6); }
+.launch-card h1 { margin: -6px 0 0; font-size: 28px; font-weight: 300; letter-spacing: .01em; }
+.launch-card .tag { margin: -8px 0 4px; color: var(--quiet); }
+.launch-card .field { display: grid; gap: 6px; }
+.launch-card .lab { font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: var(--quiet); font-weight: 600; }
+.launch-card input[type=text] { width: 100%; font: inherit; font-size: 14px; color: var(--ink); background: rgba(255, 255, 255, .06);
+  border: 1px solid var(--edge); border-radius: 9px; padding: 8px 10px; }
+.launch-card input[type=text]:focus { outline: none; border-color: rgba(242, 193, 78, .6); }
+.launch-card .seed { display: flex; gap: 6px; }
+.launch-card #dice { font-size: 18px; line-height: 1; padding: 0 12px; background: rgba(255, 255, 255, .06); border: 1px solid var(--edge); border-radius: 9px; cursor: pointer; }
+.launch-card #dice:hover { border-color: rgba(255, 255, 255, .3); }
+.launch-card .bias-note { color: var(--quiet); font-size: 12px; min-height: 1em; }
+/* Radios drawn as tiles and a segmented control (the real inputs stay, for keyboards). */
+.launch-card input[type=radio] { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tile { position: relative; display: grid; gap: 3px; align-content: start; padding: 10px 12px; border-radius: 11px; cursor: pointer;
+  background: rgba(255, 255, 255, .04); border: 1px solid var(--edge); transition: border-color .15s, background .15s; }
+.tile:hover { border-color: rgba(255, 255, 255, .28); }
+.tile b { font-weight: 600; font-size: 14px; }
+.tile small { color: var(--quiet); font-size: 12px; line-height: 1.35; }
+.tile em { font-style: normal; font-size: 11px; color: var(--quiet); opacity: .8; }
+.tile:has(input:checked) { border-color: rgba(242, 193, 78, .7); background: rgba(242, 193, 78, .08); }
+.tile:has(input:checked) em { color: var(--gold); opacity: 1; }
+.tile:has(input:focus-visible), .seg label:has(input:focus-visible) { outline: 2px solid rgba(242, 193, 78, .6); }
+.launch-card .seg { display: flex; gap: 2px; padding: 3px; background: rgba(255, 255, 255, .05); border: 1px solid var(--edge); border-radius: 999px; }
+.launch-card .seg label { flex: 1; text-align: center; padding: 6px 10px; border-radius: 999px; cursor: pointer; color: var(--quiet); }
+.launch-card .seg label:hover { color: var(--ink); }
+.launch-card .seg label:has(input:checked) { background: rgba(255, 255, 255, .13); color: #fff; }
+.resume { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 11px 14px; cursor: pointer;
+  background: rgba(242, 193, 78, .1); border: 1px solid rgba(242, 193, 78, .45); border-radius: 11px; }
+.resume:hover { background: rgba(242, 193, 78, .16); }
+.resume .ot { flex: 1; display: grid; }
+.resume small { color: var(--quiet); }
+.resume .arrow { color: var(--gold); font-size: 18px; }
+.launch-card .or { text-align: center; color: var(--quiet); font-size: 12px; margin: -4px 0; }
 
-/* --- The bar: bottom centre, over the planet and the hex alike. --- */
-#bar { position: fixed; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 70; display: flex; align-items: center; gap: 6px;
-  padding: 5px; border-radius: 16px; background: rgba(13, 17, 24, .8); backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, .11); box-shadow: 0 8px 26px rgba(0, 0, 0, .35);
-  font: 13px system-ui, sans-serif; color: #dfe6ee; user-select: none; -webkit-user-select: none; }
+/* The gold button: the one thing to press (Mundi's Enter). */
+.primundi .go { display: flex; justify-content: center; align-items: baseline; gap: 8px; width: 100%; margin-top: 4px; padding: 10px 12px;
+  font-weight: 600; font-size: 14px; color: #1a1406; background: var(--gold); border: 0; border-radius: 10px; cursor: pointer; }
+.primundi .go:hover { background: var(--gold-hi); }
+.primundi .go span { font-weight: 500; font-size: 12.5px; opacity: .75; }
+.primundi .ghost { width: 100%; margin-top: 6px; padding: 9px 12px; background: rgba(255, 255, 255, .06); border: 1px solid var(--edge);
+  border-radius: 10px; cursor: pointer; }
+.primundi .ghost:hover { border-color: rgba(255, 255, 255, .3); }
+
+/* --- The bar: bottom centre, over the map and the hex alike. --- */
+#bar { position: fixed; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 70;
+  display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 999px;
+  background: var(--glass-2); backdrop-filter: blur(12px); border: 1px solid var(--edge); box-shadow: 0 8px 26px rgba(0, 0, 0, .35);
+  font-size: 13px; color: var(--ink); user-select: none; -webkit-user-select: none; }
 body:has(#launch:not([hidden])) #bar, body:has(#launch:not([hidden])) #hud { display: none; }
 #bar svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
-#bar button { font: inherit; color: inherit; background: transparent; border: 0; border-radius: 11px; cursor: pointer;
-  display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; min-height: 36px; touch-action: manipulation; }
-#bar button:hover { background: rgba(255, 255, 255, .08); }
+#bar button { background: transparent; border: 0; border-radius: 999px; cursor: pointer; color: var(--quiet);
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 11px; min-height: 36px; touch-action: manipulation; }
+#bar button:hover { color: var(--ink); background: rgba(255, 255, 255, .06); }
 #bar button[hidden] { display: none; }
-#bar .civ { padding: 0 10px 0 8px; max-width: 170px; }
-#bar .civ b { font-family: Georgia, serif; font-size: 14px; color: #f3e8d2; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#bar .seg { display: flex; background: rgba(255, 255, 255, .06); border-radius: 12px; padding: 2px; }
-#bar .seg button.on { background: rgba(242, 193, 78, .18); color: #f2c14e; }
+#bar button.on { background: rgba(255, 255, 255, .13); color: #fff; }
+#bar .civ { padding: 0 12px; max-width: 180px; color: var(--ink); }
+#bar .civ b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#bar .seg { display: flex; gap: 1px; }
 #bar .speed button { padding: 8px 9px; }
-#bar.held .speed button.on { background: rgba(255, 255, 255, .08); color: #9aa8b5; }
-#bar .town { background: #a5532d; color: #fff; font-weight: 600; }
-#bar .town:hover { background: #b65f37; }
-#bar .stop { color: #f2c14e; }
-#bar .tools { display: flex; border-left: 1px solid rgba(255, 255, 255, .1); padding-left: 4px; }
+#bar .speed button.on { background: rgba(242, 193, 78, .18); color: var(--gold); }
+#bar.held .speed button.on { background: rgba(255, 255, 255, .08); color: var(--quiet); }
+#bar .town { background: var(--gold); color: #1a1406; font-weight: 600; }
+#bar .town:hover { background: var(--gold-hi); color: #1a1406; }
+#bar .stop { color: var(--gold); }
+#bar .tools { display: flex; border-left: 1px solid var(--edge); padding-left: 4px; margin-left: 2px; }
 #bar .tools button { padding: 8px; }
 #b-sound .off-ico, #b-sound.off .on-ico { display: none; }
 #b-sound.off .off-ico { display: block; }
-#b-sound.off { color: #7d8b95; }
 
-/* --- The readout: top centre. --- */
-#hud { position: fixed; left: 50%; top: calc(12px + env(safe-area-inset-top)); transform: translateX(-50%); z-index: 70; display: flex; align-items: center; gap: 14px;
-  padding: 7px 14px; border-radius: 14px; background: rgba(13, 17, 24, .72); backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, .1); font: 13px system-ui, sans-serif; color: #dfe6ee; white-space: nowrap; }
+/* --- The readout: top centre, like Mundi's Globe / Map pill. --- */
+#hud { position: fixed; left: 50%; top: calc(14px + env(safe-area-inset-top)); transform: translateX(-50%); z-index: 70;
+  display: flex; align-items: center; gap: 14px; padding: 7px 16px; border-radius: 999px;
+  background: var(--glass-2); backdrop-filter: blur(10px); border: 1px solid var(--edge); font-size: 13px; color: var(--ink); white-space: nowrap; }
 #hud[hidden] { display: none; }
-#hud .date { font: italic 14px Georgia, serif; color: #f3e8d2; }
+#hud .date { color: #fff; font-weight: 500; }
 #hud .stat { display: inline-flex; align-items: center; gap: 5px; }
 #hud .stat b { font-weight: 600; font-variant-numeric: tabular-nums; }
-#hud .stat.low b { color: #ff9a6a; }
-#hud svg { width: 15px; height: 15px; stroke: #9aa8b5; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#hud .stat.low b { color: var(--bad); }
+#hud svg { width: 15px; height: 15px; stroke: var(--quiet); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 /* --- The caravan on the map. --- */
 #me { position: fixed; left: 0; top: 0; z-index: 22; pointer-events: none; }
 #me[hidden] { display: none; }
-#me i { position: absolute; left: -8px; top: -8px; width: 16px; height: 16px; box-sizing: border-box; border-radius: 50%; background: #f2c14e;
-  border: 2px solid #2b2116; box-shadow: 0 0 0 3px rgba(242, 193, 78, .3), 0 2px 6px rgba(0, 0, 0, .6); }
+#me i { position: absolute; left: -7px; top: -7px; width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%; background: var(--gold);
+  border: 2px solid #1a1406; box-shadow: 0 0 0 3px rgba(242, 193, 78, .28), 0 2px 6px rgba(0, 0, 0, .6); }
 #me.moving i::after { content: ""; position: absolute; inset: -8px; border-radius: 50%; border: 2px solid rgba(242, 193, 78, .7); animation: pm-ping 1.4s ease-out infinite; }
 @keyframes pm-ping { from { transform: scale(.5); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
 
-/* --- Cards: a parchment panel, right on desktop, a bottom sheet on phones. --- */
-#card { position: fixed; right: 16px; top: 64px; z-index: 72; width: 400px; max-height: calc(100vh - 150px); overflow: auto; box-sizing: border-box;
-  background: #f3e8d2; color: #2b2116; border: 1px solid #d9c49c; border-radius: 10px; padding: 18px 20px 16px;
-  box-shadow: 0 16px 50px rgba(0, 0, 0, .5); font: 14px/1.45 Georgia, 'Iowan Old Style', 'Palatino Linotype', serif; }
+/* --- Cards: docked right (towns, the journal, a hex), centred for the road's moments. --- */
+#card { position: fixed; right: 16px; top: 64px; z-index: 72; width: 380px; max-height: calc(100vh - 140px); overflow: auto;
+  padding: 16px 18px 16px; color: var(--ink); font-size: 13px; line-height: 1.45;
+  background: var(--glass); backdrop-filter: blur(14px); border: 1px solid var(--edge); border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .45); scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .2) transparent; }
 #card[hidden] { display: none; }
-#card h2 { margin: 0 28px 2px 0; font-size: 22px; font-variant: small-caps; letter-spacing: .03em; font-weight: 600; }
-#card h3 { margin: 14px 0 4px; font-size: 15px; font-variant: small-caps; letter-spacing: .03em; }
-#card p { margin: 6px 0; }
-#card .dim { color: #7a6650; }
-#card .small { font-size: 12.5px; }
-#card .job { color: #a5532d; font-style: italic; }
-#card .fx { font: 12.5px system-ui, sans-serif; color: #5b4630; background: #ead9b8; border-radius: 6px; padding: 6px 8px; }
-#card .x { position: absolute; right: 10px; top: 8px; font-size: 22px; line-height: 1; background: none; border: 0; color: #7a6650; cursor: pointer; padding: 4px 8px; }
-#card .acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 2px; align-items: center; }
-#card .acts.col { flex-direction: column; align-items: stretch; }
-#card .acts.foot { border-top: 1px solid #dcc79f; padding-top: 10px; margin-top: 14px; justify-content: flex-end; }
-#card button { font: 600 13px system-ui, sans-serif; color: #2b2116; background: #fbf5e8; border: 1px solid #cdb68a; border-radius: 7px;
-  padding: 8px 11px; cursor: pointer; text-align: left; touch-action: manipulation; }
-#card button:hover:not(:disabled) { background: #fff; }
-#card button:disabled { opacity: .45; cursor: default; }
-#card button.go { color: #fff; background: #a5532d; border-color: #7e3b1d; }
-#card button.go:hover:not(:disabled) { background: #b65f37; }
-#card button span { display: block; font-weight: 400; font-size: 12px; opacity: .8; margin-top: 1px; }
-#card .tabs { display: flex; gap: 2px; margin: 10px 0 8px; border-bottom: 1px solid #dcc79f; }
-#card .tabs button { border: 0; background: none; border-radius: 6px 6px 0 0; padding: 7px 10px; color: #7a6650; }
-#card .tabs button.on { background: #ead9b8; color: #2b2116; }
-#card table.mkt { width: 100%; border-collapse: collapse; font: 13px system-ui, sans-serif; }
-#card .mkt th { text-align: left; font-weight: 600; color: #7a6650; font-size: 11.5px; padding: 2px 4px; }
-#card .mkt td { padding: 2px 4px; border-top: 1px solid #e6d5b2; font-variant-numeric: tabular-nums; }
-#card .mkt td:first-child { font-family: Georgia, serif; font-size: 13.5px; }
-#card .mkt button { padding: 3px 8px; min-width: 40px; text-align: center; font-weight: 600; }
-#card .mkt .else { font-size: 11.5px; }
-#card .mkt .up { color: #2d7a3e; font-weight: 700; font-size: 12.5px; }
-#card .meter { height: 8px; background: #e2cfa9; border-radius: 4px; overflow: hidden; }
-#card .meter i { display: block; height: 100%; background: #a5532d; }
+#card.in { animation: pm-card .2s ease-out; }
+@keyframes pm-card { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+#card[data-kind=encounter], #card[data-kind=appoint], #card[data-kind=over] {
+  right: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(460px, calc(100vw - 24px)); padding: 22px 24px 20px; }
+#card[data-kind=encounter].in, #card[data-kind=appoint].in, #card[data-kind=over].in { animation: pm-scene .35s ease-out; }
+@keyframes pm-scene { from { opacity: 0; transform: translate(-50%, -46%); } to { opacity: 1; transform: translate(-50%, -50%); } }
+/* The world dims behind the road's cards. */
+body.scene::after { content: ""; position: fixed; inset: 0; z-index: 71; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, rgba(5, 7, 13, .35), rgba(5, 7, 13, .8)); animation: pm-dim .35s ease-out; }
+@keyframes pm-dim { from { opacity: 0; } to { opacity: 1; } }
+
+#card .x { position: absolute; z-index: 1; top: 12px; right: 12px; width: 26px; height: 26px; border: 0; border-radius: 13px;
+  background: rgba(255, 255, 255, .08); color: var(--ink); font-size: 17px; line-height: 24px; cursor: pointer; padding: 0; }
+#card .x:hover { background: rgba(255, 255, 255, .16); }
+#card .ch { margin: 0 30px 10px 0; }
+#card .kick { font-size: 10.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--quiet); font-weight: 600; }
+#card h2 { margin: 3px 0 0; font-size: 20px; font-weight: 600; color: #fff; letter-spacing: .01em; }
+#card[data-kind=encounter] h2, #card[data-kind=appoint] h2, #card[data-kind=over] h2 { font-size: 24px; font-weight: 300; }
+#card .sub { color: var(--quiet); font-size: 12.5px; margin-top: 1px; }
+#card .sub b { color: var(--gold); font-weight: 600; }
+#card h3 { margin: 16px 0 6px; font-size: 10.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--quiet); font-weight: 600; }
+#card p { margin: 6px 0; color: #cfd8e1; }
+#card p b { color: #fff; }
+#card .tale { font-size: 15px; line-height: 1.55; color: var(--ink); margin: 10px 0 14px; }
+#card .dim { color: var(--quiet); }
+#card .small { font-size: 12px; }
+#card .note { color: var(--gold); }
+#card .facts { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+#card .facts span { display: inline-flex; align-items: center; gap: 5px; background: var(--chip); border-radius: 6px; padding: 3px 8px;
+  font-size: 11.5px; color: #c4cfda; font-variant-numeric: tabular-nums; }
+#card .fx span.good { background: rgba(143, 209, 158, .12); color: var(--good); }
+#card .fx span.bad { background: rgba(255, 154, 122, .12); color: var(--bad); }
+#card blockquote { margin: 8px 0 12px; padding: 10px 12px; border-left: 2px solid rgba(242, 193, 78, .6); background: rgba(255, 255, 255, .04);
+  border-radius: 0 9px 9px 0; font-size: 14px; color: var(--ink); }
+#card blockquote cite { display: block; margin-top: 6px; font-style: normal; font-size: 12px; color: var(--quiet); }
+/* An orrel: a little bronze ring. */
+.orrel { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 2px solid #c9925a; box-sizing: border-box; margin-right: 1px; vertical-align: -1px; }
+
+/* Tabs: a segmented pill. */
+#card .tabs { display: flex; gap: 2px; padding: 3px; margin: 4px 0 12px; background: rgba(255, 255, 255, .05); border: 1px solid var(--edge); border-radius: 999px; }
+#card .tabs button { flex: 1; padding: 6px 8px; border: 0; border-radius: 999px; background: none; color: var(--quiet); cursor: pointer; font-size: 12.5px; }
+#card .tabs button:hover { color: var(--ink); }
+#card .tabs button.on { background: rgba(255, 255, 255, .13); color: #fff; }
+
+/* Choices and purchases: rows, like Mundi's menus. */
+#card .opts { display: grid; gap: 4px; margin: 6px 0; }
+#card .opt { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 9px 12px; cursor: pointer;
+  background: rgba(255, 255, 255, .04); border: 1px solid var(--edge); border-radius: 10px; transition: border-color .15s, background .15s; }
+#card .opt:hover:not(:disabled) { border-color: rgba(242, 193, 78, .55); background: rgba(242, 193, 78, .07); }
+#card .opt:disabled { opacity: .4; cursor: default; }
+#card .opt .ot { flex: 1; display: grid; gap: 1px; }
+#card .opt b { font-weight: 500; font-size: 13.5px; color: #fff; }
+#card .opt small { font-size: 12px; color: var(--quiet); }
+#card .opt .or { font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; }
+
+/* The market: a row per good, sell on the left, buy on the right, what you carry between. */
+#card .mkt { display: grid; margin: 4px 0 8px; }
+#card .mrow { display: grid; grid-template-columns: 1fr 58px 30px 58px; align-items: center; gap: 6px; padding: 5px 2px; border-top: 1px solid rgba(255, 255, 255, .06); }
+#card .mrow:first-child { border-top: 0; }
+#card .mrow .g { display: grid; min-width: 0; }
+#card .mrow .g b { font-weight: 500; color: #fff; }
+#card .mrow .g em { font-style: normal; font-size: 11px; }
+#card .mrow .g em.cheap { color: var(--good); }
+#card .mrow .g em.dear { color: var(--bad); }
+#card .mrow .g small { font-size: 11px; color: var(--quiet); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#card .mrow .g small.up { color: var(--gold); }
+#card .mrow button { display: grid; justify-items: center; padding: 3px 0; border-radius: 8px; cursor: pointer; font-variant-numeric: tabular-nums;
+  font-weight: 600; background: rgba(255, 255, 255, .06); border: 1px solid var(--edge); }
+#card .mrow button span { font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--quiet); font-weight: 600; }
+#card .mrow button.buy:hover:not(:disabled) { border-color: rgba(242, 193, 78, .6); background: rgba(242, 193, 78, .1); }
+#card .mrow button.sell:hover:not(:disabled) { border-color: rgba(143, 209, 158, .6); background: rgba(143, 209, 158, .1); }
+#card .mrow button:disabled { opacity: .35; cursor: default; }
+#card .mrow .have { text-align: center; font-variant-numeric: tabular-nums; color: var(--quiet); }
+#card .mrow.held .have { color: var(--gold); font-weight: 700; }
+#card .mrow .nobuy { font-size: 10.5px; color: var(--quiet); text-align: center; }
+
+/* The journal. */
+#card .meter { height: 6px; background: rgba(255, 255, 255, .08); border-radius: 3px; overflow: hidden; margin: 6px 0; }
+#card .meter i { display: block; height: 100%; background: var(--gold); border-radius: 3px; }
 #card ul { list-style: none; margin: 4px 0; padding: 0; }
-#card .people li { padding: 3px 0; border-top: 1px solid #e6d5b2; }
-#card .people li span { display: block; font-size: 12px; color: #7a6650; }
-#card .log li { font-size: 13px; padding: 4px 0; border-top: 1px solid #e6d5b2; }
-#card .log li span { display: block; font: 11px system-ui, sans-serif; color: #8a7660; }
+#card .people li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid rgba(255, 255, 255, .06); }
+#card .people .who { flex: 1; display: grid; }
+#card .people .who b { font-weight: 500; color: #fff; }
+#card .people .who small { font-size: 11.5px; color: var(--quiet); }
+#card .people .role { font-size: 11px; background: var(--chip); border-radius: 6px; padding: 2px 7px; color: #c4cfda; }
+#card .people .role.lead { background: rgba(242, 193, 78, .15); color: var(--gold); }
+#card .people .hp { font-size: 11px; border-radius: 6px; padding: 2px 7px; background: rgba(255, 154, 122, .12); color: var(--bad); }
+#card .log li { font-size: 12.5px; padding: 6px 0 6px 12px; border-left: 1px solid var(--edge); position: relative; color: #cfd8e1; }
+#card .log li::before { content: ''; position: absolute; left: -3px; top: 11px; width: 5px; height: 5px; border-radius: 50%; background: var(--quiet); }
+#card .log li span { display: block; font-size: 11px; color: var(--quiet); }
 
-/* Toasts: one line, above the bar. */
-#toast { position: fixed; left: 50%; bottom: calc(76px + env(safe-area-inset-bottom)); transform: translate(-50%, 10px); z-index: 71; max-width: min(520px, calc(100vw - 24px));
-  padding: 8px 14px; border-radius: 10px; background: rgba(20, 16, 12, .88); color: #f3e8d2; font: italic 14px Georgia, serif; text-align: center;
-  opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; }
+/* Toasts: Mundi's, at the bottom above the bar. */
+#toast { position: fixed; left: 50%; bottom: calc(74px + env(safe-area-inset-bottom)); transform: translate(-50%, 8px); z-index: 71; max-width: min(520px, calc(100vw - 24px));
+  padding: 8px 14px; border-radius: 10px; background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--edge); color: var(--ink);
+  font-size: 13px; text-align: center; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; }
 #toast.on { opacity: 1; transform: translate(-50%, 0); }
-
-/* --- Phones, held upright. --- */
-@media (max-width: 640px) {
-  #bar { left: 8px; right: 8px; transform: none; bottom: calc(8px + env(safe-area-inset-bottom)); justify-content: space-between; gap: 2px; padding: 4px; }
-  #bar .civ, #bar .seg span, #bar .town span { display: none; }
-  #bar button { padding: 8px 7px; min-height: 40px; }
-  #bar .speed button { padding: 8px 6px; }
-  #bar .tools { padding-left: 2px; }
-  #hud { left: 8px; right: 8px; transform: none; justify-content: space-between; gap: 8px; padding: 6px 10px; font-size: 12px; flex-wrap: wrap; row-gap: 2px; }
-  #hud .date { flex-basis: 100%; text-align: center; font-size: 13px; }
-  #card { left: 8px; right: 8px; top: auto; bottom: calc(64px + env(safe-area-inset-bottom)); width: auto; max-height: 58vh; padding: 14px 14px 12px; border-radius: 12px; }
-  #card .mkt .else span.dim { display: none; }
-  #toast { bottom: calc(66px + env(safe-area-inset-bottom)); }
-}
 
 /* The hex frame sits under the bar. */
 #hexframe { z-index: 50; }
-/* Hover readout and labels: Mundi's look. */
-body.primundi #info span { color: #9aa8b5; }
+body.primundi #info span { color: var(--quiet); }
+/* Place names on the map: Mundi's, white over a soft shadow, with a dot on the place. */
 #labels { position: fixed; inset: 0; pointer-events: none; z-index: 20; }
 body.in-hex #labels { display: none; }
-.lbl { position: absolute; left: 0; top: 0; white-space: nowrap; font: 600 13px Georgia, serif; color: #f3e8d2;
-  padding: 2px 8px; border-radius: 6px; background: rgba(20, 16, 12, .62); border: 1px solid rgba(243, 232, 210, .25);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
-.lbl.own { color: #f2c14e; border-color: rgba(242, 193, 78, .45); }
-.lbl.village { font-weight: 400; font-size: 11.5px; padding: 1px 6px; background: rgba(20, 16, 12, .45); }
-.lbl.job { box-shadow: 0 0 0 2px #a5532d; }
+.lbl { position: absolute; left: 0; top: 0; white-space: nowrap; font-size: 13px; font-weight: 600; color: #fff; letter-spacing: .02em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .9), 0 0 10px rgba(0, 0, 0, .6); }
+.lbl::after { content: ''; position: absolute; left: 50%; top: calc(100% + 3px); width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .55); }
+.lbl.own { color: var(--gold); }
+.lbl.own::after { background: var(--gold); }
+.lbl.village { font-weight: 500; font-size: 11.5px; color: #dfe6ee; }
+.lbl.village::after { width: 4px; height: 4px; margin-left: -2px; }
+.lbl.job::before { content: '◆ '; color: var(--gold); }
 
 /* While the planet's shaders compile (first visit only): cover the unfogged stand-in. */
 body.gathering::after { content: 'The storm gathers…'; position: fixed; inset: 0; z-index: 45; display: grid; place-items: center;
-  background: radial-gradient(ellipse at 50% 60%, #262a33, #0b0d12 70%); color: #9aa8b5; font: italic 16px Georgia, serif; }
+  background: radial-gradient(ellipse at 50% 60%, #262a33, #05070d 70%); color: var(--quiet); font-size: 14px; letter-spacing: .04em; }
+
+/* --- Phones, held upright. --- */
+@media (max-width: 640px) {
+  #bar { left: 8px; right: 8px; transform: none; bottom: calc(8px + env(safe-area-inset-bottom)); justify-content: space-between; gap: 0; padding: 3px; }
+  #bar .civ, #bar .seg button span, #bar .town span { display: none; }
+  #bar button { padding: 8px 7px; min-height: 40px; }
+  #bar .speed button { padding: 8px 6px; }
+  #bar .tools { padding-left: 2px; }
+  #hud { left: 8px; right: 8px; transform: none; justify-content: space-between; gap: 8px; padding: 6px 12px; border-radius: 16px; font-size: 12px; flex-wrap: wrap; row-gap: 2px; }
+  #hud .date { flex-basis: 100%; text-align: center; }
+  #card { left: 8px; right: 8px; top: auto; bottom: calc(62px + env(safe-area-inset-bottom)); width: auto; max-height: 60vh; padding: 14px 14px 12px; }
+  #card[data-kind=encounter], #card[data-kind=appoint], #card[data-kind=over] { left: 8px; right: 8px; top: auto; bottom: calc(62px + env(safe-area-inset-bottom)); transform: none; width: auto; }
+  #card[data-kind=encounter].in, #card[data-kind=appoint].in, #card[data-kind=over].in { animation: pm-card .3s ease-out; }
+  #card .mrow { grid-template-columns: 1fr 52px 26px 52px; }
+  .tiles { grid-template-columns: 1fr; }
+  #toast { bottom: calc(64px + env(safe-area-inset-bottom)); }
+}
+.primundi #card button:disabled:hover, .primundi #card button:disabled { border-color: var(--edge); }

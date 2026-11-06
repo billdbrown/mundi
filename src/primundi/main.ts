@@ -9,7 +9,7 @@
  */
 import * as THREE from 'three';
 import { PlanetView, DEFAULT_VIEW, type ViewOptions } from '../render.ts';
-import { DEFAULT_PARAMS, type World, type WorldParams } from '../world.ts';
+import { DEFAULT_PARAMS, WATER_LAND, type World, type WorldParams } from '../world.ts';
 import { BIOMES } from '../biomes.ts';
 import type { BuildRequest, BuildResult, BuildStage } from '../worker.ts';
 import type { HistoryRequest, HistoryResult } from '../historyWorker.ts';
@@ -19,6 +19,7 @@ import { NAME_DECIDES, paramsOf } from '../namedworld.ts';
 import { nameSeed, parseSeed, randomName } from '../seedname.ts';
 import { SEA, surfaceQueries, type SurfaceQueries } from '../surface.ts';
 import { mountLoader, type Loader } from '../loader.ts';
+import { describeHex } from '../hexcard.ts';
 import { makeRng } from '../rng.ts';
 import { PlanetFog } from './fog.ts';
 import { flicker } from './hexfog.ts';
@@ -32,7 +33,7 @@ import { ENCOUNTERS, applyEffect, contextAt, drawEncounter, type Choice, type En
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const RADIUS_KM = 640;
 /** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
-const RATES = [0, 0.25, 0.75, 2];
+const RATES = [0, 0.16, 0.45, 1.2];
 /** The calendar day of the year the game starts on (northern spring). */
 const START_DOY = 100;
 /** Chance of an encounter on entering a hex off the road (on it, a bit less). */
@@ -101,26 +102,27 @@ function showLaunch() {
   el.hidden = false;
   const nameDefault = nameMaker(Date.now() % 100000)() + "'s Caravan";
   el.innerHTML = `
-    <form class="card" autocomplete="off">
-      <h1>Primundi</h1>
-      <p class="tag">A world under storm. Take to the road, trade, and learn its shape.</p>
-      ${prev ? `<button type="button" class="go" id="continue">Continue ${esc(prev.caravan.name)} <span>on ${esc(prev.world)}, ${dateText(prev.day, true)}</span></button>
+    <form class="launch-card" autocomplete="off">
+      <div class="wordmark">PRIMUNDI</div>
+      <h1>A world under storm</h1>
+      <p class="tag">Take a caravan out into it. Trade, take work, and learn its shape.</p>
+      ${prev ? `<button type="button" class="resume" id="continue"><span class="ot"><b>Continue ${esc(prev.caravan.name)}</b><small>${esc(prev.world)} · ${dateText(prev.day, true)}</small></span><span class="arrow">→</span></button>
       <div class="or">or set out anew</div>` : ''}
-      <fieldset><legend>Your caravan</legend>
-        <input id="civ" type="text" maxlength="28" spellcheck="false" value="${esc(nameDefault)}" />
-      </fieldset>
-      <fieldset><legend>Who you are</legend>
-        ${ORIGINS.map((o, i) => `<label class="bias"><input type="radio" name="origin" value="${o.id}" ${i === 0 ? 'checked' : ''} /> ${o.label} <span>${o.note}</span></label>`).join('')}
-      </fieldset>
-      <fieldset><legend>Home</legend>
-        ${BIASES.map((b) => `<label class="bias"><input type="radio" name="bias" value="${b.id}" ${b.id === (prev?.bias ?? 'any') ? 'checked' : ''} /> ${b.label} <span>${b.note}</span></label>`).join('')}
-      </fieldset>
-      <fieldset><legend>World</legend>
-        <span class="seed"><input id="seed" type="text" maxlength="40" spellcheck="false" placeholder="random" title="A name (letters) or a number: the same seed always makes the same world and home" />
-        <button type="button" id="dice" title="Roll a world">⚄</button></span>
-      </fieldset>
+      <label class="field"><span class="lab">Your caravan</span>
+        <input id="civ" type="text" maxlength="28" spellcheck="false" value="${esc(nameDefault)}" /></label>
+      <div class="field"><span class="lab">Who you are</span>
+        <div class="tiles">${ORIGINS.map((o, i) => `<label class="tile"><input type="radio" name="origin" value="${o.id}" ${i === 0 ? 'checked' : ''} /><b>${o.label}</b><small>${o.note}</small><em>${o.ambition}</em></label>`).join('')}</div></div>
+      <div class="field"><span class="lab">Home</span>
+        <div class="seg">${BIASES.map((b) => `<label><input type="radio" name="bias" value="${b.id}" ${b.id === (prev?.bias ?? 'any') ? 'checked' : ''} /><span>${b.label}</span></label>`).join('')}</div>
+        <small class="bias-note" id="bias-note"></small></div>
+      <div class="field"><span class="lab">World</span>
+        <span class="seed"><input id="seed" type="text" maxlength="40" spellcheck="false" placeholder="a random world" title="A name (letters) or a number: the same seed always makes the same world and home" />
+        <button type="button" id="dice" title="Roll a world">⚄</button></span></div>
       <button type="submit" class="go" id="begin">Set out</button>
     </form>`;
+  const note = () => { const v = el.querySelector<HTMLInputElement>('input[name=bias]:checked')?.value; $('bias-note').textContent = BIASES.find((b) => b.id === v)?.note ?? ''; };
+  el.querySelectorAll('input[name=bias]').forEach((i) => i.addEventListener('change', note));
+  note();
   $('dice').onclick = () => { $<HTMLInputElement>('seed').value = randomName(); };
   el.querySelector('form')!.onsubmit = (e) => {
     e.preventDefault();
@@ -261,7 +263,7 @@ function reveal(cells: number[], byTravel = false) {
   const fresh = cells.filter((c) => !revealed.has(c) && world && c >= 0 && c < world.grid.count);
   if (!fresh.length || !fog || !save) return 0;
   for (const c of fresh) revealed.add(c);
-  fog.reveal(fresh, false, byTravel ? 1.4 : 3.2);
+  fog.reveal(fresh, false, byTravel ? 1 : 3.2);
   save.revealed = [...revealed];
   if (byTravel) { save.charted += fresh.length; save.caravan.unsoldCharts += fresh.length; }
   bounds.update(false);
@@ -362,10 +364,28 @@ const marks = {
     this.group.add(this.anchor);
     this.roads();
   },
-  /** Where a cell's centre sits, a little above the ground. */
+  inland: null as Float32Array | null,
+  /** Where a cell's centre sits, a little above the ground. On a coast, nudged inland: the drawn
+   * shore wanders across the hex, and a road along it would otherwise seem to walk on the water. */
   at(c: number, out = new THREE.Vector3(), lift = 0.0016) {
-    const P = world!.grid.centers;
-    return out.set(P[c * 3], P[c * 3 + 1], P[c * 3 + 2]).multiplyScalar(Math.max(surf!.centerH(c), SEA) + lift);
+    const w = world!, P = w.grid.centers;
+    if (!this.inland) {
+      const N = w.grid.count, k = 0.42;
+      this.inland = new Float32Array(N * 3);
+      for (let i = 0; i < N; i++) {
+        let x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
+        const nb = w.grid.neighbors[i];
+        if (w.water[i] === WATER_LAND && nb.some((n) => w.water[n] !== WATER_LAND)) {
+          let sx = 0, sy = 0, sz = 0, n = 0;
+          for (const j of nb) if (w.water[j] === WATER_LAND) { sx += P[j * 3]; sy += P[j * 3 + 1]; sz += P[j * 3 + 2]; n++; }
+          if (n) { x += (sx / n - x) * k; y += (sy / n - y) * k; z += (sz / n - z) * k; }
+        }
+        const l = Math.hypot(x, y, z);
+        this.inland[i * 3] = x / l; this.inland[i * 3 + 1] = y / l; this.inland[i * 3 + 2] = z / l;
+      }
+    }
+    const I = this.inland;
+    return out.set(I[c * 3], I[c * 3 + 1], I[c * 3 + 2]).multiplyScalar(Math.max(surf!.centerH(c), SEA) + lift);
   },
   /** The backbone roads, where both ends are revealed. */
   roads() {
@@ -462,12 +482,20 @@ function enter(cell: number) {
   s.cell = cell;
   s.route.shift();
   s.progress = 0;
-  // A route through the storm was a guess: now that more is seen, think again.
-  const guessed = s.route.some((c) => !revealed.has(c));
+  // A route through the storm was a guess. When what's just been seen of it turns out worse than
+  // guessed, think again; otherwise keep going, so the caravan doesn't wander between guesses.
+  const unseen = s.route.filter((c) => !revealed.has(c));
   lookAround(cell);
-  if (guessed && s.route.length) {
-    const p = plan(s.route[s.route.length - 1]);
-    if (p && p.path.length > 1) s.route = p.path.slice(1);
+  if (unseen.length && s.route.length && unseen.some((c) => revealed.has(c))) {
+    let guessed = 0, found = 0, prev = s.cell;
+    for (const c of s.route) {
+      if (unseen.includes(c) && revealed.has(c)) { guessed += UNKNOWN_DAYS; found += stepDays(w, a, prev, c, doyOf(s.day)); }
+      prev = c;
+    }
+    if (found > guessed * 1.15) {
+      const p = plan(s.route[s.route.length - 1]);
+      if (p && p.path.length > 1) s.route = p.path.slice(1);
+    }
   }
   marks.route();
   const pid = a.placeAt[cell];
@@ -480,7 +508,7 @@ function enter(cell: number) {
   if (!s.route.length) {
     speed = 0;
     follow = marks.dirOfCaravan();
-    if (pid >= 0) openTown(pid); else toast('Arrived.');
+    if (pid >= 0) { openHex(cell); openTown(pid); } else toast('Arrived.');
     syncBar();
     return;
   }
@@ -514,8 +542,9 @@ function newDay(resting: boolean) {
 }
 
 // --- Travel -----------------------------------------------------------------------------------
-/** Days the planner guesses for a hex it hasn't seen: average going. The truth may be a swamp. */
-const UNKNOWN_DAYS = 0.75;
+/** Days the planner guesses for a hex it hasn't seen: a little worse than average, so it keeps to
+ * land it knows unless the storm is a real shortcut. The truth may be a swamp. */
+const UNKNOWN_DAYS = 1;
 /** A route from the caravan to a cell. Over known land it knows the going; into the storm it
  * guesses, and the route is thought again as the caravan sees more (enter). */
 function plan(to: number): { path: number[]; days: number; guess: boolean } | null {
@@ -720,6 +749,8 @@ function hoverText(c: number): string {
 }
 
 // --- Cards ------------------------------------------------------------------------------------
+// One card at a time, in Mundi's glass (style.css: the hex card, the drawer). Town and journal
+// cards dock at the side; the road's cards come up in the middle with the world dimmed behind.
 const panel = $('card');
 let panelKind = '';
 function showPanel(kind: string, html: string, isModal = false) {
@@ -727,17 +758,30 @@ function showPanel(kind: string, html: string, isModal = false) {
   panel.hidden = false;
   panel.dataset.kind = kind;
   panel.scrollTop = 0;
+  panel.classList.remove('in');
+  void panel.offsetWidth;
+  panel.classList.add('in');
   panelKind = kind;
   modal = isModal;
+  document.body.classList.toggle('scene', kind === 'encounter' || kind === 'appoint' || kind === 'over');
   syncBar();
 }
 function closePanel() {
   panel.hidden = true;
   panelKind = '';
   modal = false;
+  document.body.classList.remove('scene');
   syncBar();
 }
 const close = '<button class="x" data-act="close" title="Close">×</button>';
+/** A card's head: a small kicker line, the title, a line under it. */
+const head = (kicker: string, title: string, sub = '') =>
+  `<header class="ch"><div class="kick">${kicker}</div><h2>${title}</h2>${sub ? `<div class="sub">${sub}</div>` : ''}</header>`;
+const chips = (xs: string[]) => (xs.length ? `<div class="facts">${xs.map((x) => `<span>${x}</span>`).join('')}</div>` : '');
+/** A tappable row: a title and a note on the left, a figure on the right. */
+const opt = (act: string, title: string, note = '', right = '', attrs = '', disabled = false) =>
+  `<button class="opt" data-act="${act}" ${attrs} ${disabled ? 'disabled' : ''}><span class="ot"><b>${title}</b>${note ? `<small>${note}</small>` : ''}</span>${right ? `<span class="or">${right}</span>` : ''}</button>`;
+const ORREL = '<i class="orrel"></i>';
 
 function showHexCard(c: number) {
   if (!world || !atlas || !save) return;
@@ -745,34 +789,29 @@ function showHexCard(c: number) {
   if (!revealed.has(c)) {
     const edge = frontier().includes(c);
     const p = plan(c);
-    showPanel('hex', `${close}<h2>Storm</h2>
-      <p>${edge ? 'The edge of what you know. Beyond it, anything.' : 'Deep in the storm. Nobody you know has been there.'}</p>
-      ${p ? `<p class="dim">Perhaps ${daysText(p.days)}, if the going is fair. You'll find out.</p><div class="acts"><button class="go" data-act="travel" data-cell="${c}">Head into the storm</button></div>` : '<p class="dim">No way there that you can find.</p>'}`);
+    showPanel('hex', `${close}${head('The storm', 'Unknown country', edge ? 'The edge of what you know' : 'Nobody you know has been there')}
+      <p>${edge ? 'Beyond the last hex you have seen, the cloud sits on the ground. Anything could be under it.' : 'Deep in the storm. You can head that way, and find out what lies between as you go.'}</p>
+      ${p ? `<p class="dim">Perhaps ${daysText(p.days)}, if the going is fair.</p><button class="go" data-act="travel" data-cell="${c}">Head into the storm</button>` : '<p class="dim">No way there that you can find.</p>'}`);
     return;
   }
   const pid = atlas.placeAt[c], place = pid >= 0 ? atlas.places[pid] : null;
-  const tC = Math.round(50 * seasonalTemp(w, c, doyOf(save.day)) - 17);
+  const about = describeHex(w, game, undefined, c, RADIUS_KM);
   const here = c === save.cell;
   const p = here ? null : plan(c);
   const known = place ? save.known[place.id] : undefined;
-  showPanel('hex', `${close}
-    <h2>${place ? esc(place.name) : BIOMES[w.biome[c]].name}</h2>
-    ${place ? `<p class="dim">${placeLine(place)}</p>` : ''}
-    <p>${place ? BIOMES[w.biome[c]].name + ' · ' : ''}${w.river[c] ? 'a river · ' : ''}${atlas.road[c] ? 'on the road · ' : ''}about ${tC} °C now</p>
-    ${place && known && !here ? `<p class="dim">You know its prices from ${agoText(save.day - known.day)}.</p>` : place && !here ? '<p class="dim">You don\'t know its prices.</p>' : ''}
-    ${save.job?.to === pid ? `<p class="job">You have a ${esc(save.job.item)} to deliver here.</p>` : ''}
-    <div class="acts">
-      ${here ? `${place ? `<button class="go" data-act="town">Enter ${esc(place.name)}</button>` : ''}<button data-act="look">Look around</button>`
-        : p ? `<button class="go" data-act="travel" data-cell="${c}">Travel here · ${p.guess ? 'perhaps ' : ''}${daysText(p.days)}</button>` : '<span class="dim">No way there that you know of.</span>'}
-    </div>`);
+  const facts = [...(place ? [`${fmt(place.pop)} people`] : []), ...(atlas.road[c] ? ['road'] : []), ...about.facts.slice(0, 2)];
+  if (place && !here) facts.push(known ? `prices from ${agoText(save.day - known.day)}` : 'prices unknown');
+  showPanel('hex', `${close}${head(place ? `${place.town ? 'Town' : 'Village'}${place.realm ? ` · ${esc(place.realm)}` : ''}` : about.where || 'Hex',
+      place ? esc(place.name) : about.title, place ? about.title + (place.id === save.home ? ' · <b>your home</b>' : '') : here ? 'You are here' : '')}
+    <p>${about.text}</p>${chips(facts)}
+    ${save.job?.to === pid ? `<p class="note">You have ${esc(save.job.giver)}'s ${esc(save.job.item)} to deliver here.</p>` : ''}
+    ${here ? `${place ? `<button class="go" data-act="town">Enter ${esc(place.name)}</button>` : ''}<button class="ghost" data-act="look">Look around</button>`
+      : p ? `<button class="go" data-act="travel" data-cell="${c}">Travel here<span>${p.guess ? 'perhaps ' : ''}${daysText(p.days)}</span></button>` : '<p class="dim">No way there that you know of.</p>'}`);
 }
 const daysText = (d: number) => (d < 1 ? 'under a day' : d < 1.5 ? 'a day' : `${Math.round(d)} days`);
 const agoText = (d: number) => (d < 1 ? 'today' : d < 2 ? 'yesterday' : `${Math.floor(d)} days ago`);
-function placeLine(p: Place) {
-  return `${p.town ? 'Town' : 'Village'} of ${fmt(p.pop)}${p.realm ? ` · ${esc(p.realm)}` : ''}${p.id === save?.home ? ' · <b>home</b>' : ''}`;
-}
 
-// The town: market, supplies, work, rest. Bannerlord's menu, over the hex view or the planet.
+// The town: market, supplies, work, rest. Bannerlord's menu, over the town's own hex.
 let townTab = 'market';
 function openTown(pid: number, tab = townTab) {
   if (!world || !atlas || !save) return;
@@ -782,63 +821,65 @@ function openTown(pid: number, tab = townTab) {
   const q = quotes(w, p, s.stocks, day, doy);
   remember(s.known, p, q, Math.floor(day));
   const home = p.id === s.home;
-  const tabs = [['market', 'Market'], ['supplies', 'Supplies'], ['work', 'Work'], ['rest', home ? 'Home' : 'Rest & hire']];
+  const tabs = [['market', 'Market'], ['supplies', 'Supplies'], ['work', 'Work'], ['rest', home ? 'Home' : 'Inn']];
+  const purse = chips([`${ORREL}${fmt(c.orrels)}`, `${cargoUsed(c)} of ${c.capacity} loads`]);
   let body = '';
   if (tab === 'market') {
-    body = `<p class="dim">${cargoUsed(c)} of ${c.capacity} loads carried · ${fmt(c.orrels)} orrels</p>
-      <table class="mkt"><thead><tr><th></th><th>Buy</th><th>Sell</th><th>Have</th><th class="else">Best you know</th></tr></thead><tbody>
+    body = `${purse}<div class="mkt">
       ${GOODS.map((g, i) => {
         const best = bestKnownSell(a, s.known, i, p.id);
-        // Green: worth carrying there (it fetches more than it costs here; relics, more than here pays).
-        const better = best && best.price > (q[i].buy || q[i].sell);
-        return `<tr><td>${g.name}</td>
-          <td>${q[i].buy ? `<button data-act="buy" data-g="${i}" ${q[i].stock < 1 || c.orrels < q[i].buy || cargoUsed(c) >= c.capacity ? 'disabled' : ''}>${q[i].buy}</button>` : '<span class="dim">·</span>'}</td>
-          <td><button data-act="sell" data-g="${i}" ${c.cargo[i] < 1 ? 'disabled' : ''}>${q[i].sell}</button></td>
-          <td>${c.cargo[i] || ''}</td>
-          <td class="else">${best ? `<span class="${better ? 'up' : 'dim'}">${best.price}</span> <span class="dim">${esc(best.place.name)}, ${agoText(day - best.day)}</span>` : ''}</td></tr>`;
-      }).join('')}
-      </tbody></table>
-      <p class="dim small">Buy and sell one at a time; shift-click for five. Prices move as you trade, and settle back over a fortnight.</p>`;
+        const here = q[i].buy || q[i].sell;
+        const better = best && best.price > here;
+        const k = q[i].buy ? q[i].buy / g.base : 1;
+        const hint = k < 0.7 ? '<em class="cheap">cheap here</em>' : k > 1.4 ? '<em class="dear">dear here</em>' : '';
+        const buyable = q[i].buy && q[i].stock >= 1 && c.orrels >= q[i].buy && cargoUsed(c) < c.capacity;
+        return `<div class="mrow${c.cargo[i] ? ' held' : ''}">
+          <div class="g"><b>${g.name}</b>${hint}${better ? `<small class="up">fetches ${best!.price} in ${esc(best!.place.name)}, ${agoText(day - best!.day)}</small>` : ''}</div>
+          <button class="sell" data-act="sell" data-g="${i}" ${c.cargo[i] < 1 ? 'disabled' : ''} title="Sell one (shift: five)"><span>sell</span>${q[i].sell}</button>
+          <span class="have" title="You carry">${c.cargo[i] || '·'}</span>
+          ${q[i].buy ? `<button class="buy" data-act="buy" data-g="${i}" ${buyable ? '' : 'disabled'} title="Buy one (shift: five)"><span>buy</span>${q[i].buy}</button>` : '<span class="nobuy">not sold</span>'}
+        </div>`;
+      }).join('')}</div>
+      <p class="dim small">Prices move as you trade and settle back over a fortnight. Shift-click trades five.</p>`;
   } else if (tab === 'supplies') {
     const rp = rationPrice(w, p, s.stocks, day, doy), eat = appetite(c);
     const rd = c.rations / Math.max(1, eat);
     const chart = Math.round(c.unsoldCharts * chartRate(p));
-    body = `<p>Rations for <b>${Math.floor(rd)} days</b>. Water: your skins are filled here, free (${Math.floor(waterCap(c) / Math.max(1, thirst(c)))} days' worth).</p>
-      <div class="acts">${[5, 10, 20].map((d) => { const cost = Math.ceil(rp * eat * d); return `<button data-act="rations" data-n="${d}" ${c.orrels < cost ? 'disabled' : ''}>+${d} days · ${cost} orrels</button>`; }).join('')}</div>
+    body = `${purse}<h3>Provisions</h3>
+      <p>Food for <b>${Math.floor(rd)} days</b>. The skins are filled at the well, free: ${Math.floor(waterCap(c) / Math.max(1, thirst(c)))} days of water.</p>
+      <div class="opts">${[5, 10, 20].map((d) => { const cost = Math.ceil(rp * eat * d); return opt('rations', `${d} days of food`, `for ${living(c).length} people`, `${ORREL}${cost}`, `data-n="${d}"`, c.orrels < cost); }).join('')}</div>
       <h3>Charts</h3>
-      <p>${c.unsoldCharts ? `You have mapped ${fmt(c.unsoldCharts)} hexes no one here has bought. ${esc(p.name)} will pay ${fmt(chart)} orrels for the charts.` : 'You have no new charts to sell.'}</p>
-      ${c.unsoldCharts ? `<div class="acts"><button class="go" data-act="charts">Sell charts · ${fmt(chart)} orrels</button></div>` : ''}`;
+      ${c.unsoldCharts ? `<p>You have mapped ${fmt(c.unsoldCharts)} hexes nobody here has seen drawn.</p><div class="opts">${opt('charts', 'Sell your charts', `${p.town ? 'A town pays well' : 'A village pays half'}`, `${ORREL}${fmt(chart)}`)}</div>`
+        : '<p class="dim">Nothing new to sell. Every hex you uncover on the road is worth something here.</p>'}`;
   } else if (tab === 'work') {
     const j = s.job;
     if (j && j.to === p.id) {
-      body = `<p>${esc(j.giver)}'s ${esc(j.item)} is for someone here. They have been expecting it.</p>
-        <div class="acts"><button class="go" data-act="deliver">Deliver it · ${j.reward} orrels</button></div>`;
+      body = `<blockquote>${esc(j.giver)}'s ${esc(j.item)} is for someone here. They have been expecting it.</blockquote>
+        <button class="go" data-act="deliver">Hand it over<span>${j.reward} orrels</span></button>`;
     } else if (j) {
       body = `<p>You are carrying ${esc(j.giver)}'s ${esc(j.item)} to <b>${esc(a.places[j.to].name)}</b>, ${bearing(w, s.cell, a.places[j.to].cell)} of here, for ${j.reward} orrels.</p>
-        <div class="acts"><button data-act="abandon">Give it up</button></div>`;
+        <p class="dim">One job at a time.</p><button class="ghost" data-act="abandon">Give it up</button>`;
     } else {
       const offer = jobAt(p);
       body = offer
-        ? `<p><b>${esc(offer.giver)}</b> needs a ${esc(offer.item)} carried to <b>${esc(a.places[offer.to].name)}</b>, ${bearing(w, p.cell, a.places[offer.to].cell)} of here. ${revealed.has(a.places[offer.to].cell) ? '' : 'They mark it on your map.'}</p>
-           <p>They'll pay <b>${offer.reward} orrels</b> on delivery.</p>
-           <div class="acts"><button class="go" data-act="job">Take the job</button></div>`
-        : '<p>Nobody here has work for a caravan just now.</p>';
+        ? `<blockquote>"I need a ${esc(offer.item)} taken to ${esc(a.places[offer.to].name)}, ${bearing(w, p.cell, a.places[offer.to].cell)} of here.${revealed.has(a.places[offer.to].cell) ? '' : " I'll show you on your map."} ${offer.reward} orrels when it gets there."<cite>${esc(offer.giver)}</cite></blockquote>
+           <button class="go" data-act="job">Take the job<span>${offer.reward} orrels on delivery</span></button>`
+        : `<p class="dim">Nobody in ${esc(p.name)} has work for a caravan this month.</p>`;
     }
   } else {
     const cost = home ? 0 : living(c).length;
-    const hires: [Role, number][] = p.town ? [['hand', 30], ['guard', 55], ['scout', 70]] : [['hand', 30], ['guard', 55]];
-    body = `<p>${home ? 'Your own people put you up. Resting here costs nothing.' : `A yard and a roof for the caravan: ${cost} orrels a night.`}</p>
-      <div class="acts"><button data-act="rest" data-n="1" ${c.orrels < cost ? 'disabled' : ''}>Rest a day</button><button data-act="rest" data-n="3" ${c.orrels < cost * 3 ? 'disabled' : ''}>Rest three days</button></div>
+    const hires: [Role, number, string][] = [['hand', 30, 'Carries, cooks, keeps watch'], ['guard', 55, 'Fights when it comes to it'], ...(p.town ? [['scout', 70, 'Sees a hex further'] as [Role, number, string]] : [])];
+    body = `${purse}<h3>${home ? 'Home' : 'The inn'}</h3>
+      <p>${home ? 'Your own people put you up. Resting here costs nothing.' : `A yard for the beasts and a roof for the people, ${cost} orrels a night.`} Rest mends the hurt and lifts spirits.</p>
+      <div class="opts">${opt('rest', 'Rest a day', '', home ? 'free' : `${ORREL}${cost}`, 'data-n="1"', c.orrels < cost)}${opt('rest', 'Rest three days', '', home ? 'free' : `${ORREL}${cost * 3}`, 'data-n="3"', c.orrels < cost * 3)}</div>
       <h3>Hire</h3>
-      ${living(c).length >= 9 ? '<p class="dim">The caravan is as big as it can feed.</p>' : `<div class="acts">${hires.map(([r, o]) => `<button data-act="hire" data-role="${r}" data-n="${o}" ${c.orrels < o ? 'disabled' : ''}>A ${ROLE_NAMES[r].toLowerCase()} · ${o}</button>`).join('')}</div>`}
+      ${living(c).length >= 9 ? '<p class="dim">The caravan is as big as it can feed.</p>' : `<div class="opts">${hires.map(([r, o, note]) => opt('hire', `A ${ROLE_NAMES[r].toLowerCase()}`, note, `${ORREL}${o}`, `data-role="${r}" data-n="${o}"`, c.orrels < o)).join('')}</div>`}
       <h3>Beasts</h3>
-      <div class="acts"><button data-act="beast" ${c.orrels < 45 ? 'disabled' : ''}>A pack beast (+4 loads) · 45</button></div>`;
+      <div class="opts">${opt('beast', 'A pack beast', 'Carries four more loads', `${ORREL}45`, '', c.orrels < 45)}</div>`;
   }
-  showPanel('town', `${close}
-    <h2>${esc(p.name)}</h2><p class="dim">${placeLine(p)}</p>
+  showPanel('town', `${close}${head(`${p.town ? 'Town' : 'Village'}${p.realm ? ` · ${esc(p.realm)}` : ''}`, esc(p.name), `${fmt(p.pop)} people${home ? ' · <b>your home</b>' : ''}`)}
     <nav class="tabs">${tabs.map(([k, l]) => `<button data-act="tab" data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</nav>
-    ${body}
-    <div class="acts foot"><button data-act="look">Look around</button><button data-act="close">Leave</button></div>`);
+    <div class="tab-body">${body}</div>`);
   panel.dataset.pid = String(pid);
   hud();
 }
@@ -863,15 +904,25 @@ function jobAt(p: Place): Job | null {
   return { item: items[Math.floor(rng() * items.length)], giver, from: p.id, to: to.id, reward: Math.round(20 + days * 7), taken: save.day };
 }
 
-// The road.
+// The road: a card in the middle, the world dimmed behind it.
+function roadKicker() {
+  if (!world || !save) return 'On the road';
+  return `On the road · ${BIOMES[world.biome[save.cell]].name} · ${dateText(save.day, north())}`;
+}
 function showEncounter(e: Encounter, ctx: ReturnType<typeof contextAt>) {
   speed = 0;
   const choices = e.choices(ctx);
-  showPanel('encounter', `<h2>${esc(e.title)}</h2><p>${esc(e.text(ctx))}</p>
-    <div class="acts col">${choices.map((ch, i) => `<button class="${i === 0 ? 'go' : ''}" data-act="choose" data-i="${i}">${esc(ch.label)}${ch.hint ? `<span>${esc(ch.hint)}</span>` : ''}</button>`).join('')}</div>`, true);
+  showPanel('encounter', `${head(roadKicker(), esc(e.title))}<p class="tale">${esc(e.text(ctx))}</p>
+    <div class="opts">${choices.map((ch, i) => opt('choose', esc(ch.label), ch.hint ? esc(ch.hint) : '', '', `data-i="${i}"`)).join('')}</div>`, true);
   pendingChoices = { e, ctx, choices };
 }
 let pendingChoices: { e: Encounter; ctx: ReturnType<typeof contextAt>; choices: Choice[] } | null = null;
+/** What changed, as chips: good news green, bad news red. */
+function fxChips(lines: string[]) {
+  if (!lines.length) return '';
+  const bad = /^−|hurt|sick|dead|lost|down/;
+  return `<div class="facts fx">${lines.map((l) => `<span class="${bad.test(l) ? 'bad' : l.startsWith('+') || /up|joins|mapped/.test(l) ? 'good' : ''}">${esc(l)}</span>`).join('')}</div>`;
+}
 function choose(i: number) {
   if (!pendingChoices || !save) return;
   const { e, ctx, choices } = pendingChoices;
@@ -883,9 +934,8 @@ function choose(i: number) {
   if (out.effect.rumour) extra = rumour();
   if (out.effect.days) passDays(out.effect.days);
   log(`${e.title}: ${out.text}`);
-  showPanel('encounter', `<h2>${esc(e.title)}</h2><p>${esc(out.text)}</p>${extra ? `<p>${esc(extra)}</p>` : ''}
-    ${lines.length ? `<p class="fx">${lines.map(esc).join(' · ')}</p>` : ''}
-    <div class="acts"><button class="go" data-act="after">Go on</button></div>`, true);
+  showPanel('encounter', `${head(roadKicker(), esc(e.title))}<p class="tale">${esc(out.text)}</p>${extra ? `<p>${esc(extra)}</p>` : ''}
+    ${fxChips(lines)}<button class="go" data-act="after">Go on</button>`, true);
   hud();
 }
 /** Whole days spent in place (a storm, a fever, a rest). */
@@ -910,32 +960,35 @@ function showAppoint() {
   if (!save) return;
   const c = save.caravan;
   const dead = c.members.find((m) => !m.alive && m.role === 'leader');
-  showPanel('appoint', `<h2>Who leads now?</h2><p>${dead ? `${esc(dead.name)} is dead. ` : ''}The caravan needs someone to follow.</p>
-    <div class="acts col">${c.members.map((m, i) => m.alive ? `<button data-act="appoint" data-i="${i}">${esc(m.name)}<span>${ROLE_NAMES[m.role]} · ${TRAITS[m.trait]}</span></button>` : '').join('')}</div>`, true);
+  showPanel('appoint', `${head('The caravan', 'Who leads now?', dead ? `${esc(dead.name)} is dead` : '')}
+    <p class="tale">The caravan stands about in the road. Someone has to say which way.</p>
+    <div class="opts">${c.members.map((m, i) => m.alive ? opt('appoint', esc(m.name), `${ROLE_NAMES[m.role]} · ${TRAITS[m.trait]}`, '', `data-i="${i}"`) : '').join('')}</div>`, true);
 }
 function gameOver() {
   if (!save) return;
   save.over = true;
   speed = 0;
   store();
-  showPanel('over', `<h2>The road ends</h2><p>Nobody is left of ${esc(save.caravan.name)}. The storm closes over the way you came.</p>
-    <p class="dim">${dateText(save.day, north())}. ${fmt(save.charted)} hexes charted, ${save.jobsDone} jobs done, ${fmt(save.caravan.earned)} orrels earned.</p>
-    <div class="acts"><button class="go" data-act="menu">Begin again</button></div>`, true);
+  showPanel('over', `${head(dateText(save.day, north()), 'The road ends')}<p class="tale">Nobody is left of ${esc(save.caravan.name)}. The storm closes over the way you came.</p>
+    ${chips([`${fmt(save.charted)} hexes charted`, `${save.jobsDone} jobs done`, `${fmt(save.caravan.earned)} orrels earned`])}
+    <button class="go" data-act="menu">Begin again</button>`, true);
 }
 
 function showJournal() {
   if (!save || !atlas) return;
   const s = save, c = s.caravan, o = ORIGINS.find((x) => x.id === c.origin)!;
   const prog = c.origin === 'traders' ? c.earned : s.charted, goal = AMBITION_GOAL[c.origin];
-  showPanel('journal', `${close}<h2>${esc(c.name)}</h2>
-    <p class="dim">${o.label} · from ${esc(atlas.places[s.home].name)} · ${dateText(s.day, north())}</p>
-    <h3>Ambition</h3><p>${o.ambition}: ${fmt(Math.min(prog, goal))} of ${fmt(goal)}${prog >= goal ? ' · <b>done</b>. The road goes on.' : ''}</p>
+  const mood = c.morale > 70 ? 'in good heart' : c.morale > 40 ? 'steady' : c.morale > 20 ? 'low' : 'close to giving up';
+  showPanel('journal', `${close}${head(`Journal · ${o.label}`, esc(c.name), `From ${esc(atlas.places[s.home].name)} · ${dateText(s.day, north())}`)}
+    <h3>Ambition</h3>
+    <p>${o.ambition}${prog >= goal ? ': <b>done</b>. The road goes on.' : ''}</p>
     <div class="meter"><i style="width:${Math.min(100, (prog / goal) * 100)}%"></i></div>
-    <p class="dim small">Just a direction. Go where you like.</p>
+    <p class="dim small">${fmt(Math.min(prog, goal))} of ${fmt(goal)}. A direction, not a rule: go where you like.</p>
     ${s.job ? `<h3>Work</h3><p>${esc(s.job.giver)}'s ${esc(s.job.item)} to ${esc(atlas.places[s.job.to].name)}, for ${s.job.reward} orrels.</p>` : ''}
     <h3>The caravan</h3>
-    <ul class="people">${c.members.filter((m) => m.alive).map((m) => `<li><b>${esc(m.name)}</b> ${ROLE_NAMES[m.role]}${m.health !== 'well' ? ` · <i>${m.health}</i>` : ''}<span>${TRAITS[m.trait]}</span></li>`).join('')}</ul>
-    ${c.members.some((m) => !m.alive) ? `<p class="dim small">Lost: ${c.members.filter((m) => !m.alive).map((m) => esc(m.name)).join(', ')}.</p>` : ''}
+    <p class="dim small">${living(c).length} people, ${mood}.</p>
+    <ul class="people">${c.members.filter((m) => m.alive).map((m) => `<li><span class="who"><b>${esc(m.name)}</b><small>${TRAITS[m.trait]}</small></span><span class="role${m.role === 'leader' ? ' lead' : ''}">${ROLE_NAMES[m.role]}</span>${m.health !== 'well' ? `<span class="hp">${m.health}</span>` : ''}</li>`).join('')}</ul>
+    ${c.members.some((m) => !m.alive) ? `<p class="dim small">Lost on the road: ${c.members.filter((m) => !m.alive).map((m) => esc(m.name)).join(', ')}.</p>` : ''}
     <h3>Lately</h3>
     <ul class="log">${s.log.slice(-30).reverse().map((l) => `<li><span>${dateText(l.day, north())}</span>${esc(l.text)}</li>`).join('')}</ul>`);
 }
