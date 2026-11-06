@@ -208,6 +208,8 @@ export interface TownSpot {
   /** A thing to find (finds.ts kind) rather than part of a town: hidden until the caravan comes near
    * (`seen`), its label gone once it's been used. */
   find?: string; seen?: boolean; used?: boolean; obj?: THREE.Object3D;
+  /** A job's camp or site (its quest id). */
+  job?: string;
 }
 
 /** What a town's landmark is, by the family it's drawn in and its tier (hexhouses.ts and

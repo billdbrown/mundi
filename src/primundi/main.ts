@@ -588,10 +588,11 @@ function questsAt(cell: number): boolean {
       labels.rebuild();
       continue;
     }
+    // The band's camp or the old site is somewhere in the hex: into it, to find it on foot.
     if ((q.kind === 'bounty' || q.kind === 'relic') && q.cell === cell) {
-      const rng = makeRng((params.seed * 7919 + ++save.draws * 104729) >>> 0);
-      const ctx = contextAt(world, cell, !!atlas.road[cell], false, false, save.caravan, rng, nameMaker(params.seed * 31 + save.draws));
-      showEncounter(QUEST_ENCOUNTERS[q.kind], ctx, q.id);
+      speed = 0;
+      openHex(cell);
+      toast(q.kind === 'bounty' ? 'Their camp is somewhere in this hex. Walk out to it.' : 'The old site is somewhere in this hex. Walk out to it.', 6000);
       return true;
     }
   }
@@ -753,6 +754,10 @@ function hexHash(cell: number) {
   const pid = atlas ? atlas.placeAt[cell] : -1;
   if (pid >= 0) h.set('town', pid === save?.home ? 'home' : 'town');
   if (cameFrom >= 0 && cameFrom !== cell) h.set('from', String(cameFrom));
+  if (save) {
+    const jobs = save.jobs.filter((q) => !q.done && q.cell === cell && (q.kind === 'bounty' || q.kind === 'relic'));
+    if (jobs.length) h.set('jobs', jobs.map((q) => `${q.kind}~${q.id}`).join('.'));
+  }
   if (world && atlas && save) {
     const f = findsIn(world, atlas, cell, params.seed);
     if (f.length) h.set('finds', f.join('.'));
@@ -805,6 +810,15 @@ addEventListener('message', (e) => {
   // The caravan reached something to find in the hex: its card; or came within sight of one.
   if (e.data.type === 'primundi-find' && hexOpen && save && hexCell === save.cell && !modal) showFind(String(e.data.kind) as FindKind);
   if (e.data.type === 'primundi-spotted' && hexOpen && FIND_NAMES[e.data.kind as FindKind]) toast(SPOTTED[e.data.kind as FindKind], 4000);
+  // The caravan reached a job's camp or site in the hex.
+  if (e.data.type === 'primundi-job' && hexOpen && world && atlas && save && hexCell === save.cell && !modal) {
+    const q = save.jobs.find((x) => x.id === e.data.id && !x.done);
+    if (q && (q.kind === 'bounty' || q.kind === 'relic')) {
+      const rng = makeRng((params.seed * 7919 + ++save.draws * 104729) >>> 0);
+      const ctx = contextAt(world, save.cell, !!atlas.road[save.cell], false, false, save.caravan, rng, nameMaker(params.seed * 31 + save.draws));
+      showEncounter(QUEST_ENCOUNTERS[q.kind], ctx, q.id);
+    }
+  }
   // The caravan reached a building's door in the town's hex: that part of the town.
   if (e.data.type === 'primundi-spot' && hexOpen && atlas && save) {
     const pid = atlas.placeAt[hexCell];
@@ -1087,7 +1101,7 @@ function choose(i: number) {
   }
   const lines = applyEffect(save.caravan, out.effect, ctx.name, save.day);
   const q = quest ? save.jobs.find((x) => x.id === quest) : undefined;
-  if (q && out.effect.questDone) { q.done = true; lines.push(`job done: back to ${atlas!.places[q.from].name}`); labels.rebuild(); }
+  if (q && out.effect.questDone) { q.done = true; lines.push(`job done: back to ${atlas!.places[q.from].name}`); labels.rebuild(); hexSend({ type: 'primundi-job-done', id: q.id }); }
   let extra = '';
   if (out.effect.reveal) { const n = reveal(ringCells(world!, save.cell, out.effect.reveal), true); if (n) lines.push(`${n} hexes mapped`); }
   if (out.effect.rumour) extra = rumour();

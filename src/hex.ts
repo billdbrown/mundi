@@ -77,6 +77,8 @@ let gameFrom = Number(h.get('from') ?? -1);
 /** Primundi: what there is to find in this hex (finds.ts kinds), and which of them are used up. */
 let gameFinds = (h.get('finds') ?? '').split('.').filter(Boolean);
 let gameUsed = new Set((h.get('used') ?? '').split('.').filter(Boolean));
+/** Primundi: jobs whose camp or site is in this hex, `kind~id`. */
+let gameJobs = (h.get('jobs') ?? '').split('.').filter(Boolean);
 const hexFog = game ? new HexFog(noiseTexture()) : null;
 if (game) {
   document.body.classList.add('primundi');
@@ -119,7 +121,8 @@ function applyHash(hash: string) {
   opts.radiusKm = Number(q.get('radius')) || LOCAL_DEFAULTS.radiusKm;
   cell = Number(q.get('cell') ?? -1);
   if (game) { gameSeen = new Set((q.get('seen') ?? '').split('.').filter(Boolean).map(Number)); gameTown = q.get('town') ?? ''; gameFrom = Number(q.get('from') ?? -1);
-    gameFinds = (q.get('finds') ?? '').split('.').filter(Boolean); gameUsed = new Set((q.get('used') ?? '').split('.').filter(Boolean)); }
+    gameFinds = (q.get('finds') ?? '').split('.').filter(Boolean); gameUsed = new Set((q.get('used') ?? '').split('.').filter(Boolean));
+    gameJobs = (q.get('jobs') ?? '').split('.').filter(Boolean); }
   for (const k of [...back.keys()]) back.delete(k);
   for (const [k, v] of q) if (!['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around', 'plants', 'houses'].includes(k)) back.set(k, v);
 }
@@ -1701,7 +1704,7 @@ const FIND_LABELS: Record<string, string> = { lookout: 'Lookout', spring: 'Sprin
 /** The hex's finds (finds.ts) on the ground: a lookout on the high point, a spring in a hollow,
  * foraging where it's wooded, ruins and old camps out in the country. Where is the same every visit. */
 function placeFinds(m: LocalMap, n: Nav, K: number) {
-  if (!gameFinds.length) return;
+  if (!gameFinds.length && !gameJobs.length) return;
   const rng = makeRng((m.cell * 2246822519 + 3266489917) >>> 0);
   const { res, size, layers } = m, step = size / (res - 1), half = size / 2;
   const wood = (x: number, y: number) => layers[(Math.max(0, Math.min(res - 1, Math.round((y + half) / step))) * res + Math.max(0, Math.min(res - 1, Math.round((x + half) / step)))) * LAYERS + L_FOREST];
@@ -1720,6 +1723,22 @@ function placeFinds(m: LocalMap, n: Nav, K: number) {
     }
     return out;
   };
+  // A job's camp or site: out in the country, known from the start (you were told roughly where).
+  for (const j of gameJobs) {
+    const [kind, id] = j.split('~');
+    const at = samples(1, 0.35, 0.8)[0];
+    if (!at) continue;
+    const [x, y] = at;
+    taken.push(at);
+    const obj = findModel(kind === 'bounty' ? 'camp' : 'ruin', K, m.cell * 7 + id.length);
+    if (kind === 'bounty') obj.add(banner());
+    obj.position.set(x, groundAtMap(m, x, y) - 0.05, -y);
+    obj.rotation.y = rng() * Math.PI * 2;
+    caravan!.group.add(obj);
+    n.block(x, y, 0, 3 * K, 3 * K);
+    spots.push({ tab: '', label: kind === 'bounty' ? 'Their camp' : 'The old site', door: [x, y - 3 * K], top: [x, y, groundAtMap(m, x, y) + 4 * K], centre: [x, y], radius: 2.5 * K,
+      find: 'job', job: id, seen: true, used: false, obj });
+  }
   for (const kind of gameFinds) {
     let at: [number, number] | null = null;
     if (kind === 'lookout') {
@@ -1747,6 +1766,16 @@ function placeFinds(m: LocalMap, n: Nav, K: number) {
       find: kind, seen, used: gameUsed.has(kind), obj });
   }
 }
+/** A ragged banner on a pole, for a band's camp. */
+function banner(): THREE.Group {
+  const g = new THREE.Group();
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 3.6, 5), new THREE.MeshStandardMaterial({ color: 0x3a2a1c, flatShading: true }));
+  pole.position.set(1.2, 1.8, 1.2);
+  const cloth = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.8), new THREE.MeshStandardMaterial({ color: 0x5a1c1c, side: THREE.DoubleSide, flatShading: true }));
+  cloth.position.set(1.75, 3.1, 1.2);
+  for (const o of [pole, cloth]) { o.castShadow = true; g.add(o); }
+  return g;
+}
 /** Once the view has settled on a new hex: the walk in. */
 function arriveCaravan() {
   const f = arrival; arrival = null;
@@ -1765,7 +1794,8 @@ function goSpot(s: TownSpot) {
   const b = spotLayer.children[spots.indexOf(s)];
   const ok = goTo(s.door[0], s.door[1], () => {
     b?.classList.remove('going');
-    if (s.find) parent.postMessage({ type: 'primundi-find', kind: s.find }, location.origin);
+    if (s.job) parent.postMessage({ type: 'primundi-job', id: s.job }, location.origin);
+    else if (s.find) parent.postMessage({ type: 'primundi-find', kind: s.find }, location.origin);
     else parent.postMessage({ type: 'primundi-spot', tab: s.tab }, location.origin);
   });
   if (ok) b?.classList.add('going');
@@ -2009,6 +2039,8 @@ if (embedded) {
     if (e.data.type === 'mundi-hex-warm') { applyHash(e.data.hash); warm(); }
     if (e.data.type === 'mundi-hex-snapshot') snapshot(e.data.hash);
     if (e.data.type === 'mundi-hex-valleys') takeValleys(e.data.hash, e.data.n, e.data.half);
+    // Primundi: a job's camp or site dealt with; its label goes.
+    if (e.data.type === 'primundi-job-done') for (const s of spots) if (s.job === e.data.id) s.used = true;
     // Primundi: a find has been used; its label goes.
     if (e.data.type === 'primundi-used') {
       gameUsed.add(String(e.data.kind));
