@@ -1160,6 +1160,42 @@ function takeValleys(hash: string, n: number, half: Uint16Array) {
   // A hex on show without them: build it again.
   if (map && !mapValleys && JSON.stringify(params) === valleysIn) request();
 }
+/**
+ * A picture of a hex for the planet's card (main.ts, hexcard.ts), from its own starting view:
+ * builds it here, hidden (so opening it next is quick), waits for the neighbours round it, draws
+ * one frame and sends it back as a JPEG. The camera is put back if the hex was already on show.
+ */
+let snapWant = '';
+function snapshot(hash: string) {
+  const was = JSON.stringify(params) + cell + opts.radiusKm;
+  applyHash(hash);
+  const c = cell, same = !!map && !busy && JSON.stringify(params) + cell + opts.radiusKm === was;
+  snapWant = hash;
+  if (!same) { world.visible = false; ctxMap = null; firstBuild = true; request(); }
+  const t0 = performance.now();
+  const tryShoot = () => {
+    if (snapWant !== hash) return;
+    const waited = performance.now() - t0;
+    if (!(map && !busy && map.cell === c && world.visible && (ctxMesh || !showCtx || waited > 4000))) {
+      if (waited < 30000) setTimeout(tryShoot, 120);
+      return;
+    }
+    snapWant = '';
+    const p = camera.position.clone(), t = controls.target.clone();
+    resetView();
+    // Two frames: the shadows and the sky settle on the first.
+    loop(); loop();
+    const src = renderer.domElement, W = 640, H = 400;
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    let sw = src.width, sh = src.height;
+    if (sw / sh > W / H) sw = sh * W / H; else sh = sw * H / W;
+    cv.getContext('2d')!.drawImage(src, (src.width - sw) / 2, (src.height - sh) / 2, sw, sh, 0, 0, W, H);
+    if (same) { camera.position.copy(p); controls.target.copy(t); controls.snap(); }
+    parent.postMessage({ type: 'mundi-hex-snapshot', hash, url: cv.toDataURL('image/jpeg', 0.82) }, location.origin);
+  };
+  tryShoot();
+}
 /** Start building a hex before it is opened (the planet's pointer is resting on it). */
 function prefetch(c: number) {
   if (c < 0) return;
@@ -1345,6 +1381,7 @@ if (embedded) {
       renderer.setAnimationLoop(null);
     }
     if (e.data.type === 'mundi-hex-warm') { applyHash(e.data.hash); warm(); }
+    if (e.data.type === 'mundi-hex-snapshot') snapshot(e.data.hash);
     if (e.data.type === 'mundi-hex-valleys') takeValleys(e.data.hash, e.data.n, e.data.half);
     if (e.data.type === 'mundi-hex-prefetch') {
       // The world settings may be new; which hex is shown is not, until it is opened.

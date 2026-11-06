@@ -1024,6 +1024,26 @@ export class PlanetView {
     return hit && hit.faceIndex != null ? this.faceCell[hit.faceIndex] : -1;
   }
 
+  /** Where a cell's centre is on screen (client pixels), and whether it faces the camera (on the
+   * globe; on the map, whether it is in view), for things pinned beside it (hexcard.ts). */
+  screenOf(cell: number): { x: number; y: number; front: boolean } | null {
+    if (cell < 0 || !this.world || !this.surface) return null;
+    const g = this.world.grid, r = this.renderer.domElement.getBoundingClientRect();
+    const c = new THREE.Vector3(g.centers[cell * 3], g.centers[cell * 3 + 1], g.centers[cell * 3 + 2]);
+    if (this.mapMode) {
+      const lat = Math.asin(THREE.MathUtils.clamp(c.y, -1, 1));
+      const my = Math.log(Math.tan(Math.PI / 4 + lat / 2));
+      const dx = THREE.MathUtils.euclideanModulo(Math.atan2(c.x, c.z) - this.map.x + Math.PI, Math.PI * 2) - Math.PI;
+      const nx = dx / (this.map.half * this.aspect()), ny = (my - this.map.y) / this.map.half;
+      return { x: r.left + (nx + 1) / 2 * r.width, y: r.top + (1 - ny) / 2 * r.height, front: Math.abs(nx) < 1.05 && Math.abs(ny) < 1.05 };
+    }
+    c.multiplyScalar(this.surface.outlineH(cell, 0)).applyMatrix4(this.planet.matrixWorld);
+    const centre = new THREE.Vector3().setFromMatrixPosition(this.planet.matrixWorld);
+    const front = c.clone().sub(centre).dot(this.camera.position.clone().sub(c)) > 0;
+    const p = c.clone().project(this.camera);
+    return { x: r.left + (p.x + 1) / 2 * r.width, y: r.top + (1 - p.y) / 2 * r.height, front: front && p.z < 1 };
+  }
+
   highlight(cell: number) {
     if (cell < 0 || !this.world || !this.surface) { this.hover.visible = false; return; }
     const g = this.world.grid;

@@ -10,6 +10,7 @@ import { gameData, exportJSON, RESOURCE_NAMES, type GameData } from './gamedata.
 import { kindLabel, kindOf, mountShell, planetName, PRESETS, type Lens } from './shell.ts';
 import { NAME_DECIDES, paramsOf, findName, dialsOfParams } from './namedworld.ts';
 import { nameSeed, parseSeed, randomName } from './seedname.ts';
+import { HexCard, describeHex } from './hexcard.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -92,6 +93,7 @@ worker.onmessage = (e: MessageEvent<BuildResult | BuildStage>) => {
     world = r.world;
     game = gameData(world);
     siteAt = new Map(game.sites.map((s) => [s.cell, s.name]));
+    closeCard(); shots.clear();
     warmHex();
   }
   if (r.clouds) view.setClouds(r.clouds);
@@ -319,6 +321,7 @@ let lastCell = -1;
 view.renderer.domElement.addEventListener('pointermove', (e) => {
   if (e.pointerType === 'touch') { if (e.buttons) info.hidden = true; return; }
   if (e.buttons || !world) { info.hidden = true; return; }
+  if (card.open) { info.hidden = true; return; }   // the card says it all
   showInfo(view.pick(e.clientX, e.clientY), e.clientX, e.clientY, false);
 });
 /** The readout for a cell; on touch it carries a button to open the hex (no double-tap there).
@@ -342,19 +345,18 @@ function showInfo(c: number, x: number, y0: number, touch: boolean) {
     `<span>elev</span> ${world.elevation[c].toFixed(2)} <span>temp</span> ${pct(world.temperature[c])} ` +
     `<span>wet</span> ${pct(world.moisture[c])}<br><span>lat</span> ${lat.toFixed(0)}° <span>cell</span> ${c} ` +
     `<span>plate</span> ${world.plate[c]}<br>` +
-    (touch ? `<button id="openhex" type="button">Open this hex ›</button>` : `<span>double-click to open this hex</span>`);
+    `<span>click for more</span>`;
   info.style.left = `${x}px`;
   info.style.top = `${y0}px`;
   info.classList.toggle('tap', touch);
   info.hidden = false;
-  if (touch) $('openhex').onclick = () => openHex(c);
 }
-// A tap (not a drag) on touch screens shows the readout with the open button.
+// A click or tap (not a drag) on a hex opens its card; on nothing, closes it.
 let tapFrom: [number, number] | null = null;
-view.renderer.domElement.addEventListener('pointerdown', (e) => { tapFrom = e.pointerType === 'touch' ? [e.clientX, e.clientY] : null; });
+view.renderer.domElement.addEventListener('pointerdown', (e) => { tapFrom = e.button === 0 ? [e.clientX, e.clientY] : null; });
 view.renderer.domElement.addEventListener('pointerup', (e) => {
-  if (!tapFrom || !world || Math.hypot(e.clientX - tapFrom[0], e.clientY - tapFrom[1]) > 8) return;
-  showInfo(view.pick(e.clientX, e.clientY), e.clientX, e.clientY, true);
+  if (!tapFrom || !world || Math.hypot(e.clientX - tapFrom[0], e.clientY - tapFrom[1]) > (e.pointerType === 'touch' ? 10 : 5)) return;
+  selectHex(view.pick(e.clientX, e.clientY));
 });
 view.renderer.domElement.addEventListener('pointerleave', (e) => {
   if (e.pointerType === 'touch') return;   // fires after every tap; the readout must stay for its button
@@ -393,6 +395,7 @@ function openHex(c: number) {
   if (!hexOpen) history.pushState({ mundiHex: c }, '');
   hexOpen = true;
   info.hidden = true;
+  closeCard();
   f.classList.add('open');
   f.contentWindow?.focus();
   view.setRunning(false);
@@ -410,15 +413,51 @@ addEventListener('message', (e) => {
   if (e.data.type === 'mundi-hex-ready') {
     hexReady = true;
     if (hexPending) { hexSend({ type: 'mundi-hex-open', hash: hexPending }); hexPending = null; }
+    else if (shotPending) { hexSend({ type: 'mundi-hex-snapshot', hash: shotPending }); shotPending = null; }
     else hexSend({ type: 'mundi-hex-warm', hash: hexHash() });
     sendValleys();
   }
   if (e.data.type === 'mundi-hex-back') closeHex();
+  if (e.data.type === 'mundi-hex-snapshot') {
+    shots.set(e.data.hash, e.data.url);
+    if (e.data.hash === card.wantHash) card.picture(e.data.url);
+  }
 });
 addEventListener('popstate', () => { if (hexOpen) closeHex(true); });
-view.renderer.domElement.addEventListener('dblclick', (e) => {
-  if (!world) return;
-  openHex(view.pick(e.clientX, e.clientY));
+
+// --- The hex card (hexcard.ts): a click on a hex shows a picture of it, a few lines and Enter.
+// The picture is the hex view's own, drawn by the hidden hex view and sent back (hex.ts snapshot);
+// asking for it builds the hex there, so Enter is then quick. ---
+const card = new HexCard((c) => openHex(c), () => closeCard());
+/** Pictures already made, by hex view hash. */
+const shots = new Map<string, string>();
+let shotPending: string | null = null;
+function selectHex(c: number) {
+  if (c < 0 || !world) { closeCard(); return; }
+  info.hidden = true;
+  card.show(c, describeHex(world, game, siteAt.get(c), c, radiusKm));
+  view.highlight(c); lastCell = -1;
+  const hash = hexHash(c);
+  card.wantHash = hash;
+  const have = shots.get(hash);
+  if (have) { card.picture(have); return; }
+  ensureHexFrame();
+  if (hexReady) hexSend({ type: 'mundi-hex-snapshot', hash }); else shotPending = hash;
+}
+function closeCard() {
+  if (!card.open) return;
+  card.hide();
+  view.highlight(-1);
+}
+const placeCard = () => {
+  if (card.open) card.place(view.screenOf(card.cell));
+  requestAnimationFrame(placeCard);
+};
+requestAnimationFrame(placeCard);
+addEventListener('keydown', (e) => {
+  if (!card.open || hexOpen || (e.target as HTMLElement)?.tagName === 'INPUT') return;
+  if (e.key === 'Escape') closeCard();
+  if (e.key === 'Enter') openHex(card.cell);
 });
 let valleysSent: World | null = null, valleysWait = 0;
 /** The planet's valleys to the hex view (once they are worked out, a few seconds in), so its
