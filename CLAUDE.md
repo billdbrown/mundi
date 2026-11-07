@@ -85,4 +85,10 @@ cards in the encounter shape, `save.finds` remembers what's used); the hex view 
 the hex walks them with `Caravan`'s `{cloak, guide: false, pace}`), game to stalk (`gameIn`; the hex's
 `placeHerd`), and nights in camp (`CAMP_NIGHTS`, sim.ts `makeCamp`; the hex's `campModel` and
 `sweepHour`). Hex messages: `primundi-meet`, `-hunt`, `-fled`, `-hunted`, `-camp(ed)`, `-dawn`.
+`towns.ts` is what a town is like: its trade (`tradesOf`, the goods cheapest there against their
+median across the world; `applyTradeWants` makes what the trade needs 15% dearer there, once per
+atlas), its line (`townLine`), its people (`townsfolk`; `save.met` remembers visits and jobs done:
+food and beds 10% off for friends). sim.ts `localOffer` is each town's monthly offer. The hex shows
+the trade with `hextrades.ts` props (`placeTrade`, game only: hash `trade=`), people at the doors
+and a few walking the streets (`placeStrollers`).
 `window.primundi` is its debug handle (`travelTo(cell)`, `setSpeed(n)`, `encounter(id)`, `revealRing()`).
