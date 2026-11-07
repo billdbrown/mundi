@@ -1,0 +1,116 @@
+/**
+ * Who else is out there: other caravans on the road (2026-11-07, overnight loop 2, "life in the
+ * hex"). Which hex has someone in it, and who, comes from the seed, the hex and the week, so it's
+ * the same on a reload and changes as time passes. Most are on the roads.
+ *
+ * Passing through a hex with someone in it, a card asks whether to stop; in the hex they walk the
+ * road, and walking up to them brings up the meeting's card, which is the same text-and-dice as the
+ * road's encounters (encounters.ts).
+ */
+import type { World } from '../world.ts';
+import { WATER_LAND } from '../world.ts';
+import { nameMaker } from '../gamedata.ts';
+import { makeRng } from '../rng.ts';
+import { GOODS, G, type Atlas, type Place } from './atlas.ts';
+import { cargoUsed, living } from './caravan.ts';
+import type { Encounter } from './encounters.ts';
+
+export type FolkKind = 'traders' | 'pilgrims' | 'broken';
+export interface Folk {
+  /** Stable for the hex and the week: `cell-week-kind`. */
+  id: string;
+  kind: FolkKind;
+  /** Their leader's name. */
+  name: string;
+  /** The place they come from. */
+  from: number;
+}
+export const FOLK_LABEL: Record<FolkKind, string> = { traders: 'A caravan', pilgrims: 'Pilgrims', broken: 'A broken cart' };
+/** The chance someone is in a hex this week: on a road, beside one, out in the country. */
+export const FOLK_P = { road: 0.08, near: 0.03, wild: 0.01 };
+
+/** Who is in a hex this week (nobody, mostly). */
+export function folkIn(w: World, a: Atlas, cell: number, day: number, seed: number): Folk[] {
+  if (w.water[cell] !== WATER_LAND || a.placeAt[cell] >= 0) return [];
+  const week = Math.floor(day / 7);
+  const rng = makeRng((seed * 2246822519 + cell * 3266489917 + week * 668265263) >>> 0);
+  const road = !!a.road[cell], near = !road && w.grid.neighbors[cell].some((n) => a.road[n]);
+  if (rng() >= (road ? FOLK_P.road : near ? FOLK_P.near : FOLK_P.wild)) return [];
+  const r = rng();
+  const kind: FolkKind = r < 0.6 ? 'traders' : r < 0.8 ? 'pilgrims' : 'broken';
+  // From one of the few nearest places.
+  const P = w.grid.centers;
+  const near5 = a.places.map((p) => ({ p, d: -(P[p.cell * 3] * P[cell * 3] + P[p.cell * 3 + 1] * P[cell * 3 + 1] + P[p.cell * 3 + 2] * P[cell * 3 + 2]) }))
+    .sort((x, y) => x.d - y.d).slice(0, 5);
+  const from = near5[Math.floor(rng() * near5.length)].p.id;
+  return [{ id: `${cell}-${week}-${kind}`, kind, name: nameMaker((seed * 7 + cell * 13 + week) >>> 0)(), from }];
+}
+
+const pick = <T,>(rng: () => number, a: T[]) => a[Math.floor(rng() * a.length)];
+
+/** The meeting's card. `prices`: what their home market pays and asks today (they carry its goods
+ * and want its wants). */
+export function folkEncounter(f: Folk, home: Place, prices: { buy: number; sell: number }[]): Encounter {
+  const homeName = home.name;
+  if (f.kind === 'traders') {
+    // What they'd buy from you: what you carry that fetches most in their home market.
+    return {
+      id: 'folk-traders', title: 'A caravan on the road', weight: () => 0,
+      text: (x) => pick(x.rng, [
+        `${f.name}'s caravan, out of ${homeName}: four carts, and a dog that decides you are all right. They stop to talk.`,
+        `Dust, then wheels: traders from ${homeName}, ${f.name} at their head. They pull over and wave you in.`,
+      ]),
+      choices: (x) => {
+        const c = x.caravan;
+        let best = -1, bp = 0;
+        c.cargo.forEach((n, g) => { const p = Math.round(prices[g].sell * 0.9); if (n > 0 && g !== G.relics && p > bp) { bp = p; best = g; } });
+        const food = Math.max(1, Math.round(prices[G.grain].buy / 8 * living(c).length * 5 * 1.2));
+        return [
+          { label: 'Swap news', hint: `They were in ${homeName} lately: its prices`, resolve: () => ({
+            text: `${f.name} tells you what everything fetched in ${homeName} when they left, and asks about the road you came by.`, effect: { learn: home.id } }) },
+          ...(best >= 0 ? [{ label: `Sell them ${GOODS[best].name.toLowerCase()}`, hint: `${bp} orrels a load, up to three`, resolve: () => ({
+            text: `${f.name} looks it over, haggles for form's sake, and pays.`, effect: { sell: [best, 3, bp] as [number, number, number] } }) }] : []),
+          { label: `Buy food from them (${food} orrels)`, hint: 'Five days for everyone', resolve: (y) => y.caravan.orrels >= food
+            ? { text: 'Sacks of meal and a side of smoked meat change hands.', effect: { orrels: -food, rations: living(y.caravan).length * 5 } }
+            : { text: 'You turn out your purse. Not enough; they shrug kindly.', effect: {} } },
+          { label: 'Wish them well and go on', resolve: () => ({ text: 'Good roads, they say. And to you.', effect: {} }) },
+        ];
+      },
+    };
+  }
+  if (f.kind === 'pilgrims') {
+    return {
+      id: 'folk-pilgrims', title: 'Pilgrims', weight: () => 0,
+      text: (x) => pick(x.rng, [
+        `A file of pilgrims out of ${homeName}, singing badly, ${f.name} at the front with a staff taller than they are.`,
+        `Walkers with bundles and ribbons on their sticks: pilgrims from ${homeName}, going to a shrine none of you has heard of.`,
+      ]),
+      choices: () => [
+        { label: 'Share your food', hint: 'Five rations', resolve: () => ({
+          text: 'They eat with you and bless the carts, and one of them draws you the way to a place they passed.', effect: { rations: -5, morale: 8, rumour: true } }) },
+        { label: 'Ask about the country', resolve: () => ({ text: 'They have walked it all, slowly, and describe it all, slowly. Some of it is useful.', effect: { reveal: 2 } }) },
+        { label: 'Pass them by', resolve: () => ({ text: 'They wave you on with their ribbons.', effect: {} }) },
+      ],
+    };
+  }
+  return {
+    id: 'folk-broken', title: 'A broken cart', weight: () => 0,
+    text: (x) => pick(x.rng, [
+      `A cart on its side by the road, an axle snapped clean. ${f.name}, from ${homeName}, sits on a sack and looks at it.`,
+      `Traders from ${homeName} with a wheel off and no spare. ${f.name} gets up hopefully as you come near.`,
+    ]),
+    choices: (x) => {
+      const cheap = GOODS.map((g, i) => ({ i, k: prices[i].buy / g.base })).filter((v) => v.i !== G.relics && prices[v.i].buy > 0).sort((p, q) => p.k - q.k)[0].i;
+      const room = x.caravan.capacity - cargoUsed(x.caravan);
+      const cost = Math.max(2, Math.round(prices[cheap].buy * 2 * 0.6));
+      return [
+        { label: 'Help them mend it', hint: 'Half a day', resolve: (y) => ({
+          text: `You cut a new axle from what's to hand. ${f.name} pays what they can and tells you all about ${homeName}.`, effect: { days: 0.5, orrels: 10 + Math.round(y.rng() * 20), morale: 4, learn: home.id } }) },
+        ...(room >= 2 ? [{ label: `Take two ${GOODS[cheap].name.toLowerCase()} off their hands (${cost} orrels)`, hint: 'Cheap: they need the space', resolve: (y: typeof x) => y.caravan.orrels >= cost
+          ? { text: 'Lighter, they might get as far as the next town. You are two loads heavier.', effect: { orrels: -cost, cargo: [[cheap, 2]] as [number, number][] } }
+          : { text: 'You can\'t afford even that.', effect: {} } }] : []),
+        { label: 'Ride on', resolve: () => ({ text: 'You leave them to it. Someone else will come.', effect: { morale: -2 } }) },
+      ];
+    },
+  };
+}

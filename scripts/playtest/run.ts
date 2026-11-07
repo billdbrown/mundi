@@ -16,7 +16,7 @@ import { findReady } from '../../src/primundi/finds.ts';
 import { MAX_QUESTS, canHandIn, questTarget } from '../../src/primundi/quests.ts';
 import type { StartBias } from '../../src/primundi/start.ts';
 import {
-  RATES, worldParams, newGame, makeGame, doyOf, setRoute, plan, advance, resolve, jobHere, findHere, findsAt,
+  RATES, worldParams, newGame, meetFolk, makeGame, doyOf, setRoute, plan, advance, resolve, jobHere, findHere, findsAt,
   buy, sell, shortHere, buyRations, sellCharts, takeJob, handIn, jobsOffered, rest, hire, appoint, angle, cellAngleOf,
   type Game, type Pending, type Ui,
 } from '../../src/primundi/sim.ts';
@@ -47,12 +47,14 @@ const CAREFUL = [
   'Wait for it to drop', 'Hunker down', 'Dig in and wait it out', 'Make camp until it breaks', 'Rest it a day', 'Pour it out',
   'Keep the fires high and stand watch', 'Turn and run', 'Ask the way', 'Swap news', 'Climb and sketch it', 'Add a stone',
   'Let them be', 'Leave it to the dead', 'Leave it be', 'Send them on', 'Share your food', 'Pass by', 'Walk on',
+  'Swap news', 'Help them mend it', 'Sell them', 'Ask about the country',
 ];
 /** The bold answer: fight, cross, push on, break in. */
 const BOLD = [
   'Draw what you see', 'Fill the skins', 'Hunt the trail', 'Fight', 'Go in hard', 'Break straight in', 'Cross now', 'Push through it',
   'Keep walking', 'Boil it and drink it', 'Spread the load and press on', 'Carry them and keep going', 'Hunt them', 'Search it',
   'Go through it', 'Offer them a place', 'Break camp and move on', 'Climb and sketch it',
+  'Sell them', 'Take two', 'Swap news',
 ];
 function pick(p: Pending, style: 'careful' | 'bold'): number {
   const order = style === 'careful' ? CAREFUL : BOLD;
@@ -328,6 +330,9 @@ export function playRun(opts: RunOpts): RunResult {
     encounter(e, ctx, quest) { queue.push({ e, ctx, choices: e.choices(ctx), quest }); },
     arrive() { arrived = true; },
     questHex(q) { arrived = true; if (q.kind === 'bounty' || q.kind === 'relic') queue.push(jobHere(g, q, QUEST_ENCOUNTERS)); },
+    // Someone on the road: a bot always stops to meet them.
+    folk(_cell, f) { queue.push(meetFolk(g, f)); },
+    folkMet() {},
   };
   const s = newGame(w, a, seed, { name: 'Bot', origin: opts.origin, bias: opts.bias, world: opts.world });
   const rng = makeRng((seed * 31 + opts.run * 7919 + opts.bot.length * 104729) >>> 0);

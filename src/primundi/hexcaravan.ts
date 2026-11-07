@@ -210,6 +210,8 @@ export interface TownSpot {
   find?: string; seen?: boolean; used?: boolean; obj?: THREE.Object3D;
   /** A job's camp or site (its quest id). */
   job?: string;
+  /** Someone else on the road (life.ts: their id); the spot follows them as they walk. */
+  folk?: string;
 }
 
 /** What a town's landmark is, by the family it's drawn in and its tier (hexhouses.ts and
@@ -366,14 +368,20 @@ export class Caravan {
 
   private ground: (x: number, y: number) => number;
   private K: number;
+  /** Walking speed, metres a second, if fixed (another caravan's steady pace); else by the walk's length. */
+  private pace: number | null;
 
-  constructor(ground: (x: number, y: number) => number, K: number, cartGeo: THREE.BufferGeometry | null) {
+  /** `opts`: someone else's caravan, in their own colour, without the player's pin, ring and
+   * footsteps, at a steady pace. */
+  constructor(ground: (x: number, y: number) => number, K: number, cartGeo: THREE.BufferGeometry | null,
+    opts: { cloak?: number; guide?: boolean; pace?: number } = {}) {
     this.ground = ground; this.K = K;
+    this.pace = opts.pace ?? null;
     this.group.name = 'caravan';
     // The leader: a cloaked figure, a hat, a staff.
     const L = new THREE.Group();
     const mat = (c: number) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.8, flatShading: true });
-    const cloak = new THREE.Mesh(new THREE.ConeGeometry(0.42, 1.35, 7).translate(0, 0.68, 0), mat(0x7a2e2a));
+    const cloak = new THREE.Mesh(new THREE.ConeGeometry(0.42, 1.35, 7).translate(0, 0.68, 0), mat(opts.cloak ?? 0x7a2e2a));
     const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.19, 1).translate(0, 1.5, 0), mat(0xd9b48c));
     const hat = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.32, 8).translate(0, 1.72, 0), mat(0x3a2c20));
     const staff = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.8, 5).translate(0.36, 0.9, -0.08), mat(0x5a3e24));
@@ -398,7 +406,8 @@ export class Caravan {
     this.ring.renderOrder = 19; this.ring.visible = false;
     this.steps = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0xf2c14e, size: 5, sizeAttenuation: false, transparent: true, opacity: 0.85, depthTest: false }));
     this.steps.renderOrder = 18; this.steps.frustumCulled = false;
-    this.group.add(L, this.cart, this.marker, this.ring, this.steps);
+    this.group.add(L, this.cart);
+    if (opts.guide !== false) this.group.add(this.marker, this.ring, this.steps);
   }
 
   /** The cart's model (the town pack's), once it is in. */
@@ -427,7 +436,7 @@ export class Caravan {
     let len = 0;
     for (let k = 1; k < path.length; k++) len += Math.hypot(path[k][0] - path[k - 1][0], path[k][1] - path[k - 1][1]);
     this.path = path; this.seg = 1; this.moving = len > 0.5; this.onArrive = onArrive;
-    this.cruise = THREE.MathUtils.clamp(len / 8, 5, 60) * Math.sqrt(this.K);
+    this.cruise = this.pace ?? THREE.MathUtils.clamp(len / 8, 5, 60) * Math.sqrt(this.K);
     const [ex, ey] = path[path.length - 1];
     this.ring.position.set(ex, this.ground(ex, ey) + 0.25, -ey);
     this.ring.scale.setScalar(this.K);

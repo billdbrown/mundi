@@ -57,6 +57,10 @@ export interface Effect {
   recruit?: { role: Member['role']; name: string };
   /** The job that brought you here is done. */
   questDone?: boolean;
+  /** Sell loads to someone met on the road: good, how many, orrels each. */
+  sell?: [number, number, number];
+  /** Learn a market's prices (a place id): news from someone who was just there. */
+  learn?: number;
 }
 export interface Outcome { text: string; effect: Effect }
 export interface Choice { label: string; hint?: string; resolve(ctx: Ctx): Outcome }
@@ -373,6 +377,14 @@ export function applyEffect(c: Caravan, e: Effect, name: () => string, day: numb
   if (e.water) { const before = c.water; c.water = Math.max(0, Math.min(waterCap(c), c.water + e.water)); const d = Math.round(c.water - before); if (d) out.push(`${d > 0 ? '+' : '−'}${Math.abs(d)} water`); }
   if (e.morale) { c.morale = Math.max(0, Math.min(100, c.morale + e.morale)); out.push(`morale ${e.morale > 0 ? 'up' : 'down'}`); }
   if (e.cargo) for (const [g, n] of e.cargo) { const room = Math.max(0, c.capacity - cargoUsed(c)); const k = Math.min(n, room); c.cargo[g] += k; if (k) out.push(`+${plural(k, GOODS[g].name.toLowerCase(), GOODS[g].name.toLowerCase())}`); }
+  if (e.sell) {
+    const [g, want, price] = e.sell, n = Math.min(want, c.cargo[g]);
+    if (n > 0) {
+      const paid = (c.basis[g] / c.cargo[g]) * n;
+      c.cargo[g] -= n; c.basis[g] -= paid; c.orrels += n * price; c.earned += n * price - paid;
+      out.push(`−${plural(n, GOODS[g].name.toLowerCase(), GOODS[g].name.toLowerCase())}`, `+${n * price} orrels`);
+    }
+  }
   if (e.loseCargo) { let lost = 0; c.cargo = c.cargo.map((n, g) => { const l = Math.round(n * e.loseCargo!); lost += l; if (n) c.basis[g] *= (n - l) / n; return n - l; }); if (lost) out.push(`−${plural(lost, 'load')} of cargo`); }
   if (e.hurt && e.hurt.alive) { e.hurt.health = 'hurt'; out.push(`${e.hurt.name} hurt`); }
   if (e.sick && e.sick.alive) { e.sick.health = 'sick'; out.push(`${e.sick.name} sick`); }

@@ -33,6 +33,7 @@ import { familyOf, loadHouses, buildHouses, buildProps, houseMaterial, houseNigh
 import { snowGround, snowContext } from './hexsnow.ts';
 import { HexFog } from './primundi/hexfog.ts';
 import { Nav, Caravan, townSpots, townLandmark, noticeBoard, findModel, LANDMARKS, type TownSpot } from './primundi/hexcaravan.ts';
+import { FOLK_LABEL, type FolkKind } from './primundi/life.ts';
 import { makeRng } from './rng.ts';
 import { noiseTexture } from './primundi/fog.ts';
 
@@ -79,6 +80,8 @@ let gameFinds = (h.get('finds') ?? '').split('.').filter(Boolean);
 let gameUsed = new Set((h.get('used') ?? '').split('.').filter(Boolean));
 /** Primundi: jobs whose camp or site is in this hex, `kind~id`. */
 let gameJobs = (h.get('jobs') ?? '').split('.').filter(Boolean);
+/** Primundi: others on the road in this hex, `kind~id` (life.ts). */
+let gameFolk = (h.get('folk') ?? '').split('.').filter(Boolean);
 const hexFog = game ? new HexFog(noiseTexture()) : null;
 if (game) {
   document.body.classList.add('primundi');
@@ -122,7 +125,8 @@ function applyHash(hash: string) {
   cell = Number(q.get('cell') ?? -1);
   if (game) { gameSeen = new Set((q.get('seen') ?? '').split('.').filter(Boolean).map(Number)); gameTown = q.get('town') ?? ''; gameFrom = Number(q.get('from') ?? -1);
     gameFinds = (q.get('finds') ?? '').split('.').filter(Boolean); gameUsed = new Set((q.get('used') ?? '').split('.').filter(Boolean));
-    gameJobs = (q.get('jobs') ?? '').split('.').filter(Boolean); }
+    gameJobs = (q.get('jobs') ?? '').split('.').filter(Boolean);
+    gameFolk = (q.get('folk') ?? '').split('.').filter(Boolean); }
   for (const k of [...back.keys()]) back.delete(k);
   for (const [k, v] of q) if (!['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around', 'plants', 'houses'].includes(k)) back.set(k, v);
 }
@@ -1667,6 +1671,7 @@ function setupCaravan(m: LocalMap) {
     }
   }
   placeFinds(m, n, K);
+  placeFolk(m, n, K, cartName ? housePack!.geos.get(cartName)! : null);
   dress(caravan.group);
   spotLayer.replaceChildren(...spots.map((s, n) => {
     const b = document.createElement('button');
@@ -1703,6 +1708,43 @@ function setupCaravan(m: LocalMap) {
 const FIND_LABELS: Record<string, string> = { lookout: 'Lookout', spring: 'Spring', forage: 'Foraging', ruin: 'Ruins', camp: 'Old camp' };
 /** The hex's finds (finds.ts) on the ground: a lookout on the high point, a spring in a hollow,
  * foraging where it's wooded, ruins and old camps out in the country. Where is the same every visit. */
+/** Primundi: others on the road, walking it back and forth through the middle of the hex. */
+interface Folk { id: string; c: Caravan; path: [number, number][]; fwd: boolean; waiting: boolean; still: boolean }
+let walkers: Folk[] = [];
+const FOLK_CLOAK: Record<string, number> = { traders: 0x2f5d7c, pilgrims: 0xd8cfae, broken: 0x5d6b3a };
+function folkWalk(f: Folk) {
+  if (f.still || f.waiting) return;
+  const p = f.fwd ? f.path : [...f.path].reverse();
+  f.fwd = !f.fwd;
+  f.c.walk(p, () => folkWalk(f));
+}
+function placeFolk(m: LocalMap, n: Nav, K: number, cartGeo: THREE.BufferGeometry | null) {
+  walkers = [];
+  if (!gameFolk.length || !caravan) return;
+  const rng = makeRng((m.cell * 374761393 + 668265263) >>> 0);
+  const R = Math.min(1500, m.localWidth * 0.25);
+  for (const entry of gameFolk) {
+    const [kind, id] = entry.split('~');
+    // A way across the middle (the walk grid keeps to roads and tracks where there are any).
+    let path: [number, number][] | null = null;
+    for (let k = 0; k < 6 && !path; k++) {
+      const a = rng() * Math.PI * 2;
+      path = n.find(Math.cos(a) * R, Math.sin(a) * R, -Math.cos(a) * R, -Math.sin(a) * R);
+    }
+    if (!path || path.length < 2) continue;
+    const c = new Caravan((x, y) => groundAtMap(m, x, y), K, cartGeo ? cartGeo.clone() : null, { cloak: FOLK_CLOAK[kind] ?? 0x2f5d7c, guide: false, pace: 1.6 * K });
+    caravan.group.add(c.group);
+    // Somewhere along it, not on top of the player.
+    const start = Math.floor(path.length * (0.2 + rng() * 0.25));
+    const [x, y] = path[start];
+    c.place(x, y, rng() * Math.PI * 2);
+    const f: Folk = { id, c, path: path.slice(start), fwd: true, waiting: false, still: kind === 'broken' };
+    walkers.push(f);
+    folkWalk(f);
+    spots.push({ tab: '', label: FOLK_LABEL[kind as FolkKind] ?? 'Someone', door: [x, y], top: [x, y, groundAtMap(m, x, y) + 3 * K], centre: [x, y], radius: 2 * K,
+      find: 'folk', folk: id, seen: true, used: false, obj: c.group });
+  }
+}
 function placeFinds(m: LocalMap, n: Nav, K: number) {
   if (!gameFinds.length && !gameJobs.length) return;
   const rng = makeRng((m.cell * 2246822519 + 3266489917) >>> 0);
@@ -1792,6 +1834,19 @@ function goTo(x: number, y: number, then: (() => void) | null = null) {
 }
 function goSpot(s: TownSpot) {
   const b = spotLayer.children[spots.indexOf(s)];
+  // Someone on the road: they wait for you; walk up beside them.
+  if (s.folk) {
+    const f = walkers.find((w) => w.id === s.folk);
+    if (!f || !caravan) return;
+    f.waiting = true; f.c.stop();
+    const side = Math.atan2(caravan.y - f.c.y, caravan.x - f.c.x);
+    const ok = goTo(f.c.x + Math.cos(side) * 4, f.c.y + Math.sin(side) * 4, () => {
+      b?.classList.remove('going');
+      parent.postMessage({ type: 'primundi-meet', id: s.folk }, location.origin);
+    });
+    if (ok) b?.classList.add('going');
+    return;
+  }
   const ok = goTo(s.door[0], s.door[1], () => {
     b?.classList.remove('going');
     if (s.job) parent.postMessage({ type: 'primundi-job', id: s.job }, location.origin);
@@ -1852,6 +1907,11 @@ if (game) {
 function updateCaravan(dt: number) {
   if (!caravan || !map) return;
   caravan.update(dt);
+  for (const f of walkers) {
+    f.c.update(dt);
+    const s = spots.find((x) => x.folk === f.id);
+    if (s) { s.centre = [f.c.x, f.c.y]; s.door = [f.c.x, f.c.y]; s.top = [f.c.x, f.c.y, groundAtMap(map, f.c.x, f.c.y) + 3 * style.town.scale]; }
+  }
   if (caravan.moving && controls.touched < followFrom) controls.glideTo(caravan.x, -caravan.y);
   camera.updateMatrixWorld();
   const far = Math.max(600, map.localWidth * 0.5);
@@ -2041,6 +2101,12 @@ if (embedded) {
     if (e.data.type === 'mundi-hex-valleys') takeValleys(e.data.hash, e.data.n, e.data.half);
     // Primundi: a job's camp or site dealt with; its label goes.
     if (e.data.type === 'primundi-job-done') for (const s of spots) if (s.job === e.data.id) s.used = true;
+    // Primundi: someone met on the road goes on their way.
+    if (e.data.type === 'primundi-folk-done') {
+      for (const s of spots) if (s.folk === e.data.id) s.used = true;
+      const f = walkers.find((w) => w.id === e.data.id);
+      if (f) { f.waiting = false; folkWalk(f); }
+    }
     // Primundi: a find has been used; its label goes.
     if (e.data.type === 'primundi-used') {
       gameUsed.add(String(e.data.kind));

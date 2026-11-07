@@ -32,10 +32,11 @@ import { buildAtlas, GOODS, ringCells, type Atlas, type Place } from './atlas.ts
 import { bestKnownSell, quotes, rationPrice, remember } from './market.ts';
 import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
+import { FOLK_LABEL, type FolkKind } from './life.ts';
 import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
 import {
   START_DOY, RATES, doyOf, worldParams, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
-  jobsOffered, shortHere, chartRate, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
+  jobsOffered, shortHere, chartRate, folkHere, meetFolk, passFolk, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
   reveal as simReveal, advance as simAdvance, plan as simPlan,
   buy as simBuy, sell as simSell, rest as simRest,
   type Game, type Pending, type Save, type Ui,
@@ -416,6 +417,13 @@ const paused = () => speed === 0 || modal || hexOpen || !save || save.over;
 /** The calendar's seasons are home's: they don't flip when the caravan crosses the equator. */
 const north = () => !!world && !!save && !!atlas && world.grid.centers[atlas.places[save.home].cell * 3 + 1] >= 0;
 
+/** Someone on the road, offered as you pass: the hex and who. */
+let folkOffered: { cell: number; id: string } | null = null;
+const FOLK_TEXT: Record<FolkKind, (name: string, home: string) => string> = {
+  traders: (n, h) => `Carts on the road ahead: ${n}'s caravan, out of ${h}.`,
+  pilgrims: (n, h) => `A file of pilgrims from ${h} on the road ahead, ${n} at the front.`,
+  broken: (n, h) => `A cart stopped on the road ahead, a wheel off. Someone from ${h} waves.`,
+};
 /** What the rules (sim.ts) do to the screen. */
 const ui: Ui = {
   toast: (text, ms) => toast(text, ms),
@@ -432,6 +440,7 @@ const ui: Ui = {
     // A town: into its hex, walking in to the square; its buildings are the menus.
     if (pid >= 0) { openHex(cell); toast(`${atlas.places[pid].name}. Tap the market, the inn or the notice board to go there.`, 6000); }
     // Out in the country with something here to find: into the hex, to look for it.
+    else if (g && folkHere(g, cell).length) { openHex(cell); toast('Arrived. Someone else is on the road here.', 5000); }
     else if (findsIn(world, atlas, cell, params.seed).some((k) => findReady(k, save!.finds[`${cell}:${k}`], save!.day))) { openHex(cell); toast('Arrived. There is something to find here: walk the hex.', 5000); }
     else toast('Arrived.');
     syncBar();
@@ -444,6 +453,15 @@ const ui: Ui = {
     toast(q.kind === 'bounty' ? 'Their camp is somewhere in this hex. Walk out to it.' : 'The old site is somewhere in this hex. Walk out to it.', 6000);
   },
   findUsed: (kind) => hexSend({ type: 'primundi-used', kind }),
+  folk(cell, f) {
+    // Someone on the road ahead: stop and meet them (in the hex, walking up), or go on.
+    if (!atlas) return;
+    speed = 0;
+    folkOffered = { cell, id: f.id };
+    showPanel('encounter', `${head(roadKicker(), esc(FOLK_LABEL[f.kind] + ' on the road'))}<p class="tale">${esc(FOLK_TEXT[f.kind](f.name, atlas.places[f.from].name))}</p>
+      <div class="opts">${opt('meet', 'Stop and meet them', 'Into the hex, to walk up to them', '')}${opt('pressOn', 'Go on', '', '')}</div>`, true);
+  },
+  folkMet: (id) => hexSend({ type: 'primundi-folk-done', id }),
   jobDone: (q) => hexSend({ type: 'primundi-job-done', id: q.id }),
 };
 
@@ -578,6 +596,7 @@ function hexHash(cell: number) {
   if (world && atlas && save) {
     const f = findsIn(world, atlas, cell, params.seed);
     if (f.length) h.set('finds', f.join('.'));
+    if (g) { const folk = folkHere(g, cell); if (folk.length) h.set('folk', folk.map((x) => `${x.kind}~${x.id}`).join('.')); }
     const used = f.filter((k) => !findReady(k, save!.finds[`${cell}:${k}`], save!.day));
     if (used.length) h.set('used', used.join('.'));
   }
@@ -633,6 +652,11 @@ addEventListener('message', (e) => {
   if (e.data.type === 'primundi-job' && hexOpen && world && atlas && save && hexCell === save.cell && !modal) {
     const q = save.jobs.find((x) => x.id === e.data.id && !x.done);
     if (q && g && (q.kind === 'bounty' || q.kind === 'relic')) showPending(jobHere(g, q, QUEST_ENCOUNTERS));
+  }
+  // The caravan walked up to someone on the road.
+  if (e.data.type === 'primundi-meet' && hexOpen && g && save && hexCell === save.cell && !modal) {
+    const f = folkHere(g, save.cell).find((x) => x.id === e.data.id);
+    if (f) showPending(meetFolk(g, f));
   }
   // The caravan reached a building's door in the town's hex: that part of the town.
   if (e.data.type === 'primundi-spot' && hexOpen && atlas && save) {
@@ -1038,6 +1062,8 @@ panel.addEventListener('click', (e) => {
     case 'beast': if (buyBeast(g!)) { openTown(pid, 'rest'); store(); } break;
     case 'choose': choose(Number(b.dataset.i)); break;
     case 'after': afterEncounter(); break;
+    case 'meet': if (folkOffered) { const c0 = folkOffered.cell; folkOffered = null; closePanel(); openHex(c0); toast('Walk up to them: tap their label.', 5000); } break;
+    case 'pressOn': if (folkOffered) { passFolk(g!, folkOffered.id); folkOffered = null; } afterEncounter(); break;
     case 'appoint': {
       appoint(g!, Number(b.dataset.i));
       closePanel();
@@ -1137,6 +1163,8 @@ function toast(text: string, ms = 3500) {
   travelTo, setSpeed, advance, openTown, openHex, closeHex, plan,
   /** What there is to find in a hex (finds.ts). */
   findsIn: (c: number) => (world && atlas ? findsIn(world, atlas, c, params.seed) : []),
+  /** Others on the road in a hex this week, not yet met (life.ts). */
+  folkHere: (c: number) => (g ? folkHere(g, c) : []),
   encounter: (id?: string) => {
     if (!world || !atlas || !save) return;
     const rng = makeRng(Date.now() >>> 0);

@@ -20,6 +20,7 @@ import { appetite, cargoUsed, living, newCaravan, pace, passDay, sight, thirst, 
 import { findReady, findsIn, FINDS, type FindKind } from './finds.ts';
 import { applyEffect, contextAt, drawEncounter, type Choice, type Ctx, type Encounter, type Outcome } from './encounters.ts';
 import { MAX_QUESTS, canHandIn, offersAt, questTarget, questTitle, type Quest } from './quests.ts';
+import { folkEncounter, folkIn, type Folk } from './life.ts';
 
 /** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
 export const RATES = [0, 0.22, 0.6, 1.6];
@@ -104,6 +105,10 @@ export interface Ui {
   findUsed(kind: FindKind): void;
   /** A job's camp or site dealt with. */
   jobDone(q: Quest): void;
+  /** Passing through a hex with someone else on the road: stop and meet them, or go on. */
+  folk(cell: number, f: Folk): void;
+  /** Someone met: they go on their way (their label goes, in the hex). */
+  folkMet(id: string): void;
 }
 
 /** A game in play: the world, the save, and the screen. */
@@ -301,8 +306,10 @@ export function enter(g: Game, cell: number) {
   }
   // A job's hex.
   if (questsAt(g, cell)) return;
-  // The road.
+  // The road: someone else on it, or what the road brings.
   if (pid < 0) {
+    const f = folkHere(g, cell)[0];
+    if (f) { g.ui.folk(cell, f); return; }
     const rng = draw(g);
     if (rng() < ENCOUNTER_P * (a.road[cell] ? 0.7 : 1)) {
       const nearTown = ringCells(w, cell, 3).some((x) => a.placeAt[x] >= 0);
@@ -370,7 +377,7 @@ export function passDays(g: Game, n: number, resting = true) {
 
 // --- Encounters and finds ---------------------------------------------------------------------
 /** An encounter waiting for an answer. */
-export interface Pending { e: Encounter; ctx: Ctx; choices: Choice[]; quest?: string; find?: FindKind }
+export interface Pending { e: Encounter; ctx: Ctx; choices: Choice[]; quest?: string; find?: FindKind; folk?: string }
 export function pending(e: Encounter, ctx: Ctx, quest?: string, find?: FindKind): Pending {
   return { e, ctx, choices: e.choices(ctx), quest, find };
 }
@@ -388,6 +395,21 @@ export function jobHere(g: Game, q: Quest, encounters: Record<'bounty' | 'relic'
   const rng = draw(g);
   return pending(encounters[q.kind as 'bounty' | 'relic'], ctxHere(g, rng, false), q.id);
 }
+/** Others on the road in a hex this week, not yet met or passed by. */
+export function folkHere(g: Game, cell: number): Folk[] {
+  return folkIn(g.w, g.a, cell, g.s.day, g.seed).filter((f) => g.s.finds[`folk:${f.id}`] === undefined);
+}
+/** Meeting someone on the road: its card. */
+export function meetFolk(g: Game, f: Folk): Pending {
+  const s = g.s, home = g.a.places[f.from];
+  const rng = draw(g);
+  const p = pending(folkEncounter(f, home, quotes(g.w, home, s.stocks, s.day, doyOf(s.day))), ctxHere(g, rng, snowAt(g, s.cell)));
+  p.folk = f.id;
+  return p;
+}
+/** Went on without stopping: they're gone. */
+export function passFolk(g: Game, id: string) { g.s.finds[`folk:${id}`] = g.s.day; }
+
 /** The player answers: what came of it, the changes as lines, and anything more to say. */
 export function resolve(g: Game, p: Pending, i: number): { out: Outcome; lines: string[]; extra: string } {
   const s = g.s;
@@ -397,7 +419,13 @@ export function resolve(g: Game, p: Pending, i: number): { out: Outcome; lines: 
     s.finds[`${s.cell}:${p.find}`] = s.day;
     g.ui.findUsed(p.find);
   }
+  if (p.folk) { s.finds[`folk:${p.folk}`] = s.day; g.ui.folkMet(p.folk); }
   const lines = applyEffect(s.caravan, out.effect, p.ctx.name, s.day, g.dice);
+  if (out.effect.learn != null) {
+    const pl = g.a.places[out.effect.learn];
+    remember(s.known, pl, quotes(g.w, pl, s.stocks, s.day, doyOf(s.day)), Math.floor(s.day));
+    lines.push(`${pl.name}'s prices`);
+  }
   const q = p.quest ? s.jobs.find((x) => x.id === p.quest) : undefined;
   if (q && out.effect.questDone) { q.done = true; lines.push(`job done: back to ${g.a.places[q.from].name}`); g.ui.jobsChanged(); g.ui.jobDone(q); }
   let extra = '';

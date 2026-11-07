@@ -224,7 +224,7 @@ function quietUi(): Ui & { queue: Pending[]; arrivals: number } {
     queue: [] as Pending[], arrivals: 0,
     toast() {}, revealed() {}, blocked: () => false, halt() {}, changed() {}, routeChanged() {}, jobsChanged() {},
     encounter(e: Pending['e'], ctx: Pending['ctx'], quest?: string) { u.queue.push({ e, ctx, choices: e.choices(ctx), quest }); },
-    arrive() { u.arrivals++; }, questHex() {}, findUsed() {}, jobDone() {},
+    arrive() { u.arrivals++; }, questHex() {}, findUsed() {}, jobDone() {}, folk() {}, folkMet() {},
   };
   return u;
 }
@@ -295,4 +295,22 @@ test('playtest tripwire: a trader bot makes a living in a year, an idle one noth
   const idle = playRun({ world: 'zalund', origin: 'traders', bias: 'gentle', bot: 'idle', run: 0, years: 1 });
   assert.equal(Math.round(idle.days[idle.days.length - 1].earned), 0);
   for (const r of [t, idle]) assert.equal(r.deaths.filter((d) => d.cause === 'supplies').length, 0);
+});
+
+import { folkIn, FOLK_P } from '../src/primundi/life.ts';
+test('others on the road: the same for a hex and a week, never in towns or water, mostly on roads', () => {
+  let road = 0, roadHit = 0, wild = 0, wildHit = 0, changed = 0;
+  for (let c = 0; c < hw.grid.count; c++) {
+    const a = folkIn(hw, atlas, c, 10, 5);
+    assert.deepEqual(folkIn(hw, atlas, c, 12, 5), a, 'same within the week');
+    if (hw.water[c] !== WATER_LAND || atlas.placeAt[c] >= 0) { assert.equal(a.length, 0); continue; }
+    if (atlas.road[c]) { road++; if (a.length) roadHit++; } else { wild++; if (a.length) wildHit++; }
+    if (JSON.stringify(folkIn(hw, atlas, c, 40, 5)) !== JSON.stringify(a)) changed++;
+    for (const f of a) assert.ok(atlas.places[f.from] && f.name.length > 1);
+  }
+  assert.ok(road > 50, `${road} road hexes`);
+  const rr = roadHit / road;
+  assert.ok(Math.abs(rr - FOLK_P.road) < 0.04, `road rate ${rr.toFixed(3)}`);
+  assert.ok(wildHit / wild < rr, 'fewer off the road');
+  assert.ok(changed > 0, 'a new week, new faces');
 });
