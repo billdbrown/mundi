@@ -366,7 +366,7 @@ export function drawEncounter(ctx: Ctx): Encounter | null {
 
 /** Apply an outcome's effect to the caravan (all but days, reveal and rumour, which the game
  * handles). Returns short lines saying what changed. */
-export function applyEffect(c: Caravan, e: Effect, name: () => string, day: number): string[] {
+export function applyEffect(c: Caravan, e: Effect, name: () => string, day: number, dice: () => number = Math.random): string[] {
   const out: string[] = [];
   if (e.orrels) { const d = Math.max(-c.orrels, e.orrels); c.orrels += d; if (d) out.push(`${d > 0 ? '+' : '−'}${Math.abs(d)} orrels`); if (d > 0) c.earned += d; }
   if (e.rations) { const d = Math.max(-c.rations, e.rations); c.rations += d; if (Math.round(d)) out.push(`${d > 0 ? '+' : '−'}${Math.abs(Math.round(d))} rations`); }
@@ -377,7 +377,7 @@ export function applyEffect(c: Caravan, e: Effect, name: () => string, day: numb
   if (e.hurt && e.hurt.alive) { e.hurt.health = 'hurt'; out.push(`${e.hurt.name} hurt`); }
   if (e.sick && e.sick.alive) { e.sick.health = 'sick'; out.push(`${e.sick.name} sick`); }
   if (e.dies && e.dies.alive) { e.dies.alive = false; out.push(`${e.dies.name} dead`); }
-  if (e.recruit) { const m: Member = { name: e.recruit.name || name(), role: e.recruit.role, trait: (['stout', 'keen', 'cheerful', 'frugal', 'steady'] as const)[Math.floor(Math.random() * 5)], health: 'well', alive: true, joined: day }; c.members.push(m); out.push(`${m.name} joins as a ${m.role}`); }
+  if (e.recruit) { const m: Member = { name: e.recruit.name || name(), role: e.recruit.role, trait: (['stout', 'keen', 'cheerful', 'frugal', 'steady'] as const)[Math.floor(dice() * 5)], health: 'well', alive: true, joined: day }; c.members.push(m); out.push(`${m.name} joins as a ${m.role}`); }
   if (e.days) out.push(`${plural(e.days, 'day')} lost`);
   return out;
 }

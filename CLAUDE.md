@@ -53,7 +53,10 @@ running dev server (`SPOT=coast|river|mountain`, `ALT=`, `ZOOM=`).
 Pure, tested modules: `atlas.ts` (places from the history sim's last year, a thinned road backbone,
 goods and equilibrium prices, hex crossing costs, A*), `market.ts` (lazy stocks, quotes, trade),
 `caravan.ts` (people, supplies, the daily tick; supplies never kill), `encounters.ts` (text-and-dice
-events: add an entry to `ENCOUNTERS`). `main.ts` is the clock (pause/1/2/3, `RATES` days per second),
+events: add an entry to `ENCOUNTERS`). `sim.ts` is the rules without the screen: the save, travel, the day,
+arriving, resolving a choice, every town action. `main.ts` calls it through a `Ui` of hooks (toasts,
+cards, fog); the playtest bot runs it headless. Game rules go in sim.ts, never in main.ts. After
+changing them, `scripts/simref.mjs` replays a fixed game in the browser: compare before and after. `main.ts` is the clock (pause/1/2/3, `RATES` days per second),
 travel, the cards and the map marks. Currency: orrels. Saves under `primundi.save2`. Mobile portrait
 is a target: cards become a bottom sheet under 640 px.
 Same build; `./deploy-primundi.sh` copies `dist/` to `dist-primundi/` with `primundi.html` as the

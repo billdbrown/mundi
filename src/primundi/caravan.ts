@@ -114,7 +114,7 @@ export function pace(c: Caravan): number {
 /** One day passes. Returns notes worth telling the player. */
 /** `forage`: the share of the day's food the caravan has to take from its stores; the rest it
  * finds (game, fish, fruit, a farm that sells eggs), more in kind country than in hard. */
-export function passDay(c: Caravan, atWater: boolean, resting: boolean, forage = 1): string[] {
+export function passDay(c: Caravan, atWater: boolean, resting: boolean, forage = 1, dice: () => number = Math.random): string[] {
   const notes: string[] = [];
   const hadR = c.rations > 0, hadW = c.water > 0;
   c.rations = Math.max(0, c.rations - appetite(c) * forage);
@@ -131,7 +131,7 @@ export function passDay(c: Caravan, atWater: boolean, resting: boolean, forage =
   for (const m of living(c)) {
     if (m.health === 'well') continue;
     const mend = resting ? 0.25 : 0.06;
-    if (m.trait === 'steady' ? Math.random() < mend * 1.5 : Math.random() < mend) {
+    if (m.trait === 'steady' ? dice() < mend * 1.5 : dice() < mend) {
       m.health = 'well';
       notes.push(`${m.name} is on their feet again.`);
     }

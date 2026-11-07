@@ -23,70 +23,37 @@ import { describeHex } from '../hexcard.ts';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
-import { RES_FERTILE, RES_FISH, RES_TIMBER } from '../gamedata.ts';
-import { MAX_QUESTS, canHandIn, offersAt, questPitch, questStatus, questTarget, questTitle, type Quest } from './quests.ts';
+import { MAX_QUESTS, canHandIn, questPitch, questStatus, questTarget, questTitle } from './quests.ts';
 import { makeRng } from '../rng.ts';
 import { PlanetFog } from './fog.ts';
 import { flicker } from './hexfog.ts';
 import { Thunder } from './thunder.ts';
-import { pickHome, BIASES, type StartBias } from './start.ts';
-import { buildAtlas, findPath, GOODS, G, hasWater, ringCells, seasonalTemp, SNOW_TEMP, stepDays, walkable, type Atlas, type Place } from './atlas.ts';
-import { bestKnownSell, quotes, rationPrice, remember, trade, type Known, type Stocks } from './market.ts';
-import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, cargoUsed, leader, living, newCaravan, pace, passDay, sight, waterCap, thirst, type Caravan, type Origin, type Role } from './caravan.ts';
-import { FINDS, FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
-import { ENCOUNTERS, QUEST_ENCOUNTERS, applyEffect, contextAt, drawEncounter, type Choice, type Encounter, type Outcome } from './encounters.ts';
+import { BIASES, type StartBias } from './start.ts';
+import { buildAtlas, GOODS, ringCells, type Atlas, type Place } from './atlas.ts';
+import { bestKnownSell, quotes, rationPrice, remember } from './market.ts';
+import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
+import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
+import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
+import {
+  START_DOY, doyOf, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
+  jobsOffered, chartRate, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
+  reveal as simReveal, advance as simAdvance, plan as simPlan,
+  buy as simBuy, sell as simSell, rest as simRest,
+  type Game, type Pending, type Save, type Ui,
+} from './sim.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const RADIUS_KM = 640;
 /** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
 const RATES = [0, 0.22, 0.6, 1.6];
-/** The calendar day of the year the game starts on (northern spring). */
-const START_DOY = 100;
-/** Chance of an encounter on entering a hex off the road (on it, a bit less). */
-const ENCOUNTER_P = 0.07;
 
-// --- The save ---------------------------------------------------------------------------------
-interface Save {
-  v: 2;
-  world: string;
-  bias: StartBias;
-  home: number;
-  caravan: Caravan;
-  /** Days since setting out (fractional). */
-  day: number;
-  cell: number;
-  route: number[];
-  progress: number;
-  revealed: number[];
-  /** Hexes revealed by the caravan's own travels (the Cartographers' ambition). */
-  charted: number;
-  known: Record<number, Known>;
-  stocks: Stocks;
-  /** Jobs in hand (quests.ts), and the ids of every offer ever taken (so it isn't offered again). */
-  jobs: Quest[];
-  taken: string[];
-  jobsDone: number;
-  /** Places whose local map you've bought. */
-  maps: number[];
-  /** Things found in hexes (finds.ts), by `cell:kind`: the day each was last used. */
-  finds: Record<string, number>;
-  log: { day: number; text: string }[];
-  speed: number;
-  draws: number;
-  over: boolean;
-}
 const SAVE_KEY = 'primundi.save2';
 function loadSave(): Save | null {
-  try {
-    const s = JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null') as Save | null;
-    if (!s || s.v !== 2 || typeof s.world !== 'string' || s.over) return null;
-    // Saves from before several jobs at once.
-    s.jobs ??= []; s.taken ??= []; s.maps ??= []; s.finds ??= {};
-    delete (s as unknown as { job?: unknown }).job;
-    return s;
-  } catch { return null; }
+  try { return migrateSave(JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null') as Save | null); } catch { return null; }
 }
 let save: Save | null = null;
+/** The game in play (sim.ts): the rules, given the world, the save and the screen below (`ui`). */
+let g: Game | null = null;
 let lastStore = 0;
 function store() { if (save) { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); lastStore = performance.now(); } }
 
@@ -99,7 +66,6 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const fmt = (n: number) => Math.round(n).toLocaleString();
 
 // --- The calendar -----------------------------------------------------------------------------
-const doyOf = (day: number) => (START_DOY + day) % 365;
 const SEASONS = ['Spring', 'Summer', 'Autumn', 'Winter'];
 function dateText(day: number, north: boolean): string {
   const t = START_DOY + day, doy = t % 365, year = Math.floor(t / 365) + 1;
@@ -206,7 +172,10 @@ function maybeStart() {
   game = gameData(w);
   atlas = buildAtlas(w, game, history);
   surf = surfaceQueries(r.surface, w.grid);
-  if (!save) save = newGame(w, atlas, pendingNew!);
+  if (!save) save = newGame(w, atlas, params.seed, pendingNew!);
+  g = makeGame(w, atlas, game, params.seed, save, ui);
+  // One set of revealed hexes, shared with the rules.
+  g.revealed = revealed;
   const s = save;
   // The fog goes in before the world is drawn, so its shader compiles with the planet's.
   fog = new PlanetFog(w, surf);
@@ -232,54 +201,13 @@ function maybeStart() {
   if (s.log.length === 1) toast(s.log[0].text, 8000);
 }
 
-function newGame(w: World, a: Atlas, n: { name: string; origin: Origin; bias: StartBias; world: string }): Save {
-  const home = a.places[pickHome(w, a.places, n.bias, params.seed)];
-  const caravan = newCaravan(n.name, n.origin, params.seed);
-  const s: Save = {
-    v: 2, world: n.world, bias: n.bias, home: home.id, caravan, day: 0, cell: home.cell, route: [], progress: 0,
-    revealed: [], charted: 0, known: {}, stocks: {}, jobs: [], taken: [], jobsDone: 0, maps: [], finds: {}, log: [], speed: 0, draws: 0, over: false,
-  };
-  const seen = new Set(ringCells(w, home.cell, 2));
-  // You know home's market and its nearest neighbours', and where they are.
-  const near = a.places.filter((p) => p.id !== home.id).map((p) => ({ p, d: angle(w, p.cell, home.cell) })).sort((x, y) => x.d - y.d).slice(0, 2);
-  for (const p of [home, ...near.map((x) => x.p)]) {
-    remember(s.known, p, quotes(w, p, s.stocks, 0, doyOf(0)), 0);
-    for (const c of ringCells(w, p.cell, 1)) seen.add(c);
-  }
-  s.revealed = [...seen];
-  s.log.push({ day: 0, text: `${caravan.name} sets out from ${home.name}. You know the prices here and in ${near.map((x) => x.p.name).join(' and ')}.` });
-  return s;
-}
-function angle(w: World, a: number, b: number) {
-  const P = w.grid.centers;
-  return Math.acos(Math.min(1, P[a * 3] * P[b * 3] + P[a * 3 + 1] * P[b * 3 + 1] + P[a * 3 + 2] * P[b * 3 + 2]));
-}
-const cellAngle = () => Math.sqrt((4 * Math.PI) / world!.grid.count);
-function bearing(w: World, from: number, to: number): string {
-  const P = w.grid.centers;
-  const a = new THREE.Vector3(P[from * 3], P[from * 3 + 1], P[from * 3 + 2]);
-  const b = new THREE.Vector3(P[to * 3], P[to * 3 + 1], P[to * 3 + 2]);
-  const north = new THREE.Vector3(0, 1, 0).sub(a.clone().multiplyScalar(a.y)).normalize();
-  // The generator's east is +longitude (atan2(x, z)): north × up.
-  const east = new THREE.Vector3().crossVectors(north, a).normalize();
-  const d = b.clone().sub(a);
-  const ang = Math.atan2(d.dot(east), d.dot(north));
-  return ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'][((Math.round(ang / (Math.PI / 4)) % 8) + 8) % 8];
-}
-function log(text: string) {
-  if (!save) return;
-  save.log.push({ day: save.day, text });
-  if (save.log.length > 200) save.log.splice(0, save.log.length - 200);
-}
+const cellAngle = () => cellAngleOf(world!);
 
 // --- Revealing --------------------------------------------------------------------------------
-function reveal(cells: number[], byTravel = false) {
-  const fresh = cells.filter((c) => !revealed.has(c) && world && c >= 0 && c < world.grid.count);
-  if (!fresh.length || !fog || !save) return 0;
-  for (const c of fresh) revealed.add(c);
-  fog.reveal(fresh, false, byTravel ? 1 : 3.2);
-  save.revealed = [...revealed];
-  if (byTravel) { save.charted += fresh.length; save.caravan.unsoldCharts += fresh.length; }
+function reveal(cells: number[], byTravel = false) { return g ? simReveal(g, cells, byTravel) : 0; }
+/** Hexes just revealed (sim.ts has added them): the fog, the camera's leash, labels, roads. */
+function revealedOnScreen(fresh: number[], byTravel: boolean) {
+  fog?.reveal(fresh, false, byTravel ? 1 : 3.2);
   bounds.update(false);
   labels.rebuild();
   marks.roads();
@@ -292,7 +220,6 @@ function reveal(cells: number[], byTravel = false) {
     v.normalize();
     if (v.angleTo(marks.dirOfCaravan()) > cellAngle() * 4) { if (hexOpen) lookLater = v; else follow = v; }
   }
-  return fresh.length;
 }
 /** Fogged cells touching what is revealed. */
 function frontier(): number[] {
@@ -300,29 +227,6 @@ function frontier(): number[] {
   const out = new Set<number>();
   for (const c of revealed) for (const n of world.grid.neighbors[c]) if (!revealed.has(n)) out.add(n);
   return [...out];
-}
-/** What the caravan sees from a cell: further from high ground, further with a scout. */
-function lookAround(c: number) {
-  if (!world || !save) return;
-  const high = world.elevation[c] > 0.32;
-  reveal(ringCells(world, c, sight(save.caravan) + (high ? 1 : 0)), true);
-}
-/** A rumour: the nearest place you don't know of yet, roughly located. */
-function rumour(): string {
-  if (!world || !atlas || !save) return '';
-  const w = world, at = save.cell;
-  let best: Place | null = null, bd = Infinity;
-  for (const p of atlas.places) {
-    if (revealed.has(p.cell)) continue;
-    const d = angle(w, at, p.cell);
-    if (d < bd) { bd = d; best = p; }
-  }
-  if (!best || bd > cellAngle() * 30) return 'Nothing you can use.';
-  reveal(ringCells(w, best.cell, 1));
-  const days = Math.max(1, Math.round((bd / cellAngle()) * 0.6));
-  const line = `Word of ${best.name}, ${best.town ? 'a town' : 'a village'} about ${days} days ${bearing(w, at, best.cell)}. It's on your map now.`;
-  log(line);
-  return line;
 }
 
 // --- The camera's leash -----------------------------------------------------------------------
@@ -519,6 +423,37 @@ const paused = () => speed === 0 || modal || hexOpen || !save || save.over;
 /** The calendar's seasons are home's: they don't flip when the caravan crosses the equator. */
 const north = () => !!world && !!save && !!atlas && world.grid.centers[atlas.places[save.home].cell * 3 + 1] >= 0;
 
+/** What the rules (sim.ts) do to the screen. */
+const ui: Ui = {
+  toast: (text, ms) => toast(text, ms),
+  revealed: (fresh, byTravel) => revealedOnScreen(fresh, byTravel),
+  blocked: () => modal,
+  halt: () => { speed = 0; },
+  changed: () => { hud(); syncBar(); },
+  routeChanged: () => marks.route(),
+  jobsChanged: () => labels.rebuild(),
+  encounter: (e, ctx, quest) => showEncounter(e, ctx, quest),
+  arrive(cell, pid) {
+    if (!world || !atlas || !save) return;
+    follow = marks.dirOfCaravan();
+    // A town: into its hex, walking in to the square; its buildings are the menus.
+    if (pid >= 0) { openHex(cell); toast(`${atlas.places[pid].name}. Tap the market, the inn or the notice board to go there.`, 6000); }
+    // Out in the country with something here to find: into the hex, to look for it.
+    else if (findsIn(world, atlas, cell, params.seed).some((k) => findReady(k, save!.finds[`${cell}:${k}`], save!.day))) { openHex(cell); toast('Arrived. There is something to find here: walk the hex.', 5000); }
+    else toast('Arrived.');
+    syncBar();
+  },
+  questHex(q) {
+    // The band's camp or the old site is somewhere in the hex: into it, to find it on foot.
+    follow = marks.dirOfCaravan();
+    speed = 0;
+    openHex(q.cell!);
+    toast(q.kind === 'bounty' ? 'Their camp is somewhere in this hex. Walk out to it.' : 'The old site is somewhere in this hex. Walk out to it.', 6000);
+  },
+  findUsed: (kind) => hexSend({ type: 'primundi-used', kind }),
+  jobDone: (q) => hexSend({ type: 'primundi-job-done', id: q.id }),
+};
+
 function setSpeed(s: number) {
   if (!save || save.over) return;
   if (s > 0 && hexOpen) closeHex();
@@ -528,167 +463,16 @@ function setSpeed(s: number) {
   syncBar();
 }
 
-/** Move the game on by `dd` days: travel, the days' needs, and whatever the road brings. */
-function advance(dd: number) {
-  if (!world || !atlas || !save) return;
-  const w = world, a = atlas, s = save, c = s.caravan;
-  let guard = 0;
-  while (dd > 1e-6 && !modal && guard++ < 64) {
-    const toMidnight = Math.floor(s.day) + 1 - s.day;
-    if (s.route.length) {
-      const next = s.route[0];
-      const cost = stepDays(w, a, s.cell, next, doyOf(s.day)) / pace(c);
-      const left = (1 - s.progress) * cost;
-      const take = Math.min(dd, left, toMidnight);
-      s.progress += take / cost;
-      s.day += take; dd -= take;
-      if (take >= toMidnight - 1e-9) newDay(false);
-      if (s.progress >= 1 - 1e-6 && !modal) enter(next);
-    } else {
-      const take = Math.min(dd, toMidnight);
-      s.day += take; dd -= take;
-      if (take >= toMidnight - 1e-9) newDay(true);
-    }
-  }
-}
+function advance(dd: number) { if (g) simAdvance(g, dd); }
 
-/** The caravan steps into a hex. */
-function enter(cell: number) {
-  if (!world || !atlas || !save) return;
-  const w = world, a = atlas, s = save;
-  cameFrom = s.cell;
-  s.cell = cell;
-  s.route.shift();
-  s.progress = 0;
-  // A route through the storm was a guess. When what's just been seen of it turns out worse than
-  // guessed, think again; otherwise keep going, so the caravan doesn't wander between guesses.
-  const unseen = s.route.filter((c) => !revealed.has(c));
-  lookAround(cell);
-  if (unseen.length && s.route.length && unseen.some((c) => revealed.has(c))) {
-    let guessed = 0, found = 0, prev = s.cell;
-    for (const c of s.route) {
-      if (unseen.includes(c) && revealed.has(c)) { guessed += UNKNOWN_DAYS; found += stepDays(w, a, prev, c, doyOf(s.day)); }
-      prev = c;
-    }
-    if (found > guessed * 1.15) {
-      const p = plan(s.route[s.route.length - 1]);
-      if (p && p.path.length > 1) s.route = p.path.slice(1);
-    }
-  }
-  marks.route();
-  const pid = a.placeAt[cell];
-  if (hasWater(w, a, cell)) s.caravan.water = waterCap(s.caravan);
-  if (pid >= 0) {
-    const p = a.places[pid];
-    remember(s.known, p, quotes(w, p, s.stocks, s.day, doyOf(s.day)), Math.floor(s.day));
-    if (s.route.length) { toast(`Through ${p.name}. You note the prices.`); log(`Passed through ${p.name}.`); }
-  }
-  if (!s.route.length) {
-    speed = 0;
-    follow = marks.dirOfCaravan();
-    // A job's hex is usually where the route ends.
-    if (questsAt(cell)) { syncBar(); return; }
-    // A town: into its hex, walking in to the square; its buildings are the menus.
-    if (pid >= 0) { openHex(cell); toast(`${a.places[pid].name}. Tap the market, the inn or the notice board to go there.`, 6000); }
-    // Out in the country with something here to find: into the hex, to look for it.
-    else if (findsIn(w, a, cell, params.seed).some((k) => findReady(k, s.finds[`${cell}:${k}`], s.day))) { openHex(cell); toast('Arrived. There is something to find here: walk the hex.', 5000); }
-    else toast('Arrived.');
-    syncBar();
-    return;
-  }
-  // A job's hex.
-  if (questsAt(cell)) return;
-  // The road.
-  if (pid < 0) {
-    const rng = makeRng((params.seed * 7919 + ++s.draws * 104729) >>> 0);
-    if (rng() < ENCOUNTER_P * (a.road[cell] ? 0.7 : 1)) {
-      const snow = seasonalTemp(w, cell, doyOf(s.day)) < SNOW_TEMP;
-      const nearTown = ringCells(w, cell, 3).some((x) => a.placeAt[x] >= 0);
-      const names = nameMaker(params.seed * 31 + s.draws);
-      const ctx = contextAt(w, cell, !!a.road[cell], snow, nearTown, s.caravan, rng, names);
-      const e = drawEncounter(ctx);
-      if (e) showEncounter(e, ctx);
-    }
-  }
-}
 
-/** The caravan reached a job's hex: survey done, or the band or the old site found. True if a card
- * came up (which stops the clock). */
-function questsAt(cell: number): boolean {
-  if (!world || !atlas || !save) return false;
-  const near = new Set([cell, ...world.grid.neighbors[cell]]);
-  for (const q of save.jobs) {
-    if (q.done || q.cell == null) continue;
-    if (q.kind === 'survey' && near.has(q.cell)) {
-      q.done = true;
-      reveal(ringCells(world, q.cell, 2), true);
-      toast(`Charted. Back to ${atlas.places[q.from].name} with it.`, 5000);
-      log(`Charted the hex ${q.giver} asked about.`);
-      labels.rebuild();
-      continue;
-    }
-    // The band's camp or the old site is somewhere in the hex: into it, to find it on foot.
-    if ((q.kind === 'bounty' || q.kind === 'relic') && q.cell === cell) {
-      speed = 0;
-      openHex(cell);
-      toast(q.kind === 'bounty' ? 'Their camp is somewhere in this hex. Walk out to it.' : 'The old site is somewhere in this hex. Walk out to it.', 6000);
-      return true;
-    }
-  }
-  return false;
-}
 
-/** How much of the day's food comes from the stores: kind country feeds you a little. */
-function forageAt(c: number): number {
-  if (!world || !game) return 1;
-  const r = game.resources[c];
-  if (r & (RES_FERTILE | RES_FISH)) return 0.6;
-  if (r & RES_TIMBER || world.moisture[c] > 0.5) return 0.75;
-  return 1;
-}
 
-const warned = { water: false, rations: false };
-function newDay(resting: boolean) {
-  if (!world || !atlas || !save) return;
-  const s = save, c = s.caravan;
-  const atWater = hasWater(world, atlas, s.cell);
-  // In a town you eat what you buy; on the road the land helps.
-  const forage = atlas.placeAt[s.cell] >= 0 ? 1 : forageAt(s.cell);
-  for (const n of passDay(c, atWater, resting, forage)) { toast(n); log(n); }
-  const wd = c.water / Math.max(1, thirst(c)), rd = c.rations / Math.max(1, appetite(c));
-  if (wd <= 2 && !atWater && !warned.water && c.water > 0) { warned.water = true; speed = 0; toast(`Water for ${Math.floor(wd)} more days.`, 5000); }
-  if (wd > 3) warned.water = false;
-  if (rd <= 3 && !warned.rations && c.rations > 0) { warned.rations = true; speed = 0; toast(`Rations for ${Math.floor(rd)} more days.`, 5000); }
-  if (rd > 4) warned.rations = false;
-  hud();
-  syncBar();
-}
 
-// --- Travel -----------------------------------------------------------------------------------
-/** Days the planner guesses for a hex it hasn't seen: a little worse than average, so it keeps to
- * land it knows unless the storm is a real shortcut. The truth may be a swamp. */
-const UNKNOWN_DAYS = 1;
-/** A route from the caravan to a cell. Over known land it knows the going; into the storm it
- * guesses, and the route is thought again as the caravan sees more (enter). */
-function plan(to: number): { path: number[]; days: number; guess: boolean } | null {
-  if (!world || !atlas || !save) return null;
-  const w = world, a = atlas, doy = doyOf(save.day);
-  // Water you can see stops you; water in the storm you only find by walking up to it.
-  if (revealed.has(to) && !walkable(w, to)) return null;
-  const cost = (x: number, y: number) => (revealed.has(y) ? stepDays(w, a, x, y, doy) : UNKNOWN_DAYS);
-  const path = findPath(w, save.cell, to, cost, (c) => revealed.has(c) || walkable(w, c));
-  if (!path) return null;
-  let days = 0, guess = false;
-  for (let i = 1; i < path.length; i++) { days += cost(path[i - 1], path[i]); if (!revealed.has(path[i])) guess = true; }
-  return { path, days: days / pace(save.caravan), guess };
-}
+function plan(to: number) { return g ? simPlan(g, to) : null; }
 function travelTo(to: number) {
   if (!save) return;
-  const p = plan(to);
-  if (!p || p.path.length < 2) return;
-  save.route = p.path.slice(1);
-  save.progress = 0;
-  marks.route();
+  if (!g || !setRoute(g, to)) return;
   closePanel();
   if (hexOpen) closeHex();
   if (speed === 0) speed = lastSpeed;
@@ -780,7 +564,6 @@ const labels = {
 
 // --- The hex view (hex.html in game mode), in this page ---------------------------------------
 /** The cell the caravan last came in from (the hex view walks it in from that side). */
-let cameFrom = -1;
 let hexFrame: HTMLIFrameElement | null = null, hexReady = false, hexOpen = false, hexCell = -1, hexPending: string | null = null;
 let valleysSent = false;
 function hexHash(cell: number) {
@@ -792,6 +575,7 @@ function hexHash(cell: number) {
   h.set('cell', String(cell));
   const pid = atlas ? atlas.placeAt[cell] : -1;
   if (pid >= 0) h.set('town', pid === save?.home ? 'home' : 'town');
+  const cameFrom = g ? g.from : -1;
   if (cameFrom >= 0 && cameFrom !== cell) h.set('from', String(cameFrom));
   if (save) {
     const jobs = save.jobs.filter((q) => !q.done && q.cell === cell && (q.kind === 'bounty' || q.kind === 'relic'));
@@ -853,11 +637,7 @@ addEventListener('message', (e) => {
   // The caravan reached a job's camp or site in the hex.
   if (e.data.type === 'primundi-job' && hexOpen && world && atlas && save && hexCell === save.cell && !modal) {
     const q = save.jobs.find((x) => x.id === e.data.id && !x.done);
-    if (q && (q.kind === 'bounty' || q.kind === 'relic')) {
-      const rng = makeRng((params.seed * 7919 + ++save.draws * 104729) >>> 0);
-      const ctx = contextAt(world, save.cell, !!atlas.road[save.cell], false, false, save.caravan, rng, nameMaker(params.seed * 31 + save.draws));
-      showEncounter(QUEST_ENCOUNTERS[q.kind], ctx, q.id);
-    }
+    if (q && g && (q.kind === 'bounty' || q.kind === 'relic')) showPending(jobHere(g, q, QUEST_ENCOUNTERS));
   }
   // The caravan reached a building's door in the town's hex: that part of the town.
   if (e.data.type === 'primundi-spot' && hexOpen && atlas && save) {
@@ -1027,7 +807,7 @@ function openTown(pid: number, tab = townTab) {
   } else if (tab === 'supplies') {
     const rp = rationPrice(w, p, s.stocks, day, doy), eat = appetite(c);
     const rd = c.rations / Math.max(1, eat);
-    const chart = Math.round(c.unsoldCharts * chartRate(p));
+    const chart = Math.round(c.unsoldCharts * chartRate(g!, p));
     body = `${purse}<h3>Provisions</h3>
       <p>Food for <b>${Math.floor(rd)} days</b>. The skins are filled at the well, free: ${Math.floor(waterCap(c) / Math.max(1, thirst(c)))} days of water.</p>
       <div class="opts">${[5, 10, 20].map((d) => { const cost = Math.ceil(rp * eat * d); return opt('rations', `${d} days of food`, `for ${living(c).length} people`, `${ORREL}${cost}`, `data-n="${d}"`, c.orrels < cost); }).join('')}</div>
@@ -1036,7 +816,7 @@ function openTown(pid: number, tab = townTab) {
         : '<p class="dim">Nothing new to sell. Every hex you uncover on the road is worth something here.</p>'}`;
   } else if (tab === 'work') {
     const handIn = s.jobs.filter((x) => canHandIn(x, p.id, c.cargo));
-    const offers = jobsOffered(p);
+    const offers = jobsOffered(g!, p);
     const dir = (cell: number) => bearing(w, p.cell, cell);
     body = `${handIn.length ? `<h3>To hand in</h3>${handIn.map((q) => `<div class="job-card due"><b>${esc(questTitle(q, a))}</b><small>for ${esc(q.giver)}</small>
         <button class="go" data-act="handin" data-q="${q.id}">Hand it in<span>${q.reward} orrels</span></button></div>`).join('')}` : ''}
@@ -1078,15 +858,7 @@ function openTown(pid: number, tab = townTab) {
   panel.dataset.pid = String(pid);
   hud();
 }
-function chartRate(p: Place) { return (save?.caravan.origin === 'cartographers' ? 1.5 : 0.6) * (p.town ? 1 : 0.5); }
 
-/** This month's notice board at a place, less what you've taken. */
-function jobsOffered(p: Place): Quest[] {
-  if (!world || !atlas || !save || !game) return [];
-  const w = world, a = atlas, s = save, month = Math.floor(s.day / 30);
-  const price = (pl: Place, g: number) => quotes(w, pl, s.stocks, s.day, doyOf(s.day))[g].buy || pl.price[g];
-  return offersAt(w, a, game.continent, p, month, params.seed, revealed, price).filter((q) => !s.taken.includes(q.id));
-}
 
 /** A line of who a place is: where it sits, what it's known for, where it came from. */
 function townCharacter(p: Place): string {
@@ -1113,25 +885,20 @@ const SPOTTED: Record<FindKind, string> = {
   lookout: 'High ground: a cairn on the top.', spring: 'You spot a spring.', forage: 'Berries and a game trail nearby.',
   ruin: 'Old stones, through the trees: ruins.', camp: 'Someone camped here once.',
 };
-/** A thing found in the hex, walked to: its card, unless it's been used (a spring fills again in a
- * few days, foraging with the month). */
 function showFind(kind: FindKind) {
-  if (!world || !atlas || !save) return;
-  const s = save, key = `${s.cell}:${kind}`;
-  if (!findReady(kind, s.finds[key], s.day)) { toast(kind === 'spring' ? 'You drew from it lately. It needs a few days.' : 'Nothing more here for now.'); return; }
-  const rng = makeRng((params.seed * 7919 + ++s.draws * 104729) >>> 0);
-  const ctx = contextAt(world, s.cell, !!atlas.road[s.cell], seasonalTemp(world, s.cell, doyOf(s.day)) < SNOW_TEMP, false, s.caravan, rng, nameMaker(params.seed * 31 + s.draws));
-  showEncounter(FINDS[kind], ctx);
-  pendingChoices!.find = kind;
+  if (!g) return;
+  const p = findHere(g, kind);
+  if (!p) { toast(kind === 'spring' ? 'You drew from it lately. It needs a few days.' : 'Nothing more here for now.'); return; }
+  showPending(p);
 }
-function showEncounter(e: Encounter, ctx: ReturnType<typeof contextAt>, quest?: string) {
+function showEncounter(e: Encounter, ctx: Ctx, quest?: string) { showPending(pending(e, ctx, quest)); }
+function showPending(p: Pending) {
   speed = 0;
-  const choices = e.choices(ctx);
-  showPanel('encounter', `${head(roadKicker(), esc(e.title))}<p class="tale">${esc(e.text(ctx))}</p>
-    <div class="opts">${choices.map((ch, i) => opt('choose', esc(ch.label), ch.hint ? esc(ch.hint) : '', '', `data-i="${i}"`)).join('')}</div>`, true);
-  pendingChoices = { e, ctx, choices, quest };
+  showPanel('encounter', `${head(roadKicker(), esc(p.e.title))}<p class="tale">${esc(p.e.text(p.ctx))}</p>
+    <div class="opts">${p.choices.map((ch, i) => opt('choose', esc(ch.label), ch.hint ? esc(ch.hint) : '', '', `data-i="${i}"`)).join('')}</div>`, true);
+  pendingChoices = p;
 }
-let pendingChoices: { e: Encounter; ctx: ReturnType<typeof contextAt>; choices: Choice[]; quest?: string; find?: FindKind } | null = null;
+let pendingChoices: Pending | null = null;
 /** What changed, as chips: good news green, bad news red. */
 function fxChips(lines: string[]) {
   if (!lines.length) return '';
@@ -1139,35 +906,13 @@ function fxChips(lines: string[]) {
   return `<div class="facts fx">${lines.map((l) => `<span class="${bad.test(l) ? 'bad' : l.startsWith('+') || /up|joins|mapped|job done/.test(l) ? 'good' : ''}">${esc(l)}</span>`).join('')}</div>`;
 }
 function choose(i: number) {
-  if (!pendingChoices || !save) return;
-  const { e, ctx, choices, quest, find } = pendingChoices;
+  if (!pendingChoices || !g) return;
+  const p = pendingChoices;
   pendingChoices = null;
-  const out: Outcome = choices[i].resolve(ctx);
-  // A find is used once something comes of it (walking away leaves it for later).
-  if (find && Object.keys(out.effect).length) {
-    save.finds[`${save.cell}:${find}`] = save.day;
-    hexSend({ type: 'primundi-used', kind: find });
-  }
-  const lines = applyEffect(save.caravan, out.effect, ctx.name, save.day);
-  const q = quest ? save.jobs.find((x) => x.id === quest) : undefined;
-  if (q && out.effect.questDone) { q.done = true; lines.push(`job done: back to ${atlas!.places[q.from].name}`); labels.rebuild(); hexSend({ type: 'primundi-job-done', id: q.id }); }
-  let extra = '';
-  if (out.effect.reveal) { const n = reveal(ringCells(world!, save.cell, out.effect.reveal), true); if (n) lines.push(`${n} hexes mapped`); }
-  if (out.effect.rumour) extra = rumour();
-  if (out.effect.days) passDays(out.effect.days);
-  log(`${e.title}: ${out.text}`);
-  showPanel('encounter', `${head(roadKicker(), esc(e.title))}<p class="tale">${esc(out.text)}</p>${extra ? `<p>${esc(extra)}</p>` : ''}
+  const { out, lines, extra } = resolve(g, p, i);
+  showPanel('encounter', `${head(roadKicker(), esc(p.e.title))}<p class="tale">${esc(out.text)}</p>${extra ? `<p>${esc(extra)}</p>` : ''}
     ${fxChips(lines)}<button class="go" data-act="after">Go on</button>`, true);
   hud();
-}
-/** Whole days spent in place (a storm, a fever, a rest). */
-function passDays(n: number, resting = true) {
-  if (!save) return;
-  for (let i = 0; i < Math.round(n * 2); i++) {
-    const before = Math.floor(save.day);
-    save.day += 0.5;
-    if (Math.floor(save.day) > before) newDay(resting);
-  }
 }
 function afterEncounter() {
   if (!save) return;
@@ -1236,7 +981,7 @@ function showJournal(tab = journalTab) {
 panel.addEventListener('click', (e) => {
   const b = (e.target as HTMLElement).closest('button');
   if (!b || !save || !world || !atlas) return;
-  const s = save, c = s.caravan, act = b.dataset.act, pid = Number(panel.dataset.pid);
+  const s = save, act = b.dataset.act, pid = Number(panel.dataset.pid);
   const many = (e as MouseEvent).shiftKey ? 5 : 1;
   switch (act) {
     case 'close': closePanel(); break;
@@ -1246,79 +991,20 @@ panel.addEventListener('click', (e) => {
     case 'town': if (atlas.placeAt[s.cell] >= 0) { closePanel(); openHex(s.cell); } break;
     case 'tab': openTown(pid, b.dataset.tab); break;
     case 'buy': case 'sell': {
-      const g = Number(b.dataset.g), p = atlas.places[pid];
-      let n = act === 'buy' ? Math.min(many, c.capacity - cargoUsed(c)) : Math.min(many, c.cargo[g]);
-      if (n <= 0) break;
-      if (act === 'buy') {
-        // No more than the purse allows.
-        while (n > 0) { const st = JSON.parse(JSON.stringify(s.stocks)) as Stocks; if (trade(world, p, st, s.day, doyOf(s.day), g, n) <= c.orrels) break; n--; }
-        if (n <= 0) break;
-      }
-      const cost = trade(world, p, s.stocks, s.day, doyOf(s.day), g, act === 'buy' ? n : -n);
-      c.orrels -= cost;
-      if (act === 'buy') { c.basis[g] += cost; c.cargo[g] += n; }
-      else {
-        // The Traders' ambition counts profit: what it sold for, less what it cost.
-        const paid = c.cargo[g] ? (c.basis[g] / c.cargo[g]) * n : 0;
-        c.basis[g] -= paid; c.cargo[g] -= n;
-        c.earned += -cost - paid;
-      }
+      const gi = Number(b.dataset.g);
+      if (act === 'buy') simBuy(g!, pid, gi, many); else simSell(g!, pid, gi, many);
       openTown(pid, 'market');
       store();
       break;
     }
-    case 'rations': {
-      const p = atlas.places[pid], d = Number(b.dataset.n);
-      const cost = Math.ceil(rationPrice(world, p, s.stocks, s.day, doyOf(s.day)) * appetite(c) * d);
-      if (c.orrels < cost) break;
-      c.orrels -= cost;
-      c.rations += appetite(c) * d;
-      openTown(pid, 'supplies');
-      store();
-      break;
-    }
-    case 'charts': {
-      const p = atlas.places[pid], pay = Math.round(c.unsoldCharts * chartRate(p));
-      c.orrels += pay; c.earned += pay; c.unsoldCharts = 0;
-      log(`Sold charts in ${p.name} for ${pay} orrels.`);
-      openTown(pid, 'supplies');
-      store();
-      break;
-    }
-    case 'take': {
-      const q = jobsOffered(atlas.places[pid]).find((x) => x.id === b.dataset.q);
-      if (!q || s.jobs.length >= MAX_QUESTS) break;
-      q.taken = s.day;
-      s.jobs.push(q); s.taken.push(q.id);
-      // The giver shows you on your map where it is.
-      reveal(ringCells(world, questTarget(q, atlas), 1));
-      log(`Took on: ${questTitle(q, atlas)}, for ${q.giver} of ${atlas.places[q.from].name}.`);
-      labels.rebuild();
-      openTown(pid, 'work');
-      store();
-      break;
-    }
-    case 'handin': {
-      const q = s.jobs.find((x) => x.id === b.dataset.q);
-      if (!q || !canHandIn(q, pid, c.cargo)) break;
-      if (q.kind === 'procure') { const g = q.good!, n = q.qty!; c.basis[g] -= c.cargo[g] ? (c.basis[g] / c.cargo[g]) * n : 0; c.cargo[g] -= n; }
-      if (q.kind === 'relic' && c.cargo[G.relics] > 0) { c.basis[G.relics] = 0; c.cargo[G.relics]--; }
-      c.orrels += q.reward; c.earned += q.reward;
-      s.jobsDone++;
-      s.jobs = s.jobs.filter((x) => x !== q);
-      log(`${questTitle(q, atlas)}: done, ${q.reward} orrels.`);
-      toast(`${q.reward} orrels. ${q.giver} is pleased.`);
-      labels.rebuild();
-      openTown(pid, 'work');
-      store();
-      break;
-    }
+    case 'rations': if (buyRations(g!, pid, Number(b.dataset.n))) { openTown(pid, 'supplies'); store(); } break;
+    case 'charts': sellCharts(g!, pid); openTown(pid, 'supplies'); store(); break;
+    case 'take': if (takeJob(g!, pid, b.dataset.q ?? '')) { openTown(pid, 'work'); store(); } break;
+    case 'handin': if (handIn(g!, pid, b.dataset.q ?? '')) { openTown(pid, 'work'); store(); } break;
     case 'giveup': {
       const q = s.jobs.find((x) => x.id === b.dataset.q);
       if (!q || !confirm(`Give up "${questTitle(q, atlas)}"?`)) break;
-      s.jobs = s.jobs.filter((x) => x !== q);
-      log(`Gave up: ${questTitle(q, atlas)}.`);
-      labels.rebuild();
+      giveUp(g!, q.id);
       showJournal('work');
       store();
       break;
@@ -1329,57 +1015,29 @@ panel.addEventListener('click', (e) => {
       break;
     }
     case 'jtab': showJournal(b.dataset.tab); break;
-    case 'round': {
-      if (c.orrels < 8) break;
-      c.orrels -= 8;
-      toast(rumour(), 6000);
-      openTown(pid, 'tavern');
-      store();
-      break;
-    }
+    case 'round': { const r = standRound(g!); if (r) { toast(r, 6000); openTown(pid, 'tavern'); store(); } break; }
     case 'localmap': {
-      const n = Number(b.dataset.n);
-      if (c.orrels < n || s.maps.includes(pid)) break;
-      c.orrels -= n;
-      s.maps.push(pid);
-      const got = reveal(ringCells(world, atlas.places[pid].cell, 6));
+      const got = buyMap(g!, pid);
+      if (got < 0) break;
       toast(`The map shows ${got} hexes you hadn't seen.`);
-      log(`Bought a map of the country round ${atlas.places[pid].name}.`);
       openTown(pid, 'tavern');
       store();
       break;
     }
     case 'rest': {
-      const n = Number(b.dataset.n), cost = pid === s.home ? 0 : living(c).length * n;
-      if (c.orrels < cost) break;
-      c.orrels -= cost;
-      passDays(n, true);
-      c.water = waterCap(c);
+      const n = Number(b.dataset.n);
+      if (!simRest(g!, pid, n)) break;
       toast(`${n === 1 ? 'A day' : `${n} days`} of rest.`);
       openTown(pid, 'rest');
       store();
       break;
     }
-    case 'hire': {
-      const o = Number(b.dataset.n), role = b.dataset.role as Role;
-      if (c.orrels < o) break;
-      c.orrels -= o;
-      const nm = nameMaker(params.seed * 17 + s.day * 3 + c.members.length)();
-      const traits = Object.keys(TRAITS) as (keyof typeof TRAITS)[];
-      c.members.push({ name: nm, role, trait: traits[Math.floor(Math.random() * traits.length)], health: 'well', alive: true, joined: s.day });
-      log(`${nm} joined as a ${ROLE_NAMES[role].toLowerCase()}, in ${atlas.places[pid].name}.`);
-      openTown(pid, 'rest');
-      store();
-      break;
-    }
-    case 'beast': if (c.orrels >= 45) { c.orrels -= 45; c.capacity += 4; openTown(pid, 'rest'); store(); } break;
+    case 'hire': if (hire(g!, pid, b.dataset.role as Role, Number(b.dataset.n))) { openTown(pid, 'rest'); store(); } break;
+    case 'beast': if (buyBeast(g!)) { openTown(pid, 'rest'); store(); } break;
     case 'choose': choose(Number(b.dataset.i)); break;
     case 'after': afterEncounter(); break;
     case 'appoint': {
-      const m = c.members[Number(b.dataset.i)];
-      for (const x of c.members) if (x.alive && x.role === 'leader') x.role = 'hand';
-      m.role = 'leader';
-      log(`${m.name} leads the caravan now.`);
+      appoint(g!, Number(b.dataset.i));
       closePanel();
       store();
       break;

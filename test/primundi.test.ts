@@ -214,3 +214,53 @@ test('finds in a hex are the same every time, never ruins in a town, and some he
   assert.ok(!findReady('lookout', 0, 400));
   for (const k of Object.keys(FINDS) as FindKind[]) assert.ok(FINDS[k].title);
 });
+
+// --- The rules without the screen (sim.ts): what the game and the playtest bot both run. ---------
+import { makeGame, newGame as simNewGame, setRoute, advance as simAdvance, buy as simBuy, sell as simSell, buyRations, resolve, type Ui, type Pending } from '../src/primundi/sim.ts';
+
+/** A screen that shows nothing: encounters are answered with their first choice at once. */
+function quietUi(): Ui & { queue: Pending[]; arrivals: number } {
+  const u = {
+    queue: [] as Pending[], arrivals: 0,
+    toast() {}, revealed() {}, blocked: () => false, halt() {}, changed() {}, routeChanged() {}, jobsChanged() {},
+    encounter(e: Pending['e'], ctx: Pending['ctx'], quest?: string) { u.queue.push({ e, ctx, choices: e.choices(ctx), quest }); },
+    arrive() { u.arrivals++; }, questHex() {}, findUsed() {}, jobDone() {},
+  };
+  return u;
+}
+function playHeadless(seed: number) {
+  const ui = quietUi();
+  const s = simNewGame(hw, atlas, seed, { name: 'Test', origin: 'traders', bias: 'gentle', world: 'test' });
+  const dice = makeRng(seed * 3 + 1);
+  const g = makeGame(hw, atlas, hgd, seed, s, ui, dice);
+  const home = atlas.places[s.home];
+  // Buy the cheapest good at home, take it to the nearest other place, sell, come back; four times.
+  const others = atlas.places.filter((p) => p.id !== home.id && findPath(hw, home.cell, p.cell, (a, b) => stepDays(hw, atlas, a, b, 100), () => true))
+    .sort((p, q) => Math.hypot(...[0, 1, 2].map((k) => hw.grid.centers[p.cell * 3 + k] - hw.grid.centers[home.cell * 3 + k])) - Math.hypot(...[0, 1, 2].map((k) => hw.grid.centers[q.cell * 3 + k] - hw.grid.centers[home.cell * 3 + k])));
+  const away = others[0];
+  for (let trip = 0; trip < 4; trip++) {
+    for (const [from, to] of [[home, away], [away, home]]) {
+      if (s.cell !== from.cell) break;
+      const q = quotes(hw, from, s.stocks, s.day, 100);
+      const gi = q.map((x, i) => [x.buy || Infinity, i]).sort((a, b) => a[0] - b[0])[0][1];
+      simBuy(g, from.id, gi, 5);
+      buyRations(g, from.id, 10);
+      setRoute(g, to.cell);
+      for (let t = 0; t < 400 && s.route.length; t++) {
+        simAdvance(g, 0.25);
+        while (ui.queue.length) resolve(g, ui.queue.shift()!, 0);
+      }
+      for (let k = 0; k < s.caravan.cargo.length; k++) simSell(g, to.id, k, 99);
+    }
+  }
+  // (advance takes at most 64 steps a call: a day at a time.)
+  while (s.day < 120 - 1e-6) { simAdvance(g, Math.min(1, 120 - s.day)); while (ui.queue.length) resolve(g, ui.queue.shift()!, 0); }
+  return { s, ui };
+}
+test('the rules run headless: the same seed plays the same, and a trader gets there and back', () => {
+  const a = playHeadless(11), b = playHeadless(11);
+  assert.equal(JSON.stringify(a.s), JSON.stringify(b.s));
+  assert.ok(a.ui.arrivals >= 2, `arrived ${a.ui.arrivals} times`);
+  assert.ok(a.s.day >= 120 - 1e-6);
+  assert.ok(a.s.caravan.earned !== 0, 'traded');
+});
