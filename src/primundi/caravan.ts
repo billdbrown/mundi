@@ -11,11 +11,13 @@ import { nameMaker } from '../gamedata.ts';
 import { GOODS } from './atlas.ts';
 
 export type Origin = 'traders' | 'cartographers';
+/** Each origin's ambition: a direction, not a rule. Tuned with the playtest bot so a well-played
+ * caravan of either kind gets there in about a game-year (scripts/playtest.ts). */
+export const AMBITION_GOAL: Record<Origin, number> = { traders: 5000, cartographers: 1500 };
 export const ORIGINS: { id: Origin; label: string; note: string; ambition: string }[] = [
-  { id: 'traders', label: 'Traders', note: 'More beasts, more orrels, a nose for a price', ambition: 'Earn 2,000 orrels' },
-  { id: 'cartographers', label: 'Cartographers', note: 'A scout, sharp eyes, charts that sell', ambition: 'Chart 1,500 hexes' },
+  { id: 'traders', label: 'Traders', note: 'More beasts, more orrels, a nose for a price', ambition: `Earn ${AMBITION_GOAL.traders.toLocaleString('en')} orrels` },
+  { id: 'cartographers', label: 'Cartographers', note: 'A scout, sharp eyes, charts that sell', ambition: `Chart ${AMBITION_GOAL.cartographers.toLocaleString('en')} hexes` },
 ];
-export const AMBITION_GOAL: Record<Origin, number> = { traders: 2000, cartographers: 1500 };
 
 export type Role = 'leader' | 'guard' | 'scout' | 'hand';
 export const ROLE_NAMES: Record<Role, string> = { leader: 'Leader', guard: 'Guard', scout: 'Scout', hand: 'Hand' };
