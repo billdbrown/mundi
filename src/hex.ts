@@ -1728,7 +1728,14 @@ function setupCaravan(m: LocalMap) {
     const v = n.nearest(0, 0, 200);
     const [x, y] = v >= 0 ? n.xy(v) : [0, 0];
     caravan.place(x, y, Math.atan2(-dx, dy));
-    arrival = null;
+    // Down to the caravan, as in a town: from the hex's overview its labels can't be seen, and
+    // someone to meet or something to find is why you came in.
+    // With someone here to meet, between you and them, so both are in view (on a phone too).
+    arrival = () => {
+      const o = walkers[0]?.c;
+      if (o) { const d = Math.hypot(o.x - x, o.y - y); controls.glideTo((x + o.x) / 2, -(y + o.y) / 2, Math.max(70 * K, d * 1.6 / Math.min(1, innerWidth / innerHeight))); }
+      else controls.glideTo(x, -y, 70 * K);
+    };
   }
 }
 const FIND_LABELS: Record<string, string> = { lookout: 'Lookout', spring: 'Spring', forage: 'Foraging', ruin: 'Ruins', camp: 'Old camp' };
@@ -2348,6 +2355,8 @@ if (embedded) {
     if (e.data.type === 'mundi-hex-warm') { applyHash(e.data.hash); warm(); }
     if (e.data.type === 'mundi-hex-snapshot') snapshot(e.data.hash);
     if (e.data.type === 'mundi-hex-valleys') takeValleys(e.data.hash, e.data.n, e.data.half);
+    // Primundi: walk to a part of the town (the gathering bar's items, opening.ts).
+    if (e.data.type === 'primundi-go') { const s = spots.find((x) => x.tab === e.data.tab); if (s) goSpot(s); }
     // Primundi: a job's camp or site dealt with; its label goes.
     if (e.data.type === 'primundi-job-done') for (const s of spots) if (s.job === e.data.id) s.used = true;
     // Primundi: the game's been hunted (or let be): it moves off out of reach.

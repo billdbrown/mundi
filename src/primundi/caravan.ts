@@ -29,7 +29,22 @@ export const TRAITS: Record<Trait, string> = {
   frugal: 'Frugal: eats little',
   steady: 'Steady: hard to shake',
 };
-export interface Member { name: string; role: Role; trait: Trait; health: 'well' | 'hurt' | 'sick'; alive: boolean; joined: number }
+export interface Member { name: string; role: Role; trait: Trait; health: 'well' | 'hurt' | 'sick'; alive: boolean; joined: number;
+  /** What they want from the road, in their words (opening.ts). Flavour, for now. */
+  wish?: string }
+
+/** What pulls the caravan, chosen when setting out (opening.ts): how much it carries, how fast. */
+export type Beasts = 'mules' | 'oxen' | 'cart';
+export const BEASTS: Record<Beasts, { label: string; short: string; note: string; cost: number; capacity: number; pace: number }> = {
+  mules: { label: 'A string of mules', short: 'Mules', note: 'Sure-footed and steady: the usual choice', cost: 60, capacity: 16, pace: 1 },
+  oxen: { label: 'Oxen and a big wagon', short: 'Oxen', note: 'Half again the load, and slower on the road', cost: 80, capacity: 24, pace: 0.85 },
+  cart: { label: 'A light cart and a pony', short: 'Light cart', note: 'Quick on the road, room for little', cost: 35, capacity: 8, pace: 1.15 },
+};
+/** Room for cargo before the beasts: the Traders bring their own carts. */
+export const ORIGIN_CAPACITY: Record<Origin, number> = { traders: 14, cartographers: 0 };
+/** What a caravan has to spend when it builds itself in town: about what the old fixed start was
+ * worth (its people, beasts and purse), so the playtest's numbers still hold. */
+export const SETUP_PURSE: Record<Origin, number> = { traders: 450, cartographers: 335 };
 
 export interface Caravan {
   name: string;
@@ -50,6 +65,8 @@ export interface Caravan {
   earned: number;
   /** Hexes revealed and not yet sold as charts. */
   unsoldCharts: number;
+  /** What pulls it (older saves: mules). */
+  beasts?: Beasts;
 }
 
 /** A caravan as it sets out from home. */
@@ -105,7 +122,7 @@ export const hasKeen = (c: Caravan) => living(c).some((m) => m.trait === 'keen' 
 
 /** How fast the caravan goes, as a multiple: hunger, thirst, low spirits and the sick slow it. */
 export function pace(c: Caravan): number {
-  let k = 1;
+  let k = BEASTS[c.beasts ?? 'mules'].pace;
   if (c.rations <= 0) k *= 0.6;
   if (c.water <= 0) k *= 0.6;
   if (c.morale < 25) k *= 0.85;

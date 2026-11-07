@@ -269,6 +269,39 @@ body.gathering::after { content: 'The storm gathers…'; position: fixed; inset:
 }
 .primundi #card button:disabled:hover, .primundi #card button:disabled { border-color: var(--edge); }
 
+/* The opening: the first shot's caption, the gathering bar, the far place. */
+#intro-veil { position: fixed; inset: 0; z-index: 74; background: #04060a; transition: opacity 1.4s; pointer-events: none; }
+#intro-veil.off { opacity: 0; }
+#intro-cap { position: fixed; left: 50%; top: 22%; transform: translate(-50%, 10px); z-index: 75; text-align: center; max-width: min(520px, calc(100vw - 40px));
+  opacity: 0; transition: opacity 1.2s, transform 1.2s; pointer-events: none; text-shadow: 0 2px 12px rgba(0, 0, 0, .8); }
+#intro-cap.on { opacity: 1; transform: translate(-50%, 0); }
+#intro-cap b { display: block; font-size: 30px; letter-spacing: .14em; text-transform: uppercase; color: #fff; font-weight: 600; }
+#intro-cap span { display: block; margin-top: 8px; font-size: 15px; color: var(--ink); }
+#setup { position: fixed; left: 50%; bottom: calc(70px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 72; width: min(560px, calc(100vw - 20px));
+  padding: 10px 12px; border-radius: 14px; background: var(--glass); backdrop-filter: blur(12px); border: 1px solid var(--edge); color: var(--ink); font-size: 13px; }
+#setup .st-head { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
+#setup .st-head span { color: var(--gold); }
+#setup ul { list-style: none; margin: 0 0 8px; padding: 0; display: flex; gap: 6px; }
+#setup li { flex: 1; min-width: 0; }
+#setup li button { all: unset; box-sizing: border-box; width: 100%; min-height: 44px; display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border-radius: 9px;
+  border: 1px solid var(--edge); position: relative; cursor: pointer; }
+#setup li button:hover { border-color: var(--gold); }
+#setup li i { position: absolute; right: 7px; top: 7px; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--quiet); }
+#setup li.done i { background: var(--gold); border-color: var(--gold); }
+#setup li small { color: var(--quiet); font-size: 11px; }
+#setup .st-go { display: flex; gap: 8px; justify-content: flex-end; }
+#setup .st-go button { min-height: 44px; padding: 0 16px; width: auto; margin: 0; }
+#setup .st-go button[disabled] { opacity: .4; cursor: default; }
+/* A card docked at the side: the bar moves over, out from under it. */
+@media (min-width: 1000px) { body.setting-up:has(#card:not([hidden])) #setup { left: calc(50% - 200px); } }
+/* On a phone the card is a sheet from the bottom: the bar steps aside until it closes. */
+@media (max-width: 999px) { body.setting-up:has(#card:not([hidden])) #setup { display: none; } }
+/* While gathering, messages sit above the bar. */
+body.setting-up #toast { bottom: calc(200px + env(safe-area-inset-bottom)); }
+#far { position: fixed; left: 0; top: 0; z-index: 21; pointer-events: none; white-space: nowrap; font-size: 12.5px; color: var(--gold);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .9), 0 0 10px rgba(0, 0, 0, .6); display: flex; align-items: center; gap: 5px; }
+#far.at b { font-style: italic; border-bottom: 1px dashed var(--gold); }
+#far i { font-style: normal; display: inline-block; font-size: 15px; }
 /* Who's at a part of a town. */
 #card .who { margin: -4px 0 10px; color: var(--quiet); font-size: 12.5px; }
 #card .who b { color: var(--ink); font-weight: 600; }

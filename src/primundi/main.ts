@@ -30,7 +30,7 @@ import { Thunder } from './thunder.ts';
 import { BIASES, type StartBias } from './start.ts';
 import { buildAtlas, GOODS, ringCells, type Atlas, type Place } from './atlas.ts';
 import { bestKnownSell, quotes, remember } from './market.ts';
-import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
+import { AMBITION_GOAL, BEASTS, ORIGIN_CAPACITY, ORIGINS, ROLE_NAMES, TRAITS, type Beasts, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
 import { FOLK_LABEL, type FolkKind } from './life.ts';
 import { applyTradeWants, townLine, townsfolk, tradesOf } from './towns.ts';
@@ -40,8 +40,10 @@ import {
   jobsOffered, shortHere, chartRate, localOffer, takeLocal, rationCost, restCost, folkHere, meetFolk, passFolk, gameHere, huntHere, makeCamp, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
   reveal as simReveal, advance as simAdvance, plan as simPlan,
   buy as simBuy, sell as simSell, rest as simRest,
+  setupHire, setupBeasts, firstLoads, setupLoad, setupReady, finishSetup, quickSetup,
   type Game, type Pending, type Save, type Ui,
 } from './sim.ts';
+import { SETUP_MAX } from './opening.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const RADIUS_KM = 640;
@@ -107,13 +109,13 @@ function showLaunch() {
     const bias = (el.querySelector<HTMLInputElement>('input[name=bias]:checked')?.value ?? 'gentle') as StartBias;
     const origin = (el.querySelector<HTMLInputElement>('input[name=origin]:checked')?.value ?? 'traders') as Origin;
     const world = typed || randomName();
-    pendingNew = { name: $<HTMLInputElement>('civ').value.trim() || nameDefault, origin, bias, world };
+    pendingNew = { name: $<HTMLInputElement>('civ').value.trim() || nameDefault, origin, bias, world, setup: true };
     save = null;
     begin(world);
   };
   if (prev) $('continue').onclick = () => { thunder.unlock(); save = prev; begin(prev.world); };
 }
-let pendingNew: { name: string; origin: Origin; bias: StartBias; world: string } | null = null;
+let pendingNew: { name: string; origin: Origin; bias: StartBias; world: string; setup?: boolean } | null = null;
 
 // --- The world --------------------------------------------------------------------------------
 const view = new PlanetView($('view'));
@@ -190,11 +192,151 @@ function maybeStart() {
   hud();
   const l = loader!;
   loader = null;
-  void l.finish();
+  const loaded = l.finish();
   labels.rebuild();
-  // Home, or wherever you were: down into the hex. In a town its buildings are the menus.
-  openHex(s.cell);
-  if (s.log.length === 1) toast(s.log[0].text, 8000);
+  // A new caravan: the whole world first, under storm, then down to home.
+  if (s.setup && s.day === 0 && !s.hints?.includes('intro')) startIntro(loaded);
+  else {
+    // Home, or wherever you were: down into the hex. In a town its buildings are the menus.
+    openHex(s.cell);
+    if (s.log.length === 1) toast(s.log[0].text, 8000);
+  }
+  syncSetup();
+}
+
+// --- The opening (opening.ts) -----------------------------------------------------------------
+/** The first shot of a new game: the planet from far out, all storm but home, then down to it. */
+let intro: { t: number; from: THREE.Vector3; to: THREE.Vector3; d0: number; d1: number; wait: boolean; loaded: boolean; smooth: number; since: number } | null = null;
+const introPos = new THREE.Vector3();
+const INTRO_S = 6, INTRO_HOLD = 1.6;
+function startIntro(loaded: Promise<unknown>) {
+  if (!world || !save || !atlas) return;
+  const P = world.grid.centers, c = save.cell;
+  const to = new THREE.Vector3(P[c * 3], P[c * 3 + 1], P[c * 3 + 2]);
+  const from = to.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -1.5).add(new THREE.Vector3(0, 0.3, 0)).normalize();
+  intro = { t: -INTRO_HOLD, from, to, d0: 3.6, d1: 1 + (bounds.maxD - 1) * 0.85, wait: true, loaded: false, smooth: 0, since: 0 };
+  introPos.copy(from).multiplyScalar(intro.d0);
+  save.hints = [...(save.hints ?? []), 'intro'];
+  const cap = document.createElement('div');
+  cap.id = 'intro-cap';
+  cap.innerHTML = `<b>${esc(save.world)}</b><span>All of it under storm. Somewhere down there is ${esc(atlas.places[save.home].name)}, and the people who will be your caravan.</span>`;
+  document.body.appendChild(cap);
+  // Dark until the real view is up: the stand-in planet underneath shows the world clear.
+  const veil = document.createElement('div');
+  veil.id = 'intro-veil';
+  document.body.appendChild(veil);
+  // Not before the loading screen has gone and the view draws for real: until its shaders are
+  // built it draws a stand-in planet, with no storm over it, and the world would show clear.
+  const ok = () => { if (intro) intro.loaded = true; };
+  Promise.all([loaded, view.whenGateReady()]).then(ok, ok);
+  // A tap skips it.
+  const skip = () => { if (intro && !intro.wait && intro.t < INTRO_S - 0.6) intro.t = INTRO_S - 0.6; };
+  $('view').addEventListener('pointerdown', skip, { once: true });
+}
+function stepIntro(dt: number) {
+  if (!intro || !save) return;
+  if (intro.wait) {
+    intro.since += dt;
+    intro.smooth = dt < 0.05 ? intro.smooth + 1 : 0;
+    if ((intro.loaded && intro.smooth > 20) || intro.since > 20) {
+      intro.wait = false;
+      document.getElementById('intro-cap')?.classList.add('on');
+      const veil = document.getElementById('intro-veil');
+      if (veil) { veil.classList.add('off'); setTimeout(() => veil.remove(), 1600); }
+    }
+  } else intro.t += dt;
+  const k = Math.max(0, Math.min(1, intro.t / INTRO_S));
+  const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+  introPos.copy(intro.from).lerp(intro.to, e).normalize().multiplyScalar(intro.d0 + (intro.d1 - intro.d0) * e);
+  view.camera.position.copy(introPos);
+  view.camera.lookAt(0, 0, 0);
+  if (k >= 1) {
+    intro = null;
+    const cap = document.getElementById('intro-cap');
+    if (cap) { cap.classList.remove('on'); setTimeout(() => cap.remove(), 800); }
+    openHex(save.cell);
+    syncSetup();
+    if (save.setup) toast('Your caravan is you and a purse. Walk to the Tavern for people, Home for beasts, the Market for a first load.', 9000);
+  }
+}
+
+/** The bar across the top while the caravan is still gathering in town: what's left to do. */
+function syncSetup() {
+  let el = document.getElementById('setup');
+  const st = save?.setup;
+  document.body.classList.toggle('setting-up', !!st && !intro);
+  if (!st || intro || !save) { el?.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'setup';
+    document.body.appendChild(el);
+    el.addEventListener('click', (e) => {
+      const b = (e.target as HTMLElement).closest('button');
+      if (!b || !g || !save?.setup) return;
+      // An item: walk there.
+      if (b.dataset.go) { closePanel(); if (!hexOpen) openHex(save.cell); hexSend({ type: 'primundi-go', tab: b.dataset.go }); return; }
+      const q = b.dataset.act === 'setout' ? finishSetup(g) : b.dataset.act === 'quick' ? quickSetup(g) : null;
+      if (b.dataset.act === 'setout' || b.dataset.act === 'quick') { syncSetup(); hud(); store(); showErrand(q); }
+    });
+  }
+  const c = save.caravan, home = atlas ? atlas.places[save.home].name : 'home';
+  const item = (done: boolean, what: string, where: string, tab: string) => `<li class="${done ? 'done' : ''}"><button data-go="${tab}" title="Walk there"><i></i><b>${what}</b><small>${where}</small></button></li>`;
+  el.innerHTML = `<div class="st-head">Gathering in ${esc(home)} <span>${ORREL}${fmt(c.orrels)}</span></div>
+    <ul>${item(st.hired.length > 0, st.hired.length ? `Crew · ${st.hired.length}` : 'Crew', 'the tavern', 'tavern')}${item(!!st.beasts, st.beasts ? BEASTS[st.beasts].short : 'Beasts', 'the yard, at Home', 'rest')}${item(st.loads.length > 0, 'A first load', 'the market, if you like', 'market')}</ul>
+    <div class="st-go"><button class="ghost" data-act="quick" title="A sensible caravan for your kind, chosen for you">Choose for me</button><button class="go" data-act="setout" ${setupReady(save) ? '' : 'disabled'}>Set out</button></div>`;
+}
+/** Someone at home has an errand before you go: the first job, with a face. */
+function showErrand(q: ReturnType<typeof finishSetup>) {
+  if (!save || !atlas) return;
+  const c = save.caravan, home = atlas.places[save.home];
+  if (!q) { closePanel(); hint('set-out', 'When you are ready to set out, the globe button opens the world map.', 'b-planet'); return; }
+  const to = atlas.places[q.to!];
+  showPanel('errand', `${close}${head(esc(home.name), 'Before you go')}
+    <p class="who"><b>${esc(q.giver)}</b> catches you at the gate with a sealed letter.</p>
+    <p class="tale">"You'll pass through ${esc(to.name)}? See this into their hands for me. They'll pay you ${q.reward} orrels for it there."</p>
+    <p class="dim">${esc(living(c).map((m) => m.name).join(', '))}. ${cargoUsed(c) ? `${cargoUsed(c)} of ${c.capacity} loads aboard.` : `Room for ${c.capacity} loads.`} Food for a month.</p>
+    <button class="go" data-act="close">Take the letter</button>`);
+}
+/** The first errand handed in: the pay, a nudge at the market, and word of somewhere far. */
+function showFirstPay(q: NonNullable<ReturnType<typeof handIn>>, pid: number) {
+  if (!save || !atlas || !world) return;
+  const s = save, c = s.caravan, p = atlas.places[pid];
+  const qs = quotes(world, p, s.stocks, s.day, doyOf(s.day));
+  const good = c.cargo.map((n, gi) => ({ gi, n, each: qs[gi].sell, paid: n ? c.basis[gi] / n : 0 })).filter((x) => x.n && x.each > x.paid).sort((a, b) => (b.each - b.paid) - (a.each - a.paid))[0];
+  const nudge = good ? `<p>And the ${GOODS[good.gi].name.toLowerCase()} you brought: the market here pays ${good.each} each. You paid ${Math.round(good.paid)} at home.</p>`
+    : '<p>Have a look at the market while you are here. What is cheap at home is often dear a few days away.</p>';
+  const far = s.far ? atlas.places[s.far.pid] : null;
+  const told = far?.story.length ? far.story[far.story.length - 1].slice(far.story[far.story.length - 1].indexOf(': ') + 2) : '';
+  showPanel('errand', `${close}${head(esc(p.name), 'Delivered')}
+    <p class="tale">The letter is opened and read twice. "${q.reward} orrels, as promised. Safe roads."</p>${nudge}
+    ${far ? `<h3>Word of a far place</h3><p class="tale">Over a cup, someone talks of <b>${esc(far.name)}</b>, far to the ${bearing(world, p.cell, far.cell)}, further than anyone here has been.${told ? ` "They say: ${esc(told)}"` : ''} Nobody you know has seen it.</p>
+    <p class="dim">Your map shows roughly where. Head that way when you are ready, or never: it is your road.</p>` : ''}
+    <button class="go" data-act="close">Go on</button>`);
+}
+/** The town's buildings while the caravan is still gathering: people, beasts, a first load. */
+function setupBody(tab: string, purse: string, body: string): string {
+  if (!save?.setup || !g) return body;
+  const st = save.setup, c = save.caravan;
+  if (tab === 'tavern') {
+    const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+    return `${purse}<h3>Looking for a place</h3><p class="dim small">Take on up to ${SETUP_MAX}. You can let someone go again until you set out.</p>
+      <div class="opts">${st.offered.map((x, i) => {
+        const on = st.hired.includes(i);
+        return opt('crew', `${on ? '✓ ' : ''}${esc(x.m.name)} · ${ROLE_NAMES[x.m.role]}`, `${TRAITS[x.m.trait]}. ${esc(cap(x.m.wish ?? ''))}.`, on ? 'let go' : `${ORREL}${x.cost}`, `data-i="${i}"`, !on && (c.orrels < x.cost || st.hired.length >= SETUP_MAX));
+      }).join('')}</div>`;
+  }
+  if (tab === 'rest') {
+    const back = st.beasts ? BEASTS[st.beasts].cost : 0;
+    return `${purse}<h3>The yard</h3><p>What pulls the caravan. You can change your mind until you set out.</p>
+      <div class="opts">${(Object.keys(BEASTS) as Beasts[]).map((k) => { const b = BEASTS[k], on = st.beasts === k;
+        return opt('beasts', `${on ? '✓ ' : ''}${b.label}`, `${b.note}. Carries ${ORIGIN_CAPACITY[c.origin] + b.capacity} loads.`, `${ORREL}${b.cost}`, `data-b="${k}"`, !on && c.orrels + back < b.cost); }).join('')}</div>`;
+  }
+  if (tab === 'market') {
+    const ls = firstLoads(g);
+    return `<h3>A first load</h3>${ls.length ? `<div class="opts">${ls.map((l) => opt('load', `${l.n} ${GOODS[l.gi].name.toLowerCase()}`, `Fetches about ${l.each} each in ${esc(atlas!.places[l.at].name)}`, `${ORREL}${l.cost}`, `data-g="${l.gi}" data-n="${l.n}"`, c.orrels < l.cost || cargoUsed(c) + l.n > c.capacity)).join('')}</div>`
+      : '<p class="dim">Nothing here sells much better anywhere you know of yet.</p>'}${!st.beasts ? '<p class="dim small">Beasts first, in the yard at Home: they decide how much you can carry.</p>' : ''}${body}`;
+  }
+  return body;
 }
 
 const cellAngle = () => cellAngleOf(world!);
@@ -267,7 +409,7 @@ const bounds = {
   step(dt: number) {
     const k = 1 - Math.exp(-dt * 1.5);
     this.maxD += (this.goalD - this.maxD) * k;
-    view.controls.maxDistance = this.maxD;
+    view.controls.maxDistance = intro ? 10 : this.maxD;
   },
 };
 const tmp = new THREE.Vector3(), axis = new THREE.Vector3(), near = new THREE.Vector3();
@@ -276,6 +418,7 @@ let follow: THREE.Vector3 | null = null;
 let lookLater: THREE.Vector3 | null = null;
 view.constrain = (pos) => {
   if (!world) return;
+  if (intro) { pos.copy(introPos); return; }
   const d = pos.length();
   const nd = Math.min(d, bounds.maxD);
   tmp.copy(pos).divideScalar(d);
@@ -500,6 +643,7 @@ function advance(dd: number) { if (g) simAdvance(g, dd); }
 function plan(to: number) { return g ? simPlan(g, to) : null; }
 function travelTo(to: number) {
   if (!save) return;
+  if (save.setup) { toast('Your caravan is still gathering: people at the Tavern, beasts in the yard at Home. Or Choose for me, at the top.', 6000); return; }
   if (!g || !setRoute(g, to)) return;
   closePanel();
   hint('clock', 'Time runs while you travel. Pause any time, or go faster.', 'speeds');
@@ -520,6 +664,7 @@ const storm = { next: 2.5, t: -1, dir: new THREE.Vector3() };
 let frontierCache: number[] = [], frontierAt = -1;
 view.onFrame.push((dt, _d, sun, time) => {
   if (!fog || !world) return;
+  stepIntro(dt);
   bounds.step(dt);
   fog.update(view.camera.position, sun, dt, time);
   if (!paused()) {
@@ -552,7 +697,37 @@ view.onFrame.push((dt, _d, sun, time) => {
   }
   marks.place();
   labels.place();
+  farMark();
 });
+
+/** Where the rumour puts the far place: a mark on the map if it's in view, else an arrow at the
+ * edge of the screen pointing the way. It never reveals anything. */
+let farEl: HTMLElement | null = null;
+const farV = new THREE.Vector3(), farC = new THREE.Vector3();
+function farMark() {
+  const f = save?.far;
+  if (!f || !world || !atlas || hexOpen || intro || modal) { if (farEl) farEl.hidden = true; return; }
+  if (!farEl) { farEl = document.createElement('div'); farEl.id = 'far'; document.body.appendChild(farEl); }
+  const P = world.grid.centers, cam = view.camera;
+  farV.set(P[f.guess * 3], P[f.guess * 3 + 1], P[f.guess * 3 + 2]);
+  const front = farV.dot(farC.copy(cam.position).normalize()) > 1 / cam.position.length();
+  const s = farV.clone().project(cam), W = innerWidth, H = innerHeight;
+  const name = esc(atlas.places[f.pid].name);
+  farEl.hidden = false;
+  if (front && Math.abs(s.x) < 0.9 && Math.abs(s.y) < 0.85) {
+    farEl.className = 'at';
+    farEl.innerHTML = `<b>${name}?</b>`;
+    farEl.style.transform = `translate(${(s.x + 1) / 2 * W}px, ${(1 - s.y) / 2 * H}px) translate(-50%, -50%)`;
+    return;
+  }
+  // Off the screen, or round the back of the world: the way to it, at the edge.
+  const v = farV.clone().applyMatrix4(cam.matrixWorldInverse);
+  const ang = Math.atan2(v.y, v.x);
+  const rx = W / 2 - 70, ry = H / 2 - 90;
+  farEl.className = 'edge';
+  farEl.innerHTML = `<i style="transform: rotate(${-ang}rad)">➜</i><b>${name}</b>`;
+  farEl.style.transform = `translate(${W / 2 + Math.cos(ang) * rx}px, ${H / 2 - Math.sin(ang) * ry}px) translate(-50%, -50%)`;
+}
 
 // --- Labels: places you know of ---------------------------------------------------------------
 const labels = {
@@ -766,7 +941,7 @@ function closePanel() {
   panel.hidden = true;
   panelKind = '';
   // Done with the first building in town: where next.
-  if (was === 'town' && save && save.day < 1 && (cargoUsed(save.caravan) > 0 || save.jobs.length)) {
+  if ((was === 'town' || was === 'errand') && save && !save.setup && save.day < 1 && (cargoUsed(save.caravan) > 0 || save.jobs.length)) {
     hint('set-out', 'When you are ready to set out, the globe button opens the world map.', 'b-planet');
   }
   modal = false;
@@ -901,6 +1076,7 @@ function openTown(pid: number, tab = townTab) {
       <h3>Beasts</h3>
       <div class="opts">${opt('beast', 'A pack beast', 'Carries four more loads', `${ORREL}45`, '', c.orrels < 45)}</div>`;
   }
+  body = setupBody(tab, purse, body);
   // Walking the town's hex, each building is its own card: you go to the market for the market.
   // (The whole card with its tabs is still here for when there's no hex view open.)
   if (hexOpen) {
@@ -1015,6 +1191,7 @@ function showJournal(tab = journalTab) {
       <p>${o.ambition}${prog >= goal ? ': <b>done</b>. The road goes on.' : ''}</p>
       <div class="meter"><i style="width:${Math.min(100, (prog / goal) * 100)}%"></i></div>
       <p class="dim small">${fmt(Math.min(prog, goal))} of ${fmt(goal)}. A direction, not a rule.</p>
+      ${s.far ? `<h3>Far away</h3><p>Word of <b>${esc(a.places[s.far.pid].name)}</b>, somewhere to the ${bearing(w, s.cell, s.far.guess)}. Nobody you know has been.</p>` : ''}
       <h3>Jobs · ${s.jobs.length} of ${MAX_QUESTS}</h3>
       ${s.jobs.length ? s.jobs.map((q) => {
         const t = questTarget(q, a), p = plan(t);
@@ -1027,7 +1204,7 @@ function showJournal(tab = journalTab) {
       }).join('') : '<p class="dim">No jobs in hand. Town notice boards have work.</p>'}`;
   } else if (tab === 'caravan') {
     body = `<p class="dim small">${living(c).length} people, ${mood}. ${cargoUsed(c)} of ${c.capacity} loads carried.</p>
-      <ul class="people">${c.members.filter((m) => m.alive).map((m) => `<li><span class="who"><b>${esc(m.name)}</b><small>${TRAITS[m.trait]}</small></span><span class="role${m.role === 'leader' ? ' lead' : ''}">${ROLE_NAMES[m.role]}</span>${m.health !== 'well' ? `<span class="hp">${m.health}</span>` : ''}</li>`).join('')}</ul>
+      <ul class="people">${c.members.filter((m) => m.alive).map((m) => `<li><span class="who"><b>${esc(m.name)}</b><small>${TRAITS[m.trait]}${m.wish ? `. ${esc(m.wish.charAt(0).toUpperCase() + m.wish.slice(1))}.` : ''}</small></span><span class="role${m.role === 'leader' ? ' lead' : ''}">${ROLE_NAMES[m.role]}</span>${m.health !== 'well' ? `<span class="hp">${m.health}</span>` : ''}</li>`).join('')}</ul>
       ${c.members.some((m) => !m.alive) ? `<p class="dim small">Lost on the road: ${c.members.filter((m) => !m.alive).map((m) => esc(m.name)).join(', ')}.</p>` : ''}
       ${c.cargo.some((x) => x) ? `<h3>Cargo</h3>${chips(c.cargo.map((n, g) => (n ? `${n} ${GOODS[g].name.toLowerCase()}` : '')).filter(Boolean))}` : ''}`;
   } else {
@@ -1062,7 +1239,10 @@ panel.addEventListener('click', (e) => {
     case 'rations': if (buyRations(g!, pid, Number(b.dataset.n))) { openTown(pid, 'supplies'); store(); } break;
     case 'charts': sellCharts(g!, pid); openTown(pid, 'supplies'); store(); break;
     case 'take': if (takeJob(g!, pid, b.dataset.q ?? '')) { openTown(pid, 'work'); store(); } break;
-    case 'handin': if (handIn(g!, pid, b.dataset.q ?? '')) { openTown(pid, 'work'); store(); } break;
+    case 'handin': { const q = handIn(g!, pid, b.dataset.q ?? ''); if (q) { if (q.id === s.errand) showFirstPay(q, pid); else openTown(pid, 'work'); store(); } break; }
+    case 'crew': if (setupHire(g!, Number(b.dataset.i))) { openTown(pid, 'tavern'); syncSetup(); store(); } break;
+    case 'beasts': if (setupBeasts(g!, b.dataset.b as Beasts)) { openTown(pid, 'rest'); syncSetup(); store(); } else toast('You carry more than that would hold.'); break;
+    case 'load': { const n = setupLoad(g!, Number(b.dataset.g), Number(b.dataset.n)); if (n) { toast(`${n} ${GOODS[Number(b.dataset.g)].name.toLowerCase()} loaded.`); openTown(pid, 'market'); syncSetup(); store(); } break; }
     case 'giveup': {
       const q = s.jobs.find((x) => x.id === b.dataset.q);
       if (!q || !confirm(`Give up "${questTitle(q, atlas)}"?`)) break;
@@ -1203,6 +1383,9 @@ function toast(text: string, ms = 3500) {
 // --- Debug handle -----------------------------------------------------------------------------
 (window as unknown as Record<string, unknown>).primundi = {
   view, thunder, bounds,
+  get intro() { return intro; },
+  get g() { return g; },
+  get folkOffered() { return folkOffered; },
   get world() { return world; },
   get atlas() { return atlas; },
   get save() { return save; },

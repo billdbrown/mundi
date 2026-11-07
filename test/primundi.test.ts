@@ -393,3 +393,48 @@ test('townspeople: the same names every visit, and a town you have helped is kin
   metAt(g, pid).helped = 1;
   assert.ok(rationCost(g, pid, 20) < r0 && restCost(g, pid, 3) < b0, `${r0}->${rationCost(g, pid, 20)}, ${b0}->${restCost(g, pid, 3)}`);
 });
+
+// --- The opening (opening.ts): the caravan built in town, the errand, the first road. ----------
+import { setupHire, setupBeasts, firstLoads, setupLoad, setupReady, finishSetup, quickSetup, folkHere, enter, handIn } from '../src/primundi/sim.ts';
+import { candidates } from '../src/primundi/opening.ts';
+import { SETUP_PURSE } from '../src/primundi/caravan.ts';
+test('the opening: six people to choose from, each with their own wish, and a purse to spend', () => {
+  const s = simNewGame(hw, atlas, 8, { name: 'T', origin: 'traders', bias: 'gentle', world: 't', setup: true });
+  assert.equal(s.caravan.members.length, 1);
+  assert.equal(s.caravan.orrels, SETUP_PURSE.traders);
+  const cs = candidates(hw, atlas, atlas.places[s.home], 'traders', 8);
+  assert.equal(cs.length, 6);
+  assert.equal(new Set(cs.map((x) => x.m.wish)).size, 6);
+  const g = makeGame(hw, atlas, hgd, 8, s, quietUi(), makeRng(1));
+  assert.ok(!setupReady(s));
+  assert.ok(setupHire(g, 0) && setupHire(g, 1));
+  const after2 = s.caravan.orrels;
+  assert.ok(setupHire(g, 1));
+  assert.equal(s.caravan.orrels, after2 + s.setup!.offered[1].cost, 'letting someone go gives their cost back');
+  assert.ok(setupBeasts(g, 'oxen') && setupBeasts(g, 'mules'));
+  assert.equal(s.caravan.capacity, 30);
+  assert.ok(setupReady(s));
+  const l = firstLoads(g)[0];
+  if (l) assert.ok(setupLoad(g, l.gi, l.n) > 0);
+  const q = finishSetup(g);
+  assert.ok(q && q.kind === 'deliver' && s.jobs.length === 1 && !s.setup);
+  assert.equal(s.caravan.rations, s.caravan.members.length * 30);
+});
+test('the opening: every quick start can set out, and the first road has someone on it', () => {
+  for (const origin of ['traders', 'cartographers'] as const) for (let seed = 1; seed <= 6; seed++) {
+    const s = simNewGame(hw, atlas, seed, { name: 'T', origin, bias: 'gentle', world: 't', setup: true });
+    const g = makeGame(hw, atlas, hgd, seed, s, quietUi(), makeRng(seed));
+    const q = quickSetup(g);
+    assert.ok(q, `${origin} ${seed}: no errand`);
+    assert.ok(s.caravan.orrels > 0 && s.caravan.members.length >= 3);
+    assert.equal(s.firstRoad, -1);
+    // Walk the route out: the first open hex a little way from home gets the meeting.
+    assert.ok(setRoute(g, atlas.places[q!.to!].cell));
+    while (s.route.length && s.firstRoad === -1) enter(g, s.route[0]);
+    if (s.firstRoad !== -1) assert.equal(folkHere(g, s.firstRoad!)[0]?.id, 'first');
+    // Delivered: word of somewhere far.
+    while (s.route.length) enter(g, s.route[0]);
+    assert.ok(handIn(g, q!.to!, q!.id));
+    assert.ok(s.far && s.far.pid !== s.home, `${origin} ${seed}: no far place`);
+  }
+});

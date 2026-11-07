@@ -91,4 +91,14 @@ atlas), its line (`townLine`), its people (`townsfolk`; `save.met` remembers vis
 food and beds 10% off for friends). sim.ts `localOffer` is each town's monthly offer. The hex shows
 the trade with `hextrades.ts` props (`placeTrade`, game only: hash `trade=`), people at the doors
 and a few walking the streets (`placeStrollers`).
+`opening.ts` is the first ten minutes (vault decision 2026-11-07): a new game (`newGame(..., {setup:
+true})`, from the launch screen; the playtest bot still starts the old fixed way) is the leader and
+`SETUP_PURSE`. You build the caravan by walking home: crew at the tavern (`candidates`, each with a
+`wish`), beasts in the home yard (`BEASTS` in caravan.ts: capacity and pace), a first load at the
+market (sim.ts `firstLoads`). `save.setup` holds it until `finishSetup`/`quickSetup`, which give the
+first errand (`save.errand`). The first open hex out of town has a caravan on it (`save.firstRoad`,
+folk id `first`); handing in the errand gives word of a far place (`save.far`, shown as a guess with
+an edge arrow, never revealed). main.ts: `startIntro` (planet from far, waits for
+`view.whenGateReady()` under a veil: the stand-in planet has no storm), `syncSetup` (the gathering
+bar; its items walk you there, hex message `primundi-go`), `showErrand`, `showFirstPay`, `farMark`.
 `window.primundi` is its debug handle (`travelTo(cell)`, `setSpeed(n)`, `encounter(id)`, `revealRing()`).

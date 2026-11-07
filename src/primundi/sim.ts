@@ -8,7 +8,7 @@
  * gives a Ui that does nothing, or makes its choices.
  */
 import * as THREE from 'three';
-import { DEFAULT_PARAMS, type World, type WorldParams } from '../world.ts';
+import { DEFAULT_PARAMS, WATER_LAND, type World, type WorldParams } from '../world.ts';
 import { NAME_DECIDES, paramsOf } from '../namedworld.ts';
 import { nameSeed, parseSeed } from '../seedname.ts';
 import { nameMaker, type GameData, RES_FERTILE, RES_FISH, RES_TIMBER } from '../gamedata.ts';
@@ -16,11 +16,12 @@ import { makeRng } from '../rng.ts';
 import { pickHome, type StartBias } from './start.ts';
 import { findPath, G, GOODS, hasWater, ringCells, seasonalTemp, SNOW_TEMP, stepDays, walkable, type Atlas, type Place } from './atlas.ts';
 import { quotes, rationPrice, remember, trade, type Known, type Stocks } from './market.ts';
-import { appetite, cargoUsed, living, newCaravan, pace, passDay, sight, thirst, waterCap, TRAITS, ROLE_NAMES, type Caravan, type Origin, type Role } from './caravan.ts';
+import { appetite, cargoUsed, living, newCaravan, pace, passDay, sight, thirst, waterCap, TRAITS, ROLE_NAMES, BEASTS, ORIGIN_CAPACITY, SETUP_PURSE, WATER_DAYS, type Beasts, type Caravan, type Origin, type Role } from './caravan.ts';
+import { candidates, farGuess, farPlace, SETUP_MAX, type Candidate } from './opening.ts';
 import { findReady, findsIn, FINDS, type FindKind } from './finds.ts';
 import { ENCOUNTERS, applyEffect, contextAt, drawEncounter, type Choice, type Ctx, type Encounter, type Outcome } from './encounters.ts';
 import { MAX_QUESTS, canHandIn, offersAt, questTarget, questTitle, type Quest } from './quests.ts';
-import { tradesOf, TRADES, type Trade } from './towns.ts';
+import { tradesOf, townsfolk, TRADES, type Trade } from './towns.ts';
 import { CAMP_NIGHTS, CAMP_P, folkEncounter, folkIn, gameIn, gameReady, huntEncounter, type AnimalKind, type Folk } from './life.ts';
 
 /** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
@@ -73,6 +74,14 @@ export interface Save {
   hints?: string[];
   /** Towns you've been to (by place id): how often, and how many of their jobs you've done. */
   met?: Record<number, { visits: number; helped: number }>;
+  /** Building the caravan in the home town (opening.ts); gone once it sets out. */
+  setup?: { offered: Candidate[]; hired: number[]; beasts?: Beasts; loads: number[] };
+  /** The opening's first errand (its job id), and the hex of the first road's meeting: -1 until
+   * the caravan is a little way out, then that hex. */
+  errand?: string;
+  firstRoad?: number;
+  /** Word of a place very far away (place id), and where the rumour puts it (a hex near it). */
+  far?: { pid: number; guess: number };
 }
 /** A save as loaded: fields added since it was written get their defaults. Null if unusable. */
 export function migrateSave(s: Save | null): Save | null {
@@ -136,7 +145,7 @@ export function makeGame(w: World, a: Atlas, game: GameData, seed: number, s: Sa
 }
 
 /** A new game: a caravan at home, knowing home's market and its two nearest neighbours'. */
-export function newGame(w: World, a: Atlas, seed: number, n: { name: string; origin: Origin; bias: StartBias; world: string }): Save {
+export function newGame(w: World, a: Atlas, seed: number, n: { name: string; origin: Origin; bias: StartBias; world: string; setup?: boolean }): Save {
   const home = a.places[pickHome(w, a.places, n.bias, seed)];
   const caravan = newCaravan(n.name, n.origin, seed);
   const s: Save = {
@@ -151,7 +160,113 @@ export function newGame(w: World, a: Atlas, seed: number, n: { name: string; ori
   }
   s.revealed = [...seen];
   s.log.push({ day: 0, text: `${caravan.name} sets out from ${home.name}. You know the prices here and in ${near.map((x) => x.p.name).join(' and ')}.` });
+  // Built in town: the leader alone, and the purse to find the rest.
+  if (n.setup) {
+    caravan.members = caravan.members.filter((m) => m.role === 'leader');
+    caravan.orrels = SETUP_PURSE[n.origin];
+    caravan.capacity = ORIGIN_CAPACITY[n.origin];
+    caravan.rations = 30; caravan.water = WATER_DAYS;
+    s.setup = { offered: candidates(w, a, home, n.origin, seed), hired: [], loads: [] };
+    s.log[0].text = `${caravan.name} gathers in ${home.name}. You know the prices here and in ${near.map((x) => x.p.name).join(' and ')}.`;
+  }
   return s;
+}
+
+// --- Setting out (opening.ts) -----------------------------------------------------------------
+/** Take someone on from the tavern, or let them go again before setting out. */
+export function setupHire(g: Game, i: number): boolean {
+  const s = g.s, st = s.setup, c = s.caravan;
+  if (!st || !st.offered[i]) return false;
+  const k = st.hired.indexOf(i), cand = st.offered[i];
+  if (k >= 0) {
+    st.hired.splice(k, 1);
+    c.members = c.members.filter((m) => m.name !== cand.m.name);
+    c.orrels += cand.cost;
+    return true;
+  }
+  if (st.hired.length >= SETUP_MAX || c.orrels < cand.cost) return false;
+  st.hired.push(i);
+  c.members.push({ ...cand.m });
+  c.orrels -= cand.cost;
+  return true;
+}
+/** Choose what pulls the caravan (the old choice's cost back). */
+export function setupBeasts(g: Game, b: Beasts): boolean {
+  const s = g.s, st = s.setup, c = s.caravan;
+  if (!st) return false;
+  const back = st.beasts ? BEASTS[st.beasts].cost : 0;
+  if (c.orrels + back < BEASTS[b].cost) return false;
+  const cap = ORIGIN_CAPACITY[c.origin] + BEASTS[b].capacity;
+  if (cargoUsed(c) > cap) return false;
+  c.orrels += back - BEASTS[b].cost;
+  st.beasts = b; c.beasts = b; c.capacity = cap;
+  return true;
+}
+/** A first load: a good home makes cheaply and a neighbour you know pays more for. */
+export interface Load { gi: number; n: number; cost: number; at: number; each: number }
+export function firstLoads(g: Game): Load[] {
+  const s = g.s, home = g.a.places[s.home], q = quotes(g.w, home, s.stocks, s.day, doyOf(s.day));
+  const out: (Load & { k: number })[] = [];
+  for (let gi = 0; gi < GOODS.length; gi++) {
+    if (!q[gi].buy || q[gi].stock < 6) continue;
+    let best: { at: number; each: number } | null = null;
+    for (const [pid, kn] of Object.entries(s.known)) {
+      if (Number(pid) === home.id) continue;
+      const sell = kn.sell[gi] ?? 0;
+      if (sell > (best?.each ?? 0)) best = { at: Number(pid), each: sell };
+    }
+    if (!best || best.each <= q[gi].buy * 1.15) continue;
+    const n = Math.min(8, Math.floor(q[gi].stock / 2));
+    out.push({ gi, n, cost: q[gi].buy * n, at: best.at, each: best.each, k: best.each / q[gi].buy });
+  }
+  return out.sort((x, y) => y.k - x.k).slice(0, 3);
+}
+/** Buy a first load (it moves the price as any buying does). The number bought. */
+export function setupLoad(g: Game, gi: number, n: number): number {
+  const st = g.s.setup;
+  if (!st) return 0;
+  const got = buy(g, g.s.home, gi, n);
+  if (got && !st.loads.includes(gi)) st.loads.push(gi);
+  return got;
+}
+export const setupReady = (s: Save) => !!s.setup && s.setup.hired.length > 0 && !!s.setup.beasts;
+/** Done in town: food and water for everyone, and someone at home has an errand before you go. */
+export function finishSetup(g: Game): Quest | null {
+  const s = g.s, c = s.caravan;
+  if (!setupReady(s)) return null;
+  delete s.setup;
+  c.rations = Math.max(c.rations, living(c).length * 30);
+  c.water = waterCap(c);
+  log(g, `${c.name} sets out from ${g.a.places[s.home].name}: ${living(c).map((m) => m.name).join(', ')}.`);
+  return giveErrand(g);
+}
+/** The first errand: a letter to the nearest place you know, paid on delivery. */
+function giveErrand(g: Game): Quest | null {
+  const s = g.s, home = g.a.places[s.home];
+  const to = Object.keys(s.known).map(Number).filter((pid) => pid !== home.id)
+    .map((pid) => ({ pid, p: plan(g, g.a.places[pid].cell) })).filter((x) => x.p).sort((x, y) => x.p!.days - y.p!.days)[0];
+  if (!to) return null;
+  const giver = townsfolk(home, g.seed, nameMaker(g.seed * 101 + home.id * 7)).work?.name ?? 'Someone at home';
+  const q: Quest = { id: `first-${home.id}`, kind: 'deliver', giver, from: home.id, to: to.pid, item: 'sealed letter', reward: Math.round(30 + to.p!.days * 8), taken: s.day };
+  s.jobs.push(q); s.taken.push(q.id);
+  s.errand = q.id;
+  s.firstRoad = -1;
+  log(g, `Took on: ${questTitle(q, g.a)}, for ${giver} of ${home.name}.`);
+  g.ui.jobsChanged();
+  return q;
+}
+/** A sensible caravan, chosen for you: the usual people for your kind, mules, the best load. */
+export function quickSetup(g: Game): Quest | null {
+  const s = g.s, st = s.setup;
+  if (!st) return null;
+  const want: Role[] = s.caravan.origin === 'traders' ? ['guard', 'guard', 'hand', 'hand'] : ['scout', 'guard', 'hand'];
+  for (const r of want) {
+    const i = st.offered.findIndex((x, k) => x.m.role === r && !st.hired.includes(k));
+    if (i >= 0) setupHire(g, i);
+  }
+  if (!st.beasts) setupBeasts(g, 'mules');
+  if (s.caravan.origin === 'traders' && !st.loads.length) { const l = firstLoads(g)[0]; if (l) setupLoad(g, l.gi, l.n); }
+  return finishSetup(g);
 }
 
 // --- Geometry ---------------------------------------------------------------------------------
@@ -310,6 +425,9 @@ export function enter(g: Game, cell: number) {
   }
   // A job's hex.
   if (questsAt(g, cell)) return;
+  // The opening's first road: the first open hex out of town (on a later trip, if the first was
+  // town to town with nothing between).
+  if (s.firstRoad === -1 && pid < 0 && w.water[cell] === WATER_LAND) s.firstRoad = cell;
   // The road: someone else on it, or what the road brings.
   if (pid < 0) {
     const f = folkHere(g, cell)[0];
@@ -401,7 +519,13 @@ export function jobHere(g: Game, q: Quest, encounters: Record<'bounty' | 'relic'
 }
 /** Others on the road in a hex this week, not yet met or passed by. */
 export function folkHere(g: Game, cell: number): Folk[] {
-  return folkIn(g.w, g.a, cell, g.s.day, g.seed).filter((f) => g.s.finds[`folk:${f.id}`] === undefined);
+  const s = g.s;
+  // The first road always has someone on it: a caravan out of the errand's town.
+  if (cell === s.firstRoad && s.finds['folk:first'] === undefined) {
+    const q = s.jobs.find((x) => x.id === s.errand);
+    return [{ id: 'first', kind: 'traders', name: nameMaker((g.seed * 7 + 5) >>> 0)(), from: q?.to ?? s.home }];
+  }
+  return folkIn(g.w, g.a, cell, s.day, g.seed).filter((f) => s.finds[`folk:${f.id}`] === undefined);
 }
 /** Meeting someone on the road: its card. */
 export function meetFolk(g: Game, f: Folk): Pending {
@@ -563,6 +687,11 @@ export function handIn(g: Game, pid: number, id: string): Quest | null {
   metAt(g, q.from).helped++;
   s.jobs = s.jobs.filter((x) => x !== q);
   log(g, `${questTitle(q, g.a)}: done, ${q.reward} orrels.`);
+  // The first errand done: someone here has heard of a place very far away.
+  if (q.id === s.errand && !s.far) {
+    const f = farPlace(g.w, g.a, g.game.continent, g.a.places[s.home]);
+    if (f) { s.far = { pid: f.id, guess: farGuess(g.w, f, g.seed) }; log(g, `Word of ${f.name}, far to the ${bearing(g.w, g.a.places[pid].cell, f.cell)}.`); }
+  }
   g.ui.toast(`${q.reward} orrels. ${q.giver} is pleased.`);
   g.ui.jobsChanged();
   return q;
