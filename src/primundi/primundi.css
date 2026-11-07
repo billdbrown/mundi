@@ -269,6 +269,10 @@ body.gathering::after { content: 'The storm gathers…'; position: fixed; inset:
 }
 .primundi #card button:disabled:hover, .primundi #card button:disabled { border-color: var(--edge); }
 
+/* Who's at a part of a town. */
+#card .who { margin: -4px 0 10px; color: var(--quiet); font-size: 12.5px; }
+#card .who b { color: var(--ink); font-weight: 600; }
+#card .who span { font-style: italic; }
 /* A town's character, under its name. */
 #card .about { margin: -4px 0 10px; color: var(--quiet); font-size: 12.5px; font-style: italic; }
 /* Jobs: on the notice board, and in the journal. */

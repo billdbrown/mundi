@@ -71,6 +71,8 @@ export interface Save {
   over: boolean;
   /** First-time hints already shown (main.ts), by id. */
   hints?: string[];
+  /** Towns you've been to (by place id): how often, and how many of their jobs you've done. */
+  met?: Record<number, { visits: number; helped: number }>;
 }
 /** A save as loaded: fields added since it was written get their defaults. Null if unusable. */
 export function migrateSave(s: Save | null): Save | null {
@@ -295,6 +297,7 @@ export function enter(g: Game, cell: number) {
   if (hasWater(w, a, cell)) s.caravan.water = waterCap(s.caravan);
   if (pid >= 0) {
     const p = a.places[pid];
+    metAt(g, pid).visits++;
     remember(s.known, p, quotes(w, p, s.stocks, s.day, doyOf(s.day)), Math.floor(s.day));
     if (s.route.length) { g.ui.toast(`Through ${p.name}. You note the prices.`); log(g, `Passed through ${p.name}.`); }
   }
@@ -514,9 +517,17 @@ export function sell(g: Game, pid: number, gi: number, many: number): number {
   c.earned += -cost - paid;
   return -cost;
 }
+/** What a town remembers of you. */
+export function metAt(g: Game, pid: number) {
+  g.s.met ??= {};
+  return (g.s.met[pid] ??= { visits: 0, helped: 0 });
+}
+/** A town you've done a job for takes a little off food and beds. */
+export const FRIEND_DISCOUNT = 0.9;
+const friendly = (g: Game, pid: number) => (g.s.met?.[pid]?.helped ?? 0) > 0;
 export function rationCost(g: Game, pid: number, days: number) {
   const s = g.s;
-  return Math.ceil(rationPrice(g.w, g.a.places[pid], s.stocks, s.day, doyOf(s.day)) * appetite(s.caravan) * days);
+  return Math.ceil(rationPrice(g.w, g.a.places[pid], s.stocks, s.day, doyOf(s.day)) * appetite(s.caravan) * days * (friendly(g, pid) ? FRIEND_DISCOUNT : 1));
 }
 export function buyRations(g: Game, pid: number, days: number): boolean {
   const c = g.s.caravan, cost = rationCost(g, pid, days);
@@ -549,6 +560,7 @@ export function handIn(g: Game, pid: number, id: string): Quest | null {
   if (q.kind === 'relic' && c.cargo[G.relics] > 0) { c.basis[G.relics] = 0; c.cargo[G.relics]--; }
   c.orrels += q.reward; c.earned += q.reward;
   s.jobsDone++;
+  metAt(g, q.from).helped++;
   s.jobs = s.jobs.filter((x) => x !== q);
   log(g, `${questTitle(q, g.a)}: done, ${q.reward} orrels.`);
   g.ui.toast(`${q.reward} orrels. ${q.giver} is pleased.`);
@@ -582,7 +594,7 @@ export function buyMap(g: Game, pid: number): number {
   log(g, `Bought a map of the country round ${p.name}.`);
   return got;
 }
-export const restCost = (g: Game, pid: number, days: number) => (pid === g.s.home ? 0 : living(g.s.caravan).length * days);
+export const restCost = (g: Game, pid: number, days: number) => (pid === g.s.home ? 0 : Math.ceil(living(g.s.caravan).length * days * (friendly(g, pid) ? FRIEND_DISCOUNT : 1)));
 export function rest(g: Game, pid: number, days: number): boolean {
   const c = g.s.caravan, cost = restCost(g, pid, days);
   if (c.orrels < cost) return false;

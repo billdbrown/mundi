@@ -32,7 +32,7 @@ import { PROP_STRIDE } from './hextown.ts';
 import { familyOf, loadHouses, buildHouses, buildProps, houseMaterial, houseNight, HOUSE_MODES, type HouseMode, type HousePack, type Building } from './hexhouses.ts';
 import { snowGround, snowContext } from './hexsnow.ts';
 import { HexFog } from './primundi/hexfog.ts';
-import { Nav, Caravan, townSpots, townLandmark, noticeBoard, findModel, animalModel, campModel, LANDMARKS, type TownSpot } from './primundi/hexcaravan.ts';
+import { Nav, Caravan, townSpots, townLandmark, noticeBoard, findModel, animalModel, campModel, personModel, LANDMARKS, type TownSpot } from './primundi/hexcaravan.ts';
 import { FOLK_LABEL, ANIMAL_NAMES, type FolkKind, type AnimalKind } from './primundi/life.ts';
 import { tradeProps } from './primundi/hextrades.ts';
 import type { Trade } from './primundi/towns.ts';
@@ -1672,6 +1672,18 @@ function setupCaravan(m: LocalMap) {
     const landmark = lm >= 0 && houseMode !== 'plain' ? LANDMARKS[familyOf(houseMode, m.houses[lm + 9])][Math.min(2, m.houses[lm + 8] - 1)] : null;
     const t = townSpots(m.houses, m.props ?? new Float32Array(0), K, gameTown === 'home', landmark, (x, y) => groundAtMap(m, x, y), (x, y) => n.ok(x, y));
     spots = t.spots;
+    // Someone at each door: the town's people (the game names them, towns.ts).
+    const cloaks: Record<string, number> = { market: 0x7a5a2a, supplies: 0x4a5a3a, work: 0x3a4a6a, tavern: 0x6a2a3a, rest: 0x5a3a5a };
+    for (const s of spots) {
+      if (!s.tab) continue;
+      const side = s.tab === 'work' ? 1.4 : 1.8;
+      const [dx, dy] = [s.door[0] - s.centre[0], s.door[1] - s.centre[1]], l = Math.hypot(dx, dy) || 1;
+      const x = s.door[0] - dy / l * side * K, y = s.door[1] + dx / l * side * K;
+      const f = personModel(K, cloaks[s.tab] ?? 0x5a4a3a, s.tab !== 'tavern');
+      f.position.set(x, groundAtMap(m, x, y), -y);
+      f.rotation.y = Math.atan2(dx, -dy) + Math.PI;
+      caravan.group.add(f);
+    }
     if (t.board) {
       const [bx, by, br] = t.board, b = noticeBoard(K);
       b.position.set(bx, groundAtMap(m, bx, by) - 0.05, -by);

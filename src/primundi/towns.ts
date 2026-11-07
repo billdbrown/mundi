@@ -87,3 +87,23 @@ export function townLine(w: World, a: Atlas, p: Place): string {
   const origin = p.parent ? ` Settled from ${p.parent} in year ${p.founded}.` : p.founded <= 200 ? ' One of the first places people settled.' : ` Founded in year ${p.founded}.`;
   return `${kind[0].toUpperCase() + kind.slice(1)} ${where}${also}.${origin}`;
 }
+
+// --- Townspeople ----------------------------------------------------------------------------------
+/** Who's at each part of a town: a name, what they do, a line of who they are. Seeded per place, so
+ * the same people every visit. */
+export interface Townsfolk { name: string; does: string; line: string }
+const ROLE: Record<string, string> = { market: 'runs the market', supplies: 'keeps the stores', work: 'minds the notice board', tavern: 'pours at the tavern', rest: 'keeps the inn' };
+const LINES: Record<string, string[]> = {
+  market: ['Counts every coin twice, and smiles at none of them.', 'Knows what everything fetched last spring, and tells you.', 'Shouts the prices over everyone else\'s.'],
+  supplies: ['Weighs the meal with a thumb nowhere near the scale.', 'Has a sack of everything and an opinion on all of it.', 'Asks where you\'re headed, and packs for it.'],
+  work: ['Pins up the notices and remembers who took which.', 'Reads every notice aloud for those who can\'t.', 'Knows which jobs pay and which only promise to.'],
+  tavern: ['Hears everything and repeats the half that\'s true.', 'Keeps a cask back for travellers with stories.', 'Has a cousin in every town on the road.'],
+  rest: ['Gives you the room over the stable and calls it the best.', 'Remembers every caravan that ever stayed, by its beasts.', 'Feeds you first and asks for the money after.'],
+};
+export function townsfolk(p: Place, seed: number, name: () => string): Record<string, Townsfolk> {
+  const rng = (k: number) => (((p.id * 2654435761 + seed * 40503 + k * 97) >>> 0) % 1000) / 1000;
+  const out: Record<string, Townsfolk> = {};
+  let k = 0;
+  for (const tab of Object.keys(ROLE)) { const ls = LINES[tab]; out[tab] = { name: name(), does: ROLE[tab], line: ls[Math.floor(rng(k++) * ls.length)] }; }
+  return out;
+}

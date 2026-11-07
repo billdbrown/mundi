@@ -667,3 +667,15 @@ function glowTexture(): THREE.Texture {
   glowTex = new THREE.CanvasTexture(c);
   return glowTex;
 }
+
+/** Someone standing about: a cloaked figure, a head, a hat or a hood. */
+export function personModel(K: number, cloak: number, hat = true): THREE.Group {
+  const g = new THREE.Group();
+  const m = (c: number) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.85, flatShading: true });
+  g.add(new THREE.Mesh(new THREE.ConeGeometry(0.38, 1.3, 7).translate(0, 0.65, 0), m(cloak)));
+  g.add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.18, 1).translate(0, 1.45, 0), m(0xd9b48c)));
+  if (hat) g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.26, 0.18, 8).translate(0, 1.62, 0), m(0x3a2c20)));
+  for (const o of g.children) o.castShadow = true;
+  g.scale.setScalar(K);
+  return g;
+}

@@ -29,15 +29,15 @@ import { flicker } from './hexfog.ts';
 import { Thunder } from './thunder.ts';
 import { BIASES, type StartBias } from './start.ts';
 import { buildAtlas, GOODS, ringCells, type Atlas, type Place } from './atlas.ts';
-import { bestKnownSell, quotes, rationPrice, remember } from './market.ts';
+import { bestKnownSell, quotes, remember } from './market.ts';
 import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
 import { FOLK_LABEL, type FolkKind } from './life.ts';
-import { applyTradeWants, townLine, tradesOf } from './towns.ts';
+import { applyTradeWants, townLine, townsfolk, tradesOf } from './towns.ts';
 import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
 import {
   START_DOY, RATES, doyOf, worldParams, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
-  jobsOffered, shortHere, chartRate, localOffer, takeLocal, folkHere, meetFolk, passFolk, gameHere, huntHere, makeCamp, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
+  jobsOffered, shortHere, chartRate, localOffer, takeLocal, rationCost, restCost, folkHere, meetFolk, passFolk, gameHere, huntHere, makeCamp, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
   reveal as simReveal, advance as simAdvance, plan as simPlan,
   buy as simBuy, sell as simSell, rest as simRest,
   type Game, type Pending, type Save, type Ui,
@@ -862,12 +862,12 @@ function openTown(pid: number, tab = townTab) {
       ${(() => { const o = localOffer(g!, p.id); return o ? `<h3>This town's own</h3><div class="opts">${opt('local', esc(o.label), esc(o.note), `${ORREL}${o.cost}`, '', c.orrels < o.cost)}</div>` : ''; })()}
       <p class="dim small">Prices move as you trade and settle back over a fortnight. Shift-click trades five.</p>`;
   } else if (tab === 'supplies') {
-    const rp = rationPrice(w, p, s.stocks, day, doy), eat = appetite(c);
+    const eat = appetite(c);
     const rd = c.rations / Math.max(1, eat);
     const chart = Math.round(c.unsoldCharts * chartRate(g!, p));
     body = `${purse}<h3>Provisions</h3>
       <p>Food for <b>${Math.floor(rd)} days</b>. The skins are filled at the well, free: ${Math.floor(waterCap(c) / Math.max(1, thirst(c)))} days of water.</p>
-      <div class="opts">${[5, 10, 20].map((d) => { const cost = Math.ceil(rp * eat * d); return opt('rations', `${d} days of food`, `for ${living(c).length} people`, `${ORREL}${cost}`, `data-n="${d}"`, c.orrels < cost); }).join('')}</div>
+      <div class="opts">${[5, 10, 20].map((d) => { const cost = rationCost(g!, p.id, d); return opt('rations', `${d} days of food`, `for ${living(c).length} people`, `${ORREL}${cost}`, `data-n="${d}"`, c.orrels < cost); }).join('')}</div>
       <h3>Charts</h3>
       ${c.unsoldCharts ? `<p>You have mapped ${fmt(c.unsoldCharts)} hexes nobody here has seen drawn.</p><div class="opts">${opt('charts', 'Sell your charts', `${p.town ? 'A town pays well' : 'A village pays half'}`, `${ORREL}${fmt(chart)}`)}</div>`
         : '<p class="dim">Nothing new to sell. Every hex you uncover on the road is worth something here.</p>'}`;
@@ -891,11 +891,11 @@ function openTown(pid: number, tab = townTab) {
       <h3>${esc(p.name)} remembers</h3>
       ${p.story.length ? `<ul class="log">${p.story.slice(-4).reverse().map((x) => { const i = x.indexOf(': '); return `<li><span>Year ${x.slice(0, i)}</span>${esc(x.slice(i + 2))}</li>`; }).join('')}</ul>` : '<p class="dim">Nothing anyone tells twice.</p>'}`;
   } else {
-    const cost = home ? 0 : living(c).length;
+    const cost = restCost(g!, p.id, 1), cost3 = restCost(g!, p.id, 3);
     const hires: [Role, number, string][] = [['hand', 30, 'Carries, cooks, keeps watch'], ['guard', 55, 'Fights when it comes to it'], ...(p.town ? [['scout', 70, 'Sees a hex further'] as [Role, number, string]] : [])];
     body = `${purse}${hexOpen ? '' : `<h3>${home ? 'Home' : 'The inn'}</h3>`}
       <p>${home ? 'Your own people put you up. Resting here costs nothing.' : `A yard for the beasts and a roof for the people, ${cost} orrels a night.`} Rest mends the hurt and lifts spirits.</p>
-      <div class="opts">${opt('rest', 'Rest a day', '', home ? 'free' : `${ORREL}${cost}`, 'data-n="1"', c.orrels < cost)}${opt('rest', 'Rest three days', '', home ? 'free' : `${ORREL}${cost * 3}`, 'data-n="3"', c.orrels < cost * 3)}</div>
+      <div class="opts">${opt('rest', 'Rest a day', '', home ? 'free' : `${ORREL}${cost}`, 'data-n="1"', c.orrels < cost)}${opt('rest', 'Rest three days', '', home ? 'free' : `${ORREL}${cost3}`, 'data-n="3"', c.orrels < cost3)}</div>
       <h3>Hire</h3>
       ${living(c).length >= 9 ? '<p class="dim">The caravan is as big as it can feed.</p>' : `<div class="opts">${hires.map(([r, o, note]) => opt('hire', `A ${ROLE_NAMES[r].toLowerCase()}`, note, `${ORREL}${o}`, `data-role="${r}" data-n="${o}"`, c.orrels < o)).join('')}</div>`}
       <h3>Beasts</h3>
@@ -907,6 +907,7 @@ function openTown(pid: number, tab = townTab) {
     const where = BUILDING[tab] ?? tab;
     showPanel('town', `${close}${head(`${esc(p.name)}${home ? ' · your home' : ''}`, tab === 'rest' && home ? 'Home' : where)}
       ${tab === 'tavern' ? `<p class="about">${townCharacter(p)}</p>` : ''}
+      ${tab === 'rest' && home ? '' : whoIsThere(p, tab)}
       <div class="tab-body">${body}</div>`);
   } else showPanel('town', `${close}${head(`${p.town ? 'Town' : 'Village'}${p.realm ? ` · ${esc(p.realm)}` : ''}`, esc(p.name), `${fmt(p.pop)} people${home ? ' · <b>your home</b>' : ''}`)}
     <p class="about">${townCharacter(p)}</p>
@@ -917,6 +918,17 @@ function openTown(pid: number, tab = townTab) {
 }
 
 
+/** Who's there, at a part of a town: their name and line, and whether they know you. */
+function whoIsThere(p: Place, tab: string): string {
+  if (!save) return '';
+  const f = townsfolk(p, params.seed, nameMaker(params.seed * 101 + p.id * 7))[tab];
+  if (!f) return '';
+  const m = save.met?.[p.id];
+  const greet = m && m.helped > 0 ? `"${esc(save.caravan.name)}! Always welcome here." A little comes off the price for friends.`
+    : m && m.visits > 1 ? '"Back again," they say. "Safe roads?"'
+    : esc(f.line);
+  return `<p class="who"><b>${esc(f.name)}</b> ${f.does}. <span>${greet}</span></p>`;
+}
 /** A line of who a place is: where it sits, what it's known for, where it came from. */
 function townCharacter(p: Place): string {
   return world && atlas ? esc(townLine(world, atlas, p)) : '';
@@ -1065,7 +1077,13 @@ panel.addEventListener('click', (e) => {
       break;
     }
     case 'jtab': showJournal(b.dataset.tab); break;
-    case 'round': { const r = standRound(g!); if (r) { toast(r, 6000); openTown(pid, 'tavern'); store(); } break; }
+    case 'round': {
+      const r = standRound(g!);
+      // The rumour, from whoever pours.
+      const who = townsfolk(atlas.places[pid], params.seed, nameMaker(params.seed * 101 + pid * 7)).tavern?.name;
+      if (r) { toast(who && r !== 'Nothing you can use.' ? `${who} leans in: ${r}` : r, 7000); openTown(pid, 'tavern'); store(); }
+      break;
+    }
     case 'localmap': {
       const got = buyMap(g!, pid);
       if (got < 0) break;

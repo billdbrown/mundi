@@ -377,3 +377,19 @@ test("a town's own offer: once a month, and it does what it says", () => {
   s.day += 31;
   assert.ok(atlas.places.slice(0, 40).some((p) => localOffer(g, p.id)), 'back next month');
 });
+
+import { townsfolk } from '../src/primundi/towns.ts';
+import { metAt, rationCost, restCost } from '../src/primundi/sim.ts';
+import { nameMaker as nameMaker2 } from '../src/gamedata.ts';
+test('townspeople: the same names every visit, and a town you have helped is kinder on prices', () => {
+  const p = atlas.places[3];
+  const a = townsfolk(p, 5, nameMaker2(5 * 101 + p.id * 7)), b = townsfolk(p, 5, nameMaker2(5 * 101 + p.id * 7));
+  assert.deepEqual(a, b);
+  assert.equal(Object.keys(a).length, 5);
+  const s = simNewGame(hw, atlas, 5, { name: 'T', origin: 'traders', bias: 'gentle', world: 't' });
+  const g = makeGame(hw, atlas, hgd, 5, s, quietUi(), makeRng(1));
+  const pid = atlas.places.findIndex((x) => x.id !== s.home);
+  const r0 = rationCost(g, pid, 20), b0 = restCost(g, pid, 3);
+  metAt(g, pid).helped = 1;
+  assert.ok(rationCost(g, pid, 20) < r0 && restCost(g, pid, 3) < b0, `${r0}->${rationCost(g, pid, 20)}, ${b0}->${restCost(g, pid, 3)}`);
+});
