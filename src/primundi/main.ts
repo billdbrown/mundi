@@ -227,8 +227,7 @@ function maybeStart() {
   loader = null;
   void l.finish();
   labels.rebuild();
-  // Home, or wherever you were: down into the hex. In a town its buildings are the menus (and the
-  // bar's Town button opens the whole card).
+  // Home, or wherever you were: down into the hex. In a town its buildings are the menus.
   openHex(s.cell);
   if (s.log.length === 1) toast(s.log[0].text, 8000);
 }
@@ -285,6 +284,14 @@ function reveal(cells: number[], byTravel = false) {
   labels.rebuild();
   marks.roads();
   if (hexOpen) hexSend({ type: 'primundi-seen', cells: fresh });
+  // Word of somewhere far off (a rumour, a map): the camera can't pan across the fog to it, so it
+  // swings there to show you (once you're back on the map, if you're down in a hex).
+  if (!byTravel && world) {
+    const P = world.grid.centers, v = new THREE.Vector3();
+    for (const c of fresh) v.x += P[c * 3], v.y += P[c * 3 + 1], v.z += P[c * 3 + 2];
+    v.normalize();
+    if (v.angleTo(marks.dirOfCaravan()) > cellAngle() * 4) { if (hexOpen) lookLater = v; else follow = v; }
+  }
   return fresh.length;
 }
 /** Fogged cells touching what is revealed. */
@@ -319,36 +326,54 @@ function rumour(): string {
 }
 
 // --- The camera's leash -----------------------------------------------------------------------
-/** The planet camera stays over what's revealed: no further out than it takes to see all of it,
- * and no further sideways than its edge. Both ease when the area grows. */
+/** The planet camera stays over what's revealed. How far out it may go is set by how much you've
+ * seen (its area, as a disc), not how spread out it is: a rumour or a bought map far off doesn't
+ * open up the whole globe. Sideways, the middle of the view stays near some hex you've seen, so
+ * the fog between two patches is no road for the camera. Both ease when the area grows. */
 const bounds = {
   centre: new THREE.Vector3(0, 0, 1),
-  angle: 0.1,
+  /** How far the middle of the view may stray from the nearest revealed hex (radians). */
+  reach: 0.05,
   maxD: 1.3,
-  goalAngle: 0.1,
   goalD: 1.3,
+  /** The revealed hexes' centres, unit vectors, for the nearest-hex test each frame. */
+  dirs: new Float32Array(0),
   update(snap: boolean) {
     if (!world || !revealed.size) return;
     const P = world.grid.centers, sum = new THREE.Vector3();
-    for (const c of revealed) sum.x += P[c * 3], sum.y += P[c * 3 + 1], sum.z += P[c * 3 + 2];
+    this.dirs = new Float32Array(revealed.size * 3);
+    let i = 0;
+    for (const c of revealed) {
+      sum.x += P[c * 3], sum.y += P[c * 3 + 1], sum.z += P[c * 3 + 2];
+      this.dirs[i++] = P[c * 3]; this.dirs[i++] = P[c * 3 + 1]; this.dirs[i++] = P[c * 3 + 2];
+    }
     this.centre.copy(sum.normalize());
-    let a = 0;
-    for (const c of revealed) a = Math.max(a, Math.acos(Math.min(1, P[c * 3] * sum.x + P[c * 3 + 1] * sum.y + P[c * 3 + 2] * sum.z)));
     const cellA = cellAngle();
-    this.goalAngle = a + cellA * 0.5;
+    // The revealed area as a disc: its radius.
+    const r = cellA * Math.sqrt(revealed.size / Math.PI);
+    this.reach = cellA * 1.5;
     // Field of view 40°: a height h sees about 0.36 h either side of the middle; the tilt shows more.
-    this.goalD = 1 + Math.min(2.2, Math.max(0.07, (a + cellA * 1.2) * 2.6));
-    if (snap) { this.angle = this.goalAngle; this.maxD = this.goalD; }
+    this.goalD = 1 + Math.min(2.2, Math.max(0.07, (r + cellA * 1.2) * 2.6));
+    if (snap) this.maxD = this.goalD;
+  },
+  /** The revealed hex nearest a direction (unit vector `v`), into `out`; the angle to it. */
+  nearest(v: THREE.Vector3, out: THREE.Vector3): number {
+    const D = this.dirs;
+    let best = -2, bi = 0;
+    for (let i = 0; i < D.length; i += 3) { const d = D[i] * v.x + D[i + 1] * v.y + D[i + 2] * v.z; if (d > best) { best = d; bi = i; } }
+    out.set(D[bi], D[bi + 1], D[bi + 2]);
+    return Math.acos(Math.min(1, best));
   },
   step(dt: number) {
     const k = 1 - Math.exp(-dt * 1.5);
-    this.angle += (this.goalAngle - this.angle) * k;
     this.maxD += (this.goalD - this.maxD) * k;
     view.controls.maxDistance = this.maxD;
   },
 };
-const tmp = new THREE.Vector3(), axis = new THREE.Vector3();
+const tmp = new THREE.Vector3(), axis = new THREE.Vector3(), near = new THREE.Vector3();
 let follow: THREE.Vector3 | null = null;
+/** Somewhere to swing to once the hex view closes (word of a far place, heard in a town). */
+let lookLater: THREE.Vector3 | null = null;
 view.constrain = (pos) => {
   if (!world) return;
   const d = pos.length();
@@ -359,11 +384,17 @@ view.constrain = (pos) => {
     tmp.lerp(follow, 0.12).normalize();
     if (tmp.angleTo(follow) < 0.002) follow = null;
   }
-  const a = tmp.angleTo(bounds.centre);
-  if (a > bounds.angle) {
-    axis.crossVectors(bounds.centre, tmp);
-    if (axis.lengthSq() < 1e-12) axis.set(0, 1, 0);
-    tmp.copy(bounds.centre).applyAxisAngle(axis.normalize(), bounds.angle);
+  // (Not while swinging to something: the way there may cross fog.)
+  if (bounds.dirs.length && !follow) {
+    const a = bounds.nearest(tmp, near);
+    if (a > bounds.reach) {
+      axis.crossVectors(near, tmp);
+      if (axis.lengthSq() < 1e-12) axis.set(0, 1, 0);
+      const edge = near.clone().applyAxisAngle(axis.normalize(), bounds.reach);
+      // A drag past the edge stops at it; stranded out over the fog (a swing let go), ease back.
+      if (a - bounds.reach < cellAngle() * 0.5) tmp.copy(edge);
+      else tmp.lerp(edge, 0.12).normalize();
+    }
   }
   pos.copy(tmp).multiplyScalar(nd);
 };
@@ -375,6 +406,8 @@ const marks = {
   routeLine: null as Line2 | null,
   roadMat: new LineMaterial({ color: 0xe0c48c, linewidth: 2.2, dashed: true, dashSize: 0.0042, gapSize: 0.0022, transparent: true, opacity: 0.9, depthTest: false }),
   roadUnder: new LineMaterial({ color: 0x1a140c, linewidth: 4.4, transparent: true, opacity: 0.35, depthTest: false }),
+  /** A road's next leg on into the fog. */
+  roadFaint: new LineMaterial({ color: 0x8a6a3c, linewidth: 2, dashed: true, dashSize: 0.0042, gapSize: 0.0022, transparent: true, opacity: 0.6, depthTest: false }),
   routeMat: new LineMaterial({ color: 0xf2c14e, linewidth: 3, dashed: true, dashSize: 0.005, gapSize: 0.003, transparent: true, opacity: 1, depthTest: false }),
   /** A smooth line through cells (Catmull-Rom through their inland points). */
   smooth(cells: number[], lift: number): number[] {
@@ -396,7 +429,7 @@ const marks = {
   },
   resize() {
     const r = view.renderer.domElement;
-    for (const m of [this.roadMat, this.roadUnder, this.routeMat]) m.resolution.set(r.clientWidth, r.clientHeight);
+    for (const m of [this.roadMat, this.roadUnder, this.roadFaint, this.routeMat]) m.resolution.set(r.clientWidth, r.clientHeight);
   },
   anchor: new THREE.Object3D(),
   build() {
@@ -434,14 +467,21 @@ const marks = {
     this.roadLines = [];
     this.resize();
     // Each road town to town, as smooth runs over what you've seen: a dashed track on a soft shadow.
+    // Where it goes into the fog it carries on one hex, then fades over the next, so you can see
+    // which way it leads.
     for (const path of atlas.roadPaths) {
-      let run: number[] = [];
-      const flush = () => {
-        if (run.length > 1) { const pos = this.smooth(run, 0.0012); this.roadLines.push(this.line(pos, this.roadUnder, 7), this.line(pos, this.roadMat, 8)); }
-        run = [];
-      };
-      for (const c of path) { if (revealed.has(c)) run.push(c); else flush(); }
-      flush();
+      const n = path.length;
+      for (let i = 0; i < n; i++) {
+        if (!revealed.has(path[i])) continue;
+        let j = i;
+        while (j + 1 < n && revealed.has(path[j + 1])) j++;
+        const a = Math.max(0, i - 1), b = Math.min(n - 1, j + 1);
+        if (b > a) { const pos = this.smooth(path.slice(a, b + 1), 0.0012); this.roadLines.push(this.line(pos, this.roadUnder, 7), this.line(pos, this.roadMat, 8)); }
+        // (Faintly over the fog itself, from the last hex you've seen on through the next two.)
+        if (i >= 1) this.roadLines.push(this.line(this.smooth(path.slice(Math.max(0, i - 2), i + 1), 0.0012), this.roadFaint, 21));
+        if (j + 1 < n) this.roadLines.push(this.line(this.smooth(path.slice(j, j + 3), 0.0012), this.roadFaint, 21));
+        i = j;
+      }
     }
   },
   route() {
@@ -548,8 +588,7 @@ function enter(cell: number) {
     follow = marks.dirOfCaravan();
     // A job's hex is usually where the route ends.
     if (questsAt(cell)) { syncBar(); return; }
-    // A town: into its hex, walking in to the square; its buildings are the menus (and the bar's
-    // Town button, for the whole card at once).
+    // A town: into its hex, walking in to the square; its buildings are the menus.
     if (pid >= 0) { openHex(cell); toast(`${a.places[pid].name}. Tap the market, the inn or the notice board to go there.`, 6000); }
     // Out in the country with something here to find: into the hex, to look for it.
     else if (findsIn(w, a, cell, params.seed).some((k) => findReady(k, s.finds[`${cell}:${k}`], s.day))) { openHex(cell); toast('Arrived. There is something to find here: walk the hex.', 5000); }
@@ -798,6 +837,7 @@ function closeHex() {
   // stand-in without the fog, which would show what the fog hides. Cover it meanwhile.
   document.body.classList.add('gathering');
   void view.whenGateReady().then(() => document.body.classList.remove('gathering'));
+  if (lookLater) { follow = lookLater; lookLater = null; }
   syncBar();
 }
 addEventListener('message', (e) => {
@@ -953,6 +993,8 @@ const agoText = (d: number) => (d < 1 ? 'today' : d < 2 ? 'yesterday' : `${Math.
 
 // The town: market, supplies, work, rest. Bannerlord's menu, over the town's own hex.
 let townTab = 'market';
+/** What each part of a town is, walking it. */
+const BUILDING: Record<string, string> = { market: 'The market', supplies: 'The stores', work: 'The notice board', tavern: 'The tavern', rest: 'The inn' };
 function openTown(pid: number, tab = townTab) {
   if (!world || !atlas || !save) return;
   townTab = tab;
@@ -998,7 +1040,7 @@ function openTown(pid: number, tab = townTab) {
     const dir = (cell: number) => bearing(w, p.cell, cell);
     body = `${handIn.length ? `<h3>To hand in</h3>${handIn.map((q) => `<div class="job-card due"><b>${esc(questTitle(q, a))}</b><small>for ${esc(q.giver)}</small>
         <button class="go" data-act="handin" data-q="${q.id}">Hand it in<span>${q.reward} orrels</span></button></div>`).join('')}` : ''}
-      <h3>The notice board</h3>
+      ${hexOpen ? '' : '<h3>The notice board</h3>'}
       ${offers.length ? offers.map((q) => `<div class="job-card"><blockquote>${esc(questPitch(q, a, dir))}<cite>${esc(q.giver)}</cite></blockquote>
         <div class="job-foot"><span>${q.reward} orrels${q.kind === 'deliver' ? ' on delivery' : ''}</span>
         <button class="go" data-act="take" data-q="${q.id}" ${s.jobs.length >= MAX_QUESTS ? 'disabled' : ''}>Take it</button></div></div>`).join('')
@@ -1014,7 +1056,7 @@ function openTown(pid: number, tab = townTab) {
   } else {
     const cost = home ? 0 : living(c).length;
     const hires: [Role, number, string][] = [['hand', 30, 'Carries, cooks, keeps watch'], ['guard', 55, 'Fights when it comes to it'], ...(p.town ? [['scout', 70, 'Sees a hex further'] as [Role, number, string]] : [])];
-    body = `${purse}<h3>${home ? 'Home' : 'The inn'}</h3>
+    body = `${purse}${hexOpen ? '' : `<h3>${home ? 'Home' : 'The inn'}</h3>`}
       <p>${home ? 'Your own people put you up. Resting here costs nothing.' : `A yard for the beasts and a roof for the people, ${cost} orrels a night.`} Rest mends the hurt and lifts spirits.</p>
       <div class="opts">${opt('rest', 'Rest a day', '', home ? 'free' : `${ORREL}${cost}`, 'data-n="1"', c.orrels < cost)}${opt('rest', 'Rest three days', '', home ? 'free' : `${ORREL}${cost * 3}`, 'data-n="3"', c.orrels < cost * 3)}</div>
       <h3>Hire</h3>
@@ -1022,7 +1064,14 @@ function openTown(pid: number, tab = townTab) {
       <h3>Beasts</h3>
       <div class="opts">${opt('beast', 'A pack beast', 'Carries four more loads', `${ORREL}45`, '', c.orrels < 45)}</div>`;
   }
-  showPanel('town', `${close}${head(`${p.town ? 'Town' : 'Village'}${p.realm ? ` · ${esc(p.realm)}` : ''}`, esc(p.name), `${fmt(p.pop)} people${home ? ' · <b>your home</b>' : ''}`)}
+  // Walking the town's hex, each building is its own card: you go to the market for the market.
+  // (The whole card with its tabs is still here for when there's no hex view open.)
+  if (hexOpen) {
+    const where = BUILDING[tab] ?? tab;
+    showPanel('town', `${close}${head(`${esc(p.name)}${home ? ' · your home' : ''}`, tab === 'rest' && home ? 'Home' : where)}
+      ${tab === 'tavern' ? `<p class="about">${townCharacter(p)}</p>` : ''}
+      <div class="tab-body">${body}</div>`);
+  } else showPanel('town', `${close}${head(`${p.town ? 'Town' : 'Village'}${p.realm ? ` · ${esc(p.realm)}` : ''}`, esc(p.name), `${fmt(p.pop)} people${home ? ' · <b>your home</b>' : ''}`)}
     <p class="about">${townCharacter(p)}</p>
     <nav class="tabs">${tabs.map(([k, l]) => `<button data-act="tab" data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</nav>
     <div class="tab-body">${body}</div>`);
@@ -1193,7 +1242,8 @@ panel.addEventListener('click', (e) => {
     case 'close': closePanel(); break;
     case 'travel': travelTo(Number(b.dataset.cell)); break;
     case 'look': closePanel(); openHex(s.cell); break;
-    case 'town': if (atlas.placeAt[s.cell] >= 0) openTown(atlas.placeAt[s.cell], 'market'); break;
+    // Into the town's hex, to walk to what you want there.
+    case 'town': if (atlas.placeAt[s.cell] >= 0) { closePanel(); openHex(s.cell); } break;
     case 'tab': openTown(pid, b.dataset.tab); break;
     case 'buy': case 'sell': {
       const g = Number(b.dataset.g), p = atlas.places[pid];
@@ -1363,8 +1413,8 @@ function syncBar() {
   $('civname').textContent = save?.caravan.name ?? '';
   for (let i = 0; i < 4; i++) $(`b-s${i}`).classList.toggle('on', (paused() ? 0 : speed) === i);
   $('bar').classList.toggle('held', modal || hexOpen);
-  const pid = save && atlas ? atlas.placeAt[save.cell] : -1;
-  $('b-town').hidden = !(pid >= 0 && !(save!.route.length && save!.progress > 0));
+  // The Town button (the whole card at once) is off for now: you walk to each building in the hex.
+  $('b-town').hidden = true;
   $('b-stop').hidden = !save?.route.length;
   document.body.classList.toggle('in-hex', hexOpen);
 }
@@ -1399,7 +1449,7 @@ function toast(text: string, ms = 3500) {
 
 // --- Debug handle -----------------------------------------------------------------------------
 (window as unknown as Record<string, unknown>).primundi = {
-  view, thunder,
+  view, thunder, bounds,
   get world() { return world; },
   get atlas() { return atlas; },
   get save() { return save; },

@@ -279,18 +279,35 @@ export function townSpots(H: Float32Array, P: Float32Array, K: number, home: boo
   }
   if (landmark !== 'inn') roles.push(['rest', home ? 'Home' : 'Inn']);
   roles.push(['tavern', 'Tavern'], ['supplies', 'Stores']);
-  // Houses round the square, nearest first (the bigger ones a little ahead).
-  const near: { o: number; d: number }[] = [];
+  // The rest are houses spread through the town, not huddled on the square, so there's a walk
+  // between them: each in turn the one furthest from the square and those already picked, within
+  // the town's built-up part, the bigger houses a little ahead.
+  const cands: { o: number; d: number }[] = [];
   for (let o = 0; o < H.length; o += HOUSE_STRIDE) {
     if (H[o + 8] > 0) continue;
-    const d = Math.hypot(H[o] - sx, H[o + 1] - sy);
-    if (d < 120) near.push({ o, d: d - H[o + 4] * H[o + 5] * 0.15 });
+    cands.push({ o, d: Math.hypot(H[o] - sx, H[o + 1] - sy) });
   }
-  near.sort((p, q) => p.d - q.d);
-  near.slice(0, roles.length).forEach(({ o }, n) => {
+  const ds = cands.map((c) => c.d).sort((p, q) => p - q);
+  const R = Math.min(160, ds[Math.floor(ds.length * 0.8)] ?? 60);
+  const pool = cands.filter((c) => c.d < R * 0.9 && c.d > lw * 0.5 + 4);
+  const chosen: [number, number][] = [[sx, sy], [board[0], board[1]], ...spots.map((s) => s.centre)];
+  for (const [tab, label] of roles) {
+    let best = -1, bs = -Infinity;
+    pool.forEach((c, i) => {
+      if (c.o < 0) return;
+      const x = H[c.o], y = H[c.o + 1];
+      let m = Infinity;
+      for (const [px, py] of chosen) m = Math.min(m, Math.hypot(x - px, y - py));
+      const score = Math.min(m, R * 0.7) + Math.sqrt(H[c.o + 4] * H[c.o + 5]) * 0.6 - c.d * 0.15;
+      if (score > bs) { bs = score; best = i; }
+    });
+    if (best < 0) break;
+    const o = pool[best].o;
+    pool[best].o = -1;
+    chosen.push([H[o], H[o + 1]]);
     const s = Math.max(H[o + 4], H[o + 5]) * K;
-    spots.push({ tab: roles[n][0], label: roles[n][1], door: front(o, H[o + 5] * K / 2 + 2.5), top: [H[o], H[o + 1], H[o + 2] + s * 0.95], centre: [H[o], H[o + 1]], radius: s * 0.55 });
-  });
+    spots.push({ tab, label, door: front(o, H[o + 5] * K / 2 + 2.5), top: [H[o], H[o + 1], H[o + 2] + s * 0.95], centre: [H[o], H[o + 1]], radius: s * 0.55 });
+  }
   return { spots, board };
 }
 

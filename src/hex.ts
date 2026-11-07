@@ -2082,7 +2082,7 @@ void LAYERS; void L_DEPTH;
   get style() { return style.id; },
   get caravan() { return caravan; },
   get spots() { return spots; },
-  tap, goTo, onScreen, camera, get worldGroup() { return world; },
+  tap, goTo, goSpot, onScreen, camera, get worldGroup() { return world; },
   resetView, scene, setTilt, setTime, setAround, walker, wind, clouds, csm, waterUniforms, groundTex, canopy, shoreUniforms,
   /** The camera: position, the point looked at, distance (scripts/camtest.mjs). */
   camPose: () => ({ p: camera.position.toArray().map((v) => +v.toFixed(1)), t: controls.target.toArray().map((v) => +v.toFixed(1)), d: +camera.position.distanceTo(controls.target).toFixed(1), max: +controls.maxDistance.toFixed(0) }),

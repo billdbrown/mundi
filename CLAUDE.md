@@ -64,7 +64,12 @@ parameters (hex.ts; also `town=` and `from=`). In a game's hex, `hexcaravan.ts` 
 the ground: tap the ground to walk there (A* on a 2 m grid round houses, fences, water and cliffs,
 preferring streets), tap a town building or its label to walk to its door, and the hex posts
 `primundi-spot` with the town card's tab to open. A town's landmark is what its model is (a market,
-an inn), a notice board stands on the square, the nearest houses are the inn, tavern and stores.
+an inn), a notice board stands on the square, and the inn, tavern and stores are houses spread
+through the town (each the furthest from those already picked). With the hex view open, each opens
+as its own card with no tabs, and the bar's Town button is hidden: you walk to each one.
+The planet camera's leash (`bounds` in main.ts) caps height by the revealed *area* and keeps the
+view within 1.5 hexes of some revealed hex; a far reveal swings the camera there instead.
+Roads draw on faintly over the fog for two hexes past what you've seen.
 `finds.ts` is what there is to find in a hex (lookout, spring, forage, ruin, camp: seeded per cell,
 cards in the encounter shape, `save.finds` remembers what's used); the hex view places them
 (`placeFinds`), hides all but lookouts until the caravan is near, and posts `primundi-find`.
