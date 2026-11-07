@@ -8,7 +8,9 @@
  * gives a Ui that does nothing, or makes its choices.
  */
 import * as THREE from 'three';
-import type { World } from '../world.ts';
+import { DEFAULT_PARAMS, type World, type WorldParams } from '../world.ts';
+import { NAME_DECIDES, paramsOf } from '../namedworld.ts';
+import { nameSeed, parseSeed } from '../seedname.ts';
 import { nameMaker, type GameData, RES_FERTILE, RES_FISH, RES_TIMBER } from '../gamedata.ts';
 import { makeRng } from '../rng.ts';
 import { pickHome, type StartBias } from './start.ts';
@@ -19,6 +21,14 @@ import { findReady, findsIn, FINDS, type FindKind } from './finds.ts';
 import { applyEffect, contextAt, drawEncounter, type Choice, type Ctx, type Encounter, type Outcome } from './encounters.ts';
 import { MAX_QUESTS, canHandIn, offersAt, questTarget, questTitle, type Quest } from './quests.ts';
 
+/** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
+export const RATES = [0, 0.22, 0.6, 1.6];
+/** A world's settings from its name, as the launch screen takes it. */
+export function worldParams(name: string): WorldParams {
+  const p = parseSeed(name);
+  const seed = p ? p.seed : nameSeed(name);
+  return p?.name && NAME_DECIDES ? { ...paramsOf(p.name), seed } : { ...DEFAULT_PARAMS, seed };
+}
 /** The calendar day of the year the game starts on (northern spring). */
 export const START_DOY = 100;
 /** Chance of an encounter on entering a hex off the road (on it, a bit less). */

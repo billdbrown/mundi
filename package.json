@@ -8,6 +8,7 @@
     "build": "tsc && tsc -p worker && vite build",
     "preview": "vite preview",
     "test": "node --test \"test/**/*.test.ts\"",
+    "playtest": "node scripts/playtest.ts",
     "visual": "node scripts/visual.mjs",
     "visual:update": "node scripts/visual.mjs --update"
   },

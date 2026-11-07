@@ -9,3 +9,4 @@ test/visual/report.html
 test/visual/baseline/
 .dev.vars
 .wrangler/
+test/playtest/

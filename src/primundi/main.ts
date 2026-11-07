@@ -15,8 +15,7 @@ import type { BuildRequest, BuildResult, BuildStage } from '../worker.ts';
 import type { HistoryRequest, HistoryResult } from '../historyWorker.ts';
 import type { History } from '../civ.ts';
 import { gameData, nameMaker, type GameData } from '../gamedata.ts';
-import { NAME_DECIDES, paramsOf } from '../namedworld.ts';
-import { nameSeed, parseSeed, randomName } from '../seedname.ts';
+import { randomName } from '../seedname.ts';
 import { SEA, surfaceQueries, type SurfaceQueries } from '../surface.ts';
 import { mountLoader, type Loader } from '../loader.ts';
 import { describeHex } from '../hexcard.ts';
@@ -35,7 +34,7 @@ import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, cargoUsed, leader
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
 import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
 import {
-  START_DOY, doyOf, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
+  START_DOY, RATES, doyOf, worldParams, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
   jobsOffered, chartRate, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
   reveal as simReveal, advance as simAdvance, plan as simPlan,
   buy as simBuy, sell as simSell, rest as simRest,
@@ -44,8 +43,6 @@ import {
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const RADIUS_KM = 640;
-/** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
-const RATES = [0, 0.22, 0.6, 1.6];
 
 const SAVE_KEY = 'primundi.save2';
 function loadSave(): Save | null {
@@ -57,11 +54,7 @@ let g: Game | null = null;
 let lastStore = 0;
 function store() { if (save) { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); lastStore = performance.now(); } }
 
-const paramsFor = (name: string): WorldParams => {
-  const p = parseSeed(name);
-  const seed = p ? p.seed : nameSeed(name);
-  return p?.name && NAME_DECIDES ? { ...paramsOf(p.name), seed } : { ...DEFAULT_PARAMS, seed };
-};
+const paramsFor = worldParams;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 const fmt = (n: number) => Math.round(n).toLocaleString();
 
