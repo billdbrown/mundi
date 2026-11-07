@@ -12,7 +12,9 @@ import { WATER_LAND } from '../world.ts';
 import { nameMaker } from '../gamedata.ts';
 import { makeRng } from '../rng.ts';
 import { GOODS, G, type Atlas, type Place } from './atlas.ts';
-import { cargoUsed, living } from './caravan.ts';
+import { cargoUsed, hasKeen, living, someone } from './caravan.ts';
+import { B } from '../biomes.ts';
+import { baseOf } from '../ecology.ts';
 import type { Encounter } from './encounters.ts';
 
 export type FolkKind = 'traders' | 'pilgrims' | 'broken';
@@ -112,5 +114,52 @@ export function folkEncounter(f: Folk, home: Place, prices: { buy: number; sell:
         { label: 'Ride on', resolve: () => ({ text: 'You leave them to it. Someone else will come.', effect: { morale: -2 } }) },
       ];
     },
+  };
+}
+
+// --- Game you can see ---------------------------------------------------------------------------
+/** Animals grazing in a wild hex, to stalk and hunt (in place of the foraging card's old "hunt the
+ * trail"). Where there is foraging there is game, of a kind that suits the land. */
+export type AnimalKind = 'deer' | 'antelope' | 'goats' | 'elk' | 'fowl';
+export const ANIMAL_NAMES: Record<AnimalKind, string> = { deer: 'Deer', antelope: 'Antelope', goats: 'Wild goats', elk: 'Elk', fowl: 'Wildfowl' };
+/** Days before a hunted hex has game in it again. */
+export const GAME_RETURNS = 25;
+
+/** What game there is in a hex (null: none). */
+export function gameIn(w: World, a: Atlas, cell: number, finds: string[]): AnimalKind | null {
+  if (a.placeAt[cell] >= 0 || !finds.includes('forage')) return null;
+  const b = baseOf(w.biome[cell]);
+  if (b === B.TUNDRA || b === B.TAIGA || b === B.ICE) return 'elk';
+  if (w.elevation[cell] > 0.45 || b === B.MOUNTAIN) return 'goats';
+  if (b === B.STEPPE || b === B.GRASSLAND || b === B.SAVANNA || b === B.DESERT) return 'antelope';
+  if (w.moisture[cell] > 0.7 || w.grid.neighbors[cell].some((n) => w.water[n] !== WATER_LAND)) return 'fowl';
+  return 'deer';
+}
+/** Ready to hunt again, `used` the day it last was. */
+export const gameReady = (used: number | undefined, day: number) => used === undefined || day - used >= GAME_RETURNS;
+
+/** Close enough, unseen: the shot. */
+export function huntEncounter(kind: AnimalKind): Encounter {
+  const name = ANIMAL_NAMES[kind].toLowerCase();
+  const big = kind === 'elk' || kind === 'deer';
+  return {
+    id: 'hunt', title: `Within reach: ${name}`, weight: () => 0,
+    text: (x) => pick(x.rng, [
+      `Downwind, on your bellies in the grass: the ${name} haven't seen you. ${hasKeen(x.caravan) ? 'Your keenest eye has the bow.' : 'Someone nocks an arrow.'}`,
+      `The ${name} graze on, a stone's throw off. Nobody breathes.`,
+    ]),
+    choices: (x) => [
+      { label: 'Take the shot', hint: hasKeen(x.caravan) ? 'A keen eye is steadier' : undefined, resolve: (c) => {
+        const n = living(c.caravan).length;
+        if (c.rng() < (hasKeen(c.caravan) ? 0.85 : 0.65)) {
+          const fur = big && c.rng() < 0.5;
+          return { text: kind === 'fowl' ? 'A brace, and another, before the rest take wing. Feathers everywhere, and supper.' : `A clean kill. You eat well tonight and smoke the rest${fur ? ', and the hide is worth keeping' : ''}.`,
+            effect: { rations: Math.round(n * (kind === 'fowl' ? 3 : big ? 6 : 5) * (0.8 + c.rng() * 0.4)), morale: 5, ...(fur ? { cargo: [[G.furs, 1]] as [number, number][] } : {}) } };
+        }
+        if (kind === 'goats' && c.rng() < 0.3) { const h = someone(c.caravan, c.rng, true); return { text: `A miss, and ${h?.name ?? 'someone'} slips on the scree going after them.`, effect: { hurt: h } }; }
+        return { text: 'The shot goes wide. They are gone in a heartbeat.', effect: { morale: -2 } };
+      } },
+      { label: 'Let them be', resolve: () => ({ text: 'You watch them a while, and leave them to it.', effect: { morale: 2 } }) },
+    ],
   };
 }

@@ -12,6 +12,7 @@
  */
 import * as THREE from 'three';
 import { HOUSE_STRIDE, PROP_STRIDE, PROPS } from '../hextown.ts';
+import { makeRng } from '../rng.ts';
 
 const CS = 2;                     // walking grid, metres a cell
 /** The cart model's turn, so its shafts lead. */
@@ -212,6 +213,8 @@ export interface TownSpot {
   job?: string;
   /** Someone else on the road (life.ts: their id); the spot follows them as they walk. */
   folk?: string;
+  /** Game grazing (life.ts AnimalKind); the spot follows the herd. */
+  game?: string;
 }
 
 /** What a town's landmark is, by the family it's drawn in and its tier (hexhouses.ts and
@@ -583,4 +586,35 @@ export function findModel(kind: string, K: number, seed: number): THREE.Group {
   }
   g.scale.setScalar(K);
   return g;
+}
+
+/** An animal, low-poly: a body, neck and head on four legs (or a bird). Faces +z. */
+export function animalModel(kind: string, K: number, seed: number): THREE.Group {
+  const g = new THREE.Group();
+  const col: Record<string, number> = { deer: 0x8a5a34, antelope: 0xc49a5c, goats: 0xd9d2c0, elk: 0x5e4630, fowl: 0x6b6152 };
+  const r = makeRng(seed >>> 0);
+  const mat = new THREE.MeshStandardMaterial({ color: col[kind] ?? 0x8a5a34, roughness: 0.85, flatShading: true });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2c241c, roughness: 0.9, flatShading: true });
+  if (kind === 'fowl') {
+    const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.22, 0).scale(1, 0.8, 1.5).translate(0, 0.25, 0), mat);
+    const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.09, 0).translate(0, 0.45, 0.3), dark);
+    g.add(body, head);
+    // Geese-sized: big enough to see among the grass.
+    g.scale.setScalar(1.8);
+  } else {
+    const s = kind === 'elk' ? 1.35 : kind === 'goats' ? 0.75 : kind === 'antelope' ? 0.9 : 1;
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.45, 1.1).translate(0, 1.0, 0), mat);
+    const neck = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.55, 0.22).rotateX(-0.5).translate(0, 1.35, 0.55), mat);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.22, 0.4).translate(0, 1.6, 0.78), mat);
+    g.add(body, neck, head);
+    for (const [x, z] of [[-0.15, 0.4], [0.15, 0.4], [-0.15, -0.4], [0.15, -0.4]]) g.add(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.8, 0.09).translate(x, 0.4, z), dark));
+    if (kind === 'elk' || (kind === 'deer' && r() < 0.5)) for (const x of [-0.12, 0.12]) g.add(new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.45, 4).rotateZ(x * 3).translate(x * 1.6, 1.9, 0.75), dark));
+    if (kind === 'goats') for (const x of [-0.07, 0.07]) g.add(new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.25, 4).rotateX(-0.6).translate(x, 1.75, 0.7), dark));
+    g.scale.setScalar(s);
+  }
+  for (const m of g.children) m.castShadow = true;
+  const w = new THREE.Group();
+  w.add(g);
+  w.scale.setScalar(K);
+  return w;
 }

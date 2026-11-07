@@ -314,3 +314,17 @@ test('others on the road: the same for a hex and a week, never in towns or water
   assert.ok(wildHit / wild < rr, 'fewer off the road');
   assert.ok(changed > 0, 'a new week, new faces');
 });
+
+import { gameIn, gameReady, GAME_RETURNS } from '../src/primundi/life.ts';
+import { findsIn as findsIn2 } from '../src/primundi/finds.ts';
+test('game you can see: only where there is foraging, never in a town, back a while after a hunt', () => {
+  const kinds = new Set<string>();
+  let with_ = 0;
+  for (let c = 0; c < hw.grid.count; c++) {
+    const f = findsIn2(hw, atlas, c, 5), k = gameIn(hw, atlas, c, f);
+    if (k) { with_++; kinds.add(k); assert.ok(f.includes('forage')); assert.ok(atlas.placeAt[c] < 0); }
+  }
+  assert.ok(with_ > 20, `${with_} hexes with game`);
+  assert.ok(kinds.size >= 3, [...kinds].join(','));
+  assert.ok(gameReady(undefined, 0) && !gameReady(10, 10 + GAME_RETURNS - 1) && gameReady(10, 10 + GAME_RETURNS));
+});

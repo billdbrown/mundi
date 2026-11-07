@@ -20,7 +20,7 @@ import { appetite, cargoUsed, living, newCaravan, pace, passDay, sight, thirst, 
 import { findReady, findsIn, FINDS, type FindKind } from './finds.ts';
 import { applyEffect, contextAt, drawEncounter, type Choice, type Ctx, type Encounter, type Outcome } from './encounters.ts';
 import { MAX_QUESTS, canHandIn, offersAt, questTarget, questTitle, type Quest } from './quests.ts';
-import { folkEncounter, folkIn, type Folk } from './life.ts';
+import { folkEncounter, folkIn, gameIn, gameReady, huntEncounter, type AnimalKind, type Folk } from './life.ts';
 
 /** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
 export const RATES = [0, 0.22, 0.6, 1.6];
@@ -377,7 +377,7 @@ export function passDays(g: Game, n: number, resting = true) {
 
 // --- Encounters and finds ---------------------------------------------------------------------
 /** An encounter waiting for an answer. */
-export interface Pending { e: Encounter; ctx: Ctx; choices: Choice[]; quest?: string; find?: FindKind; folk?: string }
+export interface Pending { e: Encounter; ctx: Ctx; choices: Choice[]; quest?: string; find?: FindKind; folk?: string; hunt?: boolean }
 export function pending(e: Encounter, ctx: Ctx, quest?: string, find?: FindKind): Pending {
   return { e, ctx, choices: e.choices(ctx), quest, find };
 }
@@ -407,6 +407,18 @@ export function meetFolk(g: Game, f: Folk): Pending {
   p.folk = f.id;
   return p;
 }
+/** Game in a hex you could hunt now (null: none, or hunted lately). */
+export function gameHere(g: Game, cell: number): AnimalKind | null {
+  const k = gameIn(g.w, g.a, cell, findsAt(g, cell));
+  return k && gameReady(g.s.finds[`${cell}:hunt`], g.s.day) ? k : null;
+}
+/** Stalked game to within reach: the shot. */
+export function huntHere(g: Game, kind: AnimalKind): Pending {
+  const rng = draw(g);
+  const p = pending(huntEncounter(kind), ctxHere(g, rng, snowAt(g, g.s.cell)));
+  p.hunt = true;
+  return p;
+}
 /** Went on without stopping: they're gone. */
 export function passFolk(g: Game, id: string) { g.s.finds[`folk:${id}`] = g.s.day; }
 
@@ -420,6 +432,8 @@ export function resolve(g: Game, p: Pending, i: number): { out: Outcome; lines: 
     g.ui.findUsed(p.find);
   }
   if (p.folk) { s.finds[`folk:${p.folk}`] = s.day; g.ui.folkMet(p.folk); }
+  // Hunted (or let be): the game moves off for a while.
+  if (p.hunt) s.finds[`${s.cell}:hunt`] = s.day;
   const lines = applyEffect(s.caravan, out.effect, p.ctx.name, s.day, g.dice);
   if (out.effect.learn != null) {
     const pl = g.a.places[out.effect.learn];

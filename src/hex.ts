@@ -32,8 +32,8 @@ import { PROP_STRIDE } from './hextown.ts';
 import { familyOf, loadHouses, buildHouses, buildProps, houseMaterial, houseNight, HOUSE_MODES, type HouseMode, type HousePack, type Building } from './hexhouses.ts';
 import { snowGround, snowContext } from './hexsnow.ts';
 import { HexFog } from './primundi/hexfog.ts';
-import { Nav, Caravan, townSpots, townLandmark, noticeBoard, findModel, LANDMARKS, type TownSpot } from './primundi/hexcaravan.ts';
-import { FOLK_LABEL, type FolkKind } from './primundi/life.ts';
+import { Nav, Caravan, townSpots, townLandmark, noticeBoard, findModel, animalModel, LANDMARKS, type TownSpot } from './primundi/hexcaravan.ts';
+import { FOLK_LABEL, ANIMAL_NAMES, type FolkKind, type AnimalKind } from './primundi/life.ts';
 import { makeRng } from './rng.ts';
 import { noiseTexture } from './primundi/fog.ts';
 
@@ -82,6 +82,9 @@ let gameUsed = new Set((h.get('used') ?? '').split('.').filter(Boolean));
 let gameJobs = (h.get('jobs') ?? '').split('.').filter(Boolean);
 /** Primundi: others on the road in this hex, `kind~id` (life.ts). */
 let gameFolk = (h.get('folk') ?? '').split('.').filter(Boolean);
+/** Primundi: game grazing here (life.ts AnimalKind), and a keen eye in the caravan. */
+let gameGame = h.get('game') ?? '';
+let gameKeen = h.get('keen') === '1';
 const hexFog = game ? new HexFog(noiseTexture()) : null;
 if (game) {
   document.body.classList.add('primundi');
@@ -126,7 +129,8 @@ function applyHash(hash: string) {
   if (game) { gameSeen = new Set((q.get('seen') ?? '').split('.').filter(Boolean).map(Number)); gameTown = q.get('town') ?? ''; gameFrom = Number(q.get('from') ?? -1);
     gameFinds = (q.get('finds') ?? '').split('.').filter(Boolean); gameUsed = new Set((q.get('used') ?? '').split('.').filter(Boolean));
     gameJobs = (q.get('jobs') ?? '').split('.').filter(Boolean);
-    gameFolk = (q.get('folk') ?? '').split('.').filter(Boolean); }
+    gameFolk = (q.get('folk') ?? '').split('.').filter(Boolean);
+    gameGame = q.get('game') ?? ''; gameKeen = q.get('keen') === '1'; }
   for (const k of [...back.keys()]) back.delete(k);
   for (const [k, v] of q) if (!['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around', 'plants', 'houses'].includes(k)) back.set(k, v);
 }
@@ -1672,6 +1676,7 @@ function setupCaravan(m: LocalMap) {
   }
   placeFinds(m, n, K);
   placeFolk(m, n, K, cartName ? housePack!.geos.get(cartName)! : null);
+  placeHerd(m, n, K);
   dress(caravan.group);
   spotLayer.replaceChildren(...spots.map((s, n) => {
     const b = document.createElement('button');
@@ -1743,6 +1748,80 @@ function placeFolk(m: LocalMap, n: Nav, K: number, cartGeo: THREE.BufferGeometry
     folkWalk(f);
     spots.push({ tab: '', label: FOLK_LABEL[kind as FolkKind] ?? 'Someone', door: [x, y], top: [x, y, groundAtMap(m, x, y) + 3 * K], centre: [x, y], radius: 2 * K,
       find: 'folk', folk: id, seen: true, used: false, obj: c.group });
+  }
+}
+/** Primundi: a herd grazing, to stalk. They drift about their spot; come too close in the open and
+ * each second there's a chance they see you and bolt (less with a keen eye in the caravan). */
+interface Herd { kind: string; x: number; y: number; members: { o: THREE.Object3D; dx: number; dy: number; tx: number; ty: number; h: number }[];
+  flee: [number, number] | null; stalking: boolean; done: boolean; nav: Nav; m: LocalMap }
+let herd: Herd | null = null;
+/** Seen within this (map metres, by the town scale), and reached within this. */
+const HERD_NOTICE = 45, HERD_REACH = 12;
+function placeHerd(m: LocalMap, n: Nav, K: number) {
+  herd = null;
+  if (!gameGame || !caravan) return;
+  const rng = makeRng((m.cell * 1597334677 + 3812015801) >>> 0);
+  // Out from the middle, in the open: of a few tries, the least wooded.
+  const { res, size, layers } = m, step = size / (res - 1), half = size / 2;
+  const wood = (x: number, y: number) => layers[(Math.max(0, Math.min(res - 1, Math.round((y + half) / step))) * res + Math.max(0, Math.min(res - 1, Math.round((x + half) / step)))) * LAYERS + L_FOREST];
+  let at: [number, number] | null = null, best = Infinity;
+  for (let k = 0; k < 80; k++) {
+    const a = rng() * Math.PI * 2, r = (0.12 + rng() * 0.2) * m.localWidth * 0.5;
+    const x = Math.cos(a) * r, y = Math.sin(a) * r;
+    if (!n.ok(x, y) || !spots.every((s) => Math.hypot(s.centre[0] - x, s.centre[1] - y) > 120)) continue;
+    const v = wood(x, y) + rng() * 0.05;
+    if (v < best) { best = v; at = [x, y]; }
+  }
+  if (!at) return;
+  const count = gameGame === 'elk' ? 3 : gameGame === 'fowl' ? 7 : 5;
+  const members: Herd['members'] = [];
+  for (let i = 0; i < count; i++) {
+    const o = animalModel(gameGame, K, m.cell * 31 + i);
+    const dx = (rng() - 0.5) * 14 * K, dy = (rng() - 0.5) * 14 * K, h = rng() * Math.PI * 2;
+    o.rotation.y = h;
+    caravan.group.add(o);
+    members.push({ o, dx, dy, tx: dx, ty: dy, h });
+  }
+  herd = { kind: gameGame, x: at[0], y: at[1], members, flee: null, stalking: false, done: false, nav: n, m };
+  spots.push({ tab: '', label: ANIMAL_NAMES[gameGame as AnimalKind] ?? 'Game', door: at, top: [at[0], at[1], groundAtMap(m, at[0], at[1]) + 3 * K], centre: at, radius: 6 * K,
+    find: 'game', game: gameGame, seen: true, used: false });
+}
+function updateHerd(dt: number) {
+  const hd = herd;
+  if (!hd || !caravan || !map) return;
+  const K = style.town.scale;
+  if (hd.flee) {
+    // Bolting: off to where they'll settle, at a run.
+    const [fx, fy] = hd.flee, d = Math.hypot(fx - hd.x, fy - hd.y), v = 14 * Math.sqrt(K) * dt;
+    if (d <= v) hd.flee = null; else { hd.x += (fx - hd.x) / d * v; hd.y += (fy - hd.y) / d * v; }
+  }
+  for (const a of hd.members) {
+    // Grazing: each wanders a little about the herd's spot, a new aim now and then.
+    if (Math.random() < dt * 0.15) { a.tx = (Math.random() - 0.5) * 16 * K; a.ty = (Math.random() - 0.5) * 16 * K; }
+    const k = 1 - Math.exp(-dt * (hd.flee ? 3 : 0.4));
+    const ox = a.dx, oy = a.dy;
+    a.dx += (a.tx - a.dx) * k; a.dy += (a.ty - a.dy) * k;
+    const mx = a.dx - ox + (hd.flee ? (hd.flee[0] - hd.x) : 0), my = a.dy - oy + (hd.flee ? (hd.flee[1] - hd.y) : 0);
+    if (Math.hypot(mx, my) > 1e-3) a.h = Math.atan2(mx, -my);
+    const x = hd.x + a.dx, y = hd.y + a.dy;
+    a.o.position.set(x, groundAtMap(map, x, y), -y);
+    a.o.rotation.y = a.h + Math.PI;
+  }
+  const s = spots.find((x) => x.game);
+  if (s) { s.centre = [hd.x, hd.y]; s.door = [hd.x, hd.y]; s.top = [hd.x, hd.y, groundAtMap(map, hd.x, hd.y) + 3 * K]; }
+  if (!hd.stalking || hd.done || hd.flee) return;
+  const d = Math.hypot(caravan.x - hd.x, caravan.y - hd.y);
+  if (d < HERD_REACH * K) {
+    hd.stalking = false; caravan.stop();
+    parent.postMessage({ type: 'primundi-hunt' }, location.origin);
+  } else if (d < HERD_NOTICE * K && Math.random() < dt * (gameKeen ? 0.12 : 0.25)) {
+    // Seen: they bolt, away from you, and settle again further off.
+    hd.stalking = false; caravan.stop();
+    const ax = hd.x - caravan.x, ay = hd.y - caravan.y, l = Math.hypot(ax, ay) || 1;
+    const v = hd.nav.nearest(hd.x + ax / l * 160 * K, hd.y + ay / l * 160 * K, 120);
+    hd.flee = v >= 0 ? hd.nav.xy(v) : [hd.x + ax / l * 120, hd.y + ay / l * 120];
+    for (const b of spotLayer.children) b.classList.remove('going');
+    parent.postMessage({ type: 'primundi-fled' }, location.origin);
   }
 }
 function placeFinds(m: LocalMap, n: Nav, K: number) {
@@ -1834,6 +1913,13 @@ function goTo(x: number, y: number, then: (() => void) | null = null) {
 }
 function goSpot(s: TownSpot) {
   const b = spotLayer.children[spots.indexOf(s)];
+  // Game: stalk it; on the way it may see you (updateHerd).
+  if (s.game && herd && !herd.done) {
+    herd.stalking = true;
+    const ok = goTo(herd.x, herd.y, () => { b?.classList.remove('going'); if (herd) herd.stalking = false; });
+    if (ok) b?.classList.add('going');
+    return;
+  }
   // Someone on the road: they wait for you; walk up beside them.
   if (s.folk) {
     const f = walkers.find((w) => w.id === s.folk);
@@ -1907,6 +1993,7 @@ if (game) {
 function updateCaravan(dt: number) {
   if (!caravan || !map) return;
   caravan.update(dt);
+  updateHerd(dt);
   for (const f of walkers) {
     f.c.update(dt);
     const s = spots.find((x) => x.folk === f.id);
@@ -2101,6 +2188,13 @@ if (embedded) {
     if (e.data.type === 'mundi-hex-valleys') takeValleys(e.data.hash, e.data.n, e.data.half);
     // Primundi: a job's camp or site dealt with; its label goes.
     if (e.data.type === 'primundi-job-done') for (const s of spots) if (s.job === e.data.id) s.used = true;
+    // Primundi: the game's been hunted (or let be): it moves off out of reach.
+    if (e.data.type === 'primundi-hunted' && herd) {
+      herd.done = true;
+      for (const s of spots) if (s.game) s.used = true;
+      const v = herd.nav.nearest(herd.x + 400, herd.y + 400, 200);
+      herd.flee = v >= 0 ? herd.nav.xy(v) : [herd.x + 300, herd.y + 300];
+    }
     // Primundi: someone met on the road goes on their way.
     if (e.data.type === 'primundi-folk-done') {
       for (const s of spots) if (s.folk === e.data.id) s.used = true;

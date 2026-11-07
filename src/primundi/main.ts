@@ -30,13 +30,13 @@ import { Thunder } from './thunder.ts';
 import { BIASES, type StartBias } from './start.ts';
 import { buildAtlas, GOODS, ringCells, type Atlas, type Place } from './atlas.ts';
 import { bestKnownSell, quotes, rationPrice, remember } from './market.ts';
-import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
+import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
 import { FOLK_LABEL, type FolkKind } from './life.ts';
 import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
 import {
   START_DOY, RATES, doyOf, worldParams, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
-  jobsOffered, shortHere, chartRate, folkHere, meetFolk, passFolk, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
+  jobsOffered, shortHere, chartRate, folkHere, meetFolk, passFolk, gameHere, huntHere, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
   reveal as simReveal, advance as simAdvance, plan as simPlan,
   buy as simBuy, sell as simSell, rest as simRest,
   type Game, type Pending, type Save, type Ui,
@@ -597,6 +597,9 @@ function hexHash(cell: number) {
     const f = findsIn(world, atlas, cell, params.seed);
     if (f.length) h.set('finds', f.join('.'));
     if (g) { const folk = folkHere(g, cell); if (folk.length) h.set('folk', folk.map((x) => `${x.kind}~${x.id}`).join('.')); }
+    // Game grazing here, and whether someone in the caravan has a keen eye for stalking it.
+    const game = g ? gameHere(g, cell) : null;
+    if (game) { h.set('game', game); if (hasKeen(save.caravan)) h.set('keen', '1'); }
     const used = f.filter((k) => !findReady(k, save!.finds[`${cell}:${k}`], save!.day));
     if (used.length) h.set('used', used.join('.'));
   }
@@ -653,6 +656,12 @@ addEventListener('message', (e) => {
     const q = save.jobs.find((x) => x.id === e.data.id && !x.done);
     if (q && g && (q.kind === 'bounty' || q.kind === 'relic')) showPending(jobHere(g, q, QUEST_ENCOUNTERS));
   }
+  // Stalked game to within reach; or it saw you first.
+  if (e.data.type === 'primundi-hunt' && hexOpen && g && save && hexCell === save.cell && !modal) {
+    const k = gameHere(g, save.cell);
+    if (k) showPending(huntHere(g, k));
+  }
+  if (e.data.type === 'primundi-fled' && hexOpen) toast(hasKeen(save!.caravan) ? 'They saw you first, and they\'re off. They\'ll settle again.' : "They saw you first, and they're off. Try again when they settle: someone with a keen eye would help.", 5000);
   // The caravan walked up to someone on the road.
   if (e.data.type === 'primundi-meet' && hexOpen && g && save && hexCell === save.cell && !modal) {
     const f = folkHere(g, save.cell).find((x) => x.id === e.data.id);
@@ -935,6 +944,7 @@ function choose(i: number) {
   const p = pendingChoices;
   pendingChoices = null;
   const { out, lines, extra } = resolve(g, p, i);
+  if (p.hunt) hexSend({ type: 'primundi-hunted' });
   showPanel('encounter', `${head(roadKicker(), esc(p.e.title))}<p class="tale">${esc(out.text)}</p>${extra ? `<p>${esc(extra)}</p>` : ''}
     ${fxChips(lines)}<button class="go" data-act="after">Go on</button>`, true);
   hud();
@@ -1165,6 +1175,7 @@ function toast(text: string, ms = 3500) {
   findsIn: (c: number) => (world && atlas ? findsIn(world, atlas, c, params.seed) : []),
   /** Others on the road in a hex this week, not yet met (life.ts). */
   folkHere: (c: number) => (g ? folkHere(g, c) : []),
+  gameHere: (c: number) => (g ? gameHere(g, c) : null),
   encounter: (id?: string) => {
     if (!world || !atlas || !save) return;
     const rng = makeRng(Date.now() >>> 0);

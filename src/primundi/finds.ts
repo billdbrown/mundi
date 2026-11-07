@@ -105,11 +105,8 @@ export const FINDS: Record<FindKind, Encounter> = {
         const n = living(c.caravan).length, k = Math.round(n * (2 + c.rng() * 3));
         return { text: c.rng() < 0.5 ? 'Everyone comes back with full hands.' : 'Slow work, but the sacks are fuller for it.', effect: { rations: k, days: 0.5 } };
       } },
-      { label: 'Hunt the trail', hint: 'Better, if it goes well', resolve: (c) => {
-        const n = living(c.caravan).length;
-        if (c.rng() < 0.55) return { text: 'A clean kill at dusk. You eat well and smoke the rest.', effect: { rations: Math.round(n * (4 + c.rng() * 4)), days: 0.5, morale: 4 } };
-        return { text: 'Hours of creeping through the brush, and nothing to show but scratches.', effect: { days: 0.5, morale: -2 } };
-      } },
+      // (Hunting is the game you can see in the hex now: life.ts.)
+      { label: 'Leave it for now', resolve: () => ({ text: 'You note the place and walk on.', effect: {} }) },
     ],
   },
   ruin: ENCOUNTERS.find((e) => e.id === 'ruins')!,
