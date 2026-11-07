@@ -56,7 +56,12 @@ goods and equilibrium prices, hex crossing costs, A*), `market.ts` (lazy stocks,
 events: add an entry to `ENCOUNTERS`). `sim.ts` is the rules without the screen: the save, travel, the day,
 arriving, resolving a choice, every town action. `main.ts` calls it through a `Ui` of hooks (toasts,
 cards, fog); the playtest bot runs it headless. Game rules go in sim.ts, never in main.ts. After
-changing them, `scripts/simref.mjs` replays a fixed game in the browser: compare before and after. `main.ts` is the clock (pause/1/2/3, `RATES` days per second),
+changing them, `scripts/simref.mjs` replays a fixed game in the browser: compare before and after.
+**Playtest:** `npm run playtest` (about five minutes) has five bots (trader, explorer, jobber,
+reckless, idle) play 270 three-year games headless through sim.ts and writes
+`test/playtest/report.html` (gitignored). Run it before and after any change to the rules or
+numbers, change one knob per commit, and put the before and after numbers in the commit message.
+`--quick` for one world. A test (the tripwire) fails if the trader stops making a living. `main.ts` is the clock (pause/1/2/3, `RATES` days per second),
 travel, the cards and the map marks. Currency: orrels. Saves under `primundi.save2`. Mobile portrait
 is a target: cards become a bottom sheet under 640 px.
 Same build; `./deploy-primundi.sh` copies `dist/` to `dist-primundi/` with `primundi.html` as the

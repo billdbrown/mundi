@@ -283,3 +283,16 @@ test('a supply job cannot be done with goods bought on the spot: the market has 
   }
   assert.ok(found > 0, 'some board wants something');
 });
+
+// --- The playtest's tripwire: the economy hasn't come apart. -------------------------------------
+import { playRun } from '../scripts/playtest/run.ts';
+test('playtest tripwire: a trader bot makes a living in a year, an idle one nothing, and nobody starves', () => {
+  const t = playRun({ world: 'zalund', origin: 'traders', bias: 'gentle', bot: 'trader', run: 0, years: 1 });
+  const earned = t.days[t.days.length - 1].earned;
+  // Wide on purpose (the baseline was about 1,500 on this world): it catches the economy breaking, not tuning.
+  assert.ok(earned > 300 && earned < 20000, `trader earned ${Math.round(earned)} in a year`);
+  assert.ok(t.trips > 10, `${t.trips} trips`);
+  const idle = playRun({ world: 'zalund', origin: 'traders', bias: 'gentle', bot: 'idle', run: 0, years: 1 });
+  assert.equal(Math.round(idle.days[idle.days.length - 1].earned), 0);
+  for (const r of [t, idle]) assert.equal(r.deaths.filter((d) => d.cause === 'supplies').length, 0);
+});
