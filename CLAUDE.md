@@ -81,4 +81,8 @@ Roads draw on faintly over the fog for two hexes past what you've seen.
 `finds.ts` is what there is to find in a hex (lookout, spring, forage, ruin, camp: seeded per cell,
 cards in the encounter shape, `save.finds` remembers what's used); the hex view places them
 (`placeFinds`), hides all but lookouts until the caravan is near, and posts `primundi-find`.
+`life.ts` is the rest of the life in a hex: others on the road (`folkIn`, met through `meetFolk`;
+the hex walks them with `Caravan`'s `{cloak, guide: false, pace}`), game to stalk (`gameIn`; the hex's
+`placeHerd`), and nights in camp (`CAMP_NIGHTS`, sim.ts `makeCamp`; the hex's `campModel` and
+`sweepHour`). Hex messages: `primundi-meet`, `-hunt`, `-fled`, `-hunted`, `-camp(ed)`, `-dawn`.
 `window.primundi` is its debug handle (`travelTo(cell)`, `setSpeed(n)`, `encounter(id)`, `revealRing()`).
