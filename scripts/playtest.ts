@@ -9,6 +9,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { playRun, worldFor, BOT_NAMES, type BotName, type RunResult } from './playtest/run.ts';
+import { report } from './playtest/report.ts';
 import type { Origin } from '../src/primundi/caravan.ts';
 import type { StartBias } from '../src/primundi/start.ts';
 
@@ -35,6 +36,8 @@ for (const name of worldNames) {
 }
 console.log(`${results.length} runs in ${Math.round((performance.now() - t0) / 1000)} s`);
 writeFileSync(`${out}/results.json`, JSON.stringify(results));
+writeFileSync(`${out}/report.html`, report(results, { worlds: worldNames, runs, years, when: new Date().toISOString().slice(0, 16).replace('T', ' '), note: arg('note', '') }));
+console.log(`report: ${out}/report.html`);
 
 // A summary to read in the terminal.
 const med = (xs: number[]) => { if (!xs.length) return NaN; const v = [...xs].sort((a, b) => a - b); return v[Math.floor(v.length / 2)]; };
