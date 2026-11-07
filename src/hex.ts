@@ -1650,6 +1650,7 @@ function dress(root: THREE.Object3D) {
 }
 function setupCaravan(m: LocalMap) {
   nav = null;
+  strollers = []; strollNav = null;
   // A camp (and its night) belongs to the hex it was made in.
   if (camp || timeTo) { camp = null; timeTo = null; userHour = null; }
   const K = houseMode === 'plain' ? 1 : style.town.scale;
@@ -1684,6 +1685,7 @@ function setupCaravan(m: LocalMap) {
       f.rotation.y = Math.atan2(dx, -dy) + Math.PI;
       caravan.group.add(f);
     }
+    placeStrollers(m, n, K);
     if (t.board) {
       const [bx, by, br] = t.board, b = noticeBoard(K);
       b.position.set(bx, groundAtMap(m, bx, by) - 0.05, -by);
@@ -1767,6 +1769,54 @@ function placeFolk(m: LocalMap, n: Nav, K: number, cartGeo: THREE.BufferGeometry
     folkWalk(f);
     spots.push({ tab: '', label: FOLK_LABEL[kind as FolkKind] ?? 'Someone', door: [x, y], top: [x, y, groundAtMap(m, x, y) + 3 * K], centre: [x, y], radius: 2 * K,
       find: 'folk', folk: id, seen: true, used: false, obj: c.group });
+  }
+}
+/** Primundi: townsfolk about the streets, walking from door to door (and to houses), so a town
+ * isn't empty between its buildings. A few, by the town's size. */
+interface Stroller { o: THREE.Group; path: [number, number][]; seg: number; x: number; y: number; wait: number; speed: number }
+let strollers: Stroller[] = [];
+let strollNav: Nav | null = null, strollMap: LocalMap | null = null;
+function strollTarget(m: LocalMap, r: () => number): [number, number] {
+  // A door of the town's buildings, or the front of a house near the middle.
+  const doors = spots.filter((s) => s.tab);
+  if (doors.length && r() < 0.5) return doors[Math.floor(r() * doors.length)].door;
+  const n = m.houses.length / HOUSE_STRIDE;
+  for (let k = 0; k < 10; k++) {
+    const o = Math.floor(r() * n) * HOUSE_STRIDE;
+    if (Math.hypot(m.houses[o], m.houses[o + 1]) < 300) return [m.houses[o], m.houses[o + 1] - m.houses[o + 5] * 0.6];
+  }
+  return [0, 0];
+}
+function placeStrollers(m: LocalMap, n: Nav, K: number) {
+  strollers = []; strollNav = n; strollMap = m;
+  if (!caravan) return;
+  const count = Math.min(8, Math.max(2, Math.round(m.houses.length / HOUSE_STRIDE / 12)));
+  const cloaks = [0x6a4a3a, 0x3a5a4a, 0x5a5a6a, 0x7a6a4a, 0x4a3a5a, 0x6a3a3a];
+  for (let i = 0; i < count; i++) {
+    const r = makeRng((m.cell * 31 + i * 7919) >>> 0);
+    const [x, y] = strollTarget(m, r);
+    const o = personModel(K, cloaks[i % cloaks.length], r() < 0.5);
+    o.position.set(x, groundAtMap(m, x, y), -y);
+    caravan.group.add(o);
+    strollers.push({ o, path: [], seg: 0, x, y, wait: r() * 4, speed: (1.1 + r() * 0.5) * K });
+  }
+}
+function updateStrollers(dt: number) {
+  if (!strollNav || !strollMap) return;
+  for (const s of strollers) {
+    if (s.wait > 0) { s.wait -= dt; continue; }
+    if (s.seg >= s.path.length) {
+      // Somewhere new; a pause on arriving.
+      const p = strollNav.find(s.x, s.y, ...strollTarget(strollMap, Math.random));
+      s.path = p ?? []; s.seg = 1; s.wait = 2 + Math.random() * 6;
+      continue;
+    }
+    let step = s.speed * dt;
+    while (step > 0 && s.seg < s.path.length) {
+      const [px, py] = s.path[s.seg], d = Math.hypot(px - s.x, py - s.y);
+      if (d <= step) { s.x = px; s.y = py; step -= d; s.seg++; } else { const h = Math.atan2(px - s.x, -(py - s.y)); s.o.rotation.y = h; s.x += (px - s.x) / d * step; s.y += (py - s.y) / d * step; step = 0; }
+    }
+    s.o.position.set(s.x, groundAtMap(strollMap, s.x, s.y), -s.y);
   }
 }
 /** Primundi: a camp for the night where the caravan stands, and the hour going to night and back. */
@@ -2103,6 +2153,7 @@ function updateCaravan(dt: number) {
   if (!caravan || !map) return;
   caravan.update(dt);
   updateHerd(dt);
+  updateStrollers(dt);
   for (const f of walkers) {
     f.c.update(dt);
     const s = spots.find((x) => x.folk === f.id);
@@ -2357,6 +2408,7 @@ void LAYERS; void L_DEPTH;
   get caravan() { return caravan; },
   get spots() { return spots; },
   get tradePlaced() { return tradePlaced; },
+  get strollers() { return strollers; },
   tap, goTo, goSpot, onScreen, camera, get worldGroup() { return world; },
   resetView, scene, setTilt, setTime, setAround, walker, wind, clouds, csm, waterUniforms, groundTex, canopy, shoreUniforms,
   /** The camera: position, the point looked at, distance (scripts/camtest.mjs). */
