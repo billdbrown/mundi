@@ -33,7 +33,7 @@ import { bestKnownSell, quotes, rationPrice, remember } from './market.ts';
 import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
 import { FOLK_LABEL, type FolkKind } from './life.ts';
-import { townLine } from './towns.ts';
+import { townLine, tradesOf } from './towns.ts';
 import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
 import {
   START_DOY, RATES, doyOf, worldParams, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
@@ -603,6 +603,8 @@ function hexHash(cell: number) {
   h.set('cell', String(cell));
   const pid = atlas ? atlas.placeAt[cell] : -1;
   if (pid >= 0) h.set('town', pid === save?.home ? 'home' : 'town');
+  // Its trade, shown round its edge (towns.ts, hextrades.ts).
+  if (pid >= 0 && world && atlas) h.set('trade', tradesOf(world, atlas, atlas.places[pid])[0]);
   const cameFrom = g ? g.from : -1;
   if (cameFrom >= 0 && cameFrom !== cell) h.set('from', String(cameFrom));
   if (save) {
@@ -1193,6 +1195,7 @@ function toast(text: string, ms = 3500) {
   /** Others on the road in a hex this week, not yet met (life.ts). */
   folkHere: (c: number) => (g ? folkHere(g, c) : []),
   gameHere: (c: number) => (g ? gameHere(g, c) : null),
+  trades: (pid: number) => (world && atlas ? tradesOf(world, atlas, atlas.places[pid]) : []),
   encounter: (id?: string) => {
     if (!world || !atlas || !save) return;
     const rng = makeRng(Date.now() >>> 0);

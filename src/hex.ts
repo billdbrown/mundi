@@ -34,6 +34,8 @@ import { snowGround, snowContext } from './hexsnow.ts';
 import { HexFog } from './primundi/hexfog.ts';
 import { Nav, Caravan, townSpots, townLandmark, noticeBoard, findModel, animalModel, campModel, LANDMARKS, type TownSpot } from './primundi/hexcaravan.ts';
 import { FOLK_LABEL, ANIMAL_NAMES, type FolkKind, type AnimalKind } from './primundi/life.ts';
+import { tradeProps } from './primundi/hextrades.ts';
+import type { Trade } from './primundi/towns.ts';
 import { makeRng } from './rng.ts';
 import { noiseTexture } from './primundi/fog.ts';
 
@@ -84,6 +86,8 @@ let gameJobs = (h.get('jobs') ?? '').split('.').filter(Boolean);
 let gameFolk = (h.get('folk') ?? '').split('.').filter(Boolean);
 /** Primundi: game grazing here (life.ts AnimalKind), and a keen eye in the caravan. */
 let gameGame = h.get('game') ?? '';
+/** Primundi: the town's trade (towns.ts), shown round its edge. */
+let gameTrade = h.get('trade') ?? '';
 let gameKeen = h.get('keen') === '1';
 const hexFog = game ? new HexFog(noiseTexture()) : null;
 if (game) {
@@ -130,7 +134,7 @@ function applyHash(hash: string) {
     gameFinds = (q.get('finds') ?? '').split('.').filter(Boolean); gameUsed = new Set((q.get('used') ?? '').split('.').filter(Boolean));
     gameJobs = (q.get('jobs') ?? '').split('.').filter(Boolean);
     gameFolk = (q.get('folk') ?? '').split('.').filter(Boolean);
-    gameGame = q.get('game') ?? ''; gameKeen = q.get('keen') === '1'; }
+    gameGame = q.get('game') ?? ''; gameKeen = q.get('keen') === '1'; gameTrade = q.get('trade') ?? ''; }
   for (const k of [...back.keys()]) back.delete(k);
   for (const [k, v] of q) if (!['cell', 'spot', 'v', 'mag', 'vScale', 'vSoft', 'res', 'river', 'crags', 'style', 'tilt', 'time', 'around', 'plants', 'houses'].includes(k)) back.set(k, v);
 }
@@ -1679,6 +1683,7 @@ function setupCaravan(m: LocalMap) {
   placeFinds(m, n, K);
   placeFolk(m, n, K, cartName ? housePack!.geos.get(cartName)! : null);
   placeHerd(m, n, K);
+  placeTrade(m, n, K);
   dress(caravan.group);
   spotLayer.replaceChildren(...spots.map((s, n) => {
     const b = document.createElement('button');
@@ -1789,6 +1794,66 @@ interface Herd { kind: string; x: number; y: number; members: { o: THREE.Object3
 let herd: Herd | null = null;
 /** Seen within this (map metres, by the town scale), and reached within this. */
 const HERD_NOTICE = 45, HERD_REACH = 12;
+/** Primundi: the town's trade round its edge, each thing on the ground it wants: the shore, high
+ * ground, the flat, or anywhere free. */
+/** Where the trade's things went (debug). */
+let tradePlaced: [number, number, number][] = [];
+function placeTrade(m: LocalMap, n: Nav, K: number) {
+  tradePlaced = [];
+  if (!gameTrade || !gameTown || !caravan) return;
+  const lm = townLandmark(m.houses);
+  if (lm < 0) return;
+  const sx = m.houses[lm], sy = m.houses[lm + 1];
+  const ds: number[] = [];
+  for (let o = 0; o < m.houses.length; o += HOUSE_STRIDE) ds.push(Math.hypot(m.houses[o] - sx, m.houses[o + 1] - sy));
+  ds.sort((a, b) => a - b);
+  const R = Math.max(40, ds[Math.floor(ds.length * 0.8)] ?? 60);
+  const G = (x: number, y: number) => groundAtMap(m, x, y);
+  const { res, size: msize, layers } = m, mstep = msize / (res - 1), mhalf = msize / 2;
+  const wood = (x: number, y: number) => layers[(Math.max(0, Math.min(res - 1, Math.round((y + mhalf) / mstep))) * res + Math.max(0, Math.min(res - 1, Math.round((x + mhalf) / mstep)))) * LAYERS + L_FOREST];
+  const wet = (x: number, y: number) => (m.sea && G(x, y) < 0) || (!Number.isNaN(m.lakeLevel) && G(x, y) < m.lakeLevel);
+  const rng = makeRng((m.cell * 2654435761 + 97) >>> 0);
+  // Candidates round the edge of the town.
+  const cand: [number, number][] = [];
+  // (A fishing town looks further for its shore: the sea may be a walk from the houses.)
+  const reach = gameTrade === 'fishing' ? 400 : 110;
+  for (let k = 0; k < 500; k++) {
+    const a = rng() * Math.PI * 2, r = R + 10 + rng() * reach;
+    cand.push([sx + Math.cos(a) * r, sy + Math.sin(a) * r]);
+  }
+  /** The way to water from a point, if it's within a short walk. */
+  const toWater = (x: number, y: number): [number, number] | null => {
+    for (const d of [10, 18, 28]) for (let k = 0; k < 12; k++) { const a = k / 12 * Math.PI * 2; if (wet(x + Math.cos(a) * d, y + Math.sin(a) * d)) return [Math.cos(a), Math.sin(a)]; }
+    return null;
+  };
+  const placed: [number, number, number][] = [];
+  for (const p of tradeProps(gameTrade as Trade, K, m.cell * 13)) {
+    let best: [number, number] | null = null, bs = -Infinity, bw: [number, number] | null = null;
+    for (const [x, y] of cand) {
+      const half = p.size / 2;
+      if (!n.ok(x, y) || wet(x, y) || !n.ok(x + half, y) || !n.ok(x - half, y) || !n.ok(x, y + half) || !n.ok(x, y - half)) continue;
+      if (placed.some(([px, py, ps]) => Math.hypot(px - x, py - y) < (ps + p.size) / 2 + 3)) continue;
+      // Out of the trees, wherever it goes: they'd hide it.
+      let sc = rng() * 0.5 - wood(x, y) * 8, w: [number, number] | null = null;
+      const uneven = Math.abs(G(x + half, y) - G(x - half, y)) + Math.abs(G(x, y + half) - G(x, y - half));
+      if (p.want === 'shore') { w = toWater(x, y); sc += w ? 10 : -10; }
+      else if (p.want === 'high') sc += G(x, y) * 0.2;
+      else if (p.want === 'flat') sc -= uneven * 2;
+      // Things of one trade together: near what's already down.
+      if (placed.length) sc -= Math.min(...placed.map(([px, py]) => Math.hypot(px - x, py - y))) * 0.02;
+      if (sc > bs) { bs = sc; best = [x, y]; bw = w; }
+    }
+    if (!best) continue;
+    const [x, y] = best;
+    p.obj.position.set(x, G(x, y) - 0.05, -y);
+    // Facing the water (a jetty runs out into it), else any way.
+    p.obj.rotation.y = p.faceWater && bw ? Math.atan2(bw[0], -bw[1]) : rng() * Math.PI * 2;
+    caravan.group.add(p.obj);
+    n.block(x, y, 0, p.size, p.size);
+    placed.push([x, y, p.size]);
+  }
+  tradePlaced = placed;
+}
 function placeHerd(m: LocalMap, n: Nav, K: number) {
   herd = null;
   if (!gameGame || !caravan) return;
@@ -2279,6 +2344,7 @@ void LAYERS; void L_DEPTH;
   get style() { return style.id; },
   get caravan() { return caravan; },
   get spots() { return spots; },
+  get tradePlaced() { return tradePlaced; },
   tap, goTo, goSpot, onScreen, camera, get worldGroup() { return world; },
   resetView, scene, setTilt, setTime, setAround, walker, wind, clouds, csm, waterUniforms, groundTex, canopy, shoreUniforms,
   /** The camera: position, the point looked at, distance (scripts/camtest.mjs). */
