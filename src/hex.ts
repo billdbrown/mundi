@@ -32,7 +32,7 @@ import { PROP_STRIDE } from './hextown.ts';
 import { familyOf, loadHouses, buildHouses, buildProps, houseMaterial, houseNight, HOUSE_MODES, type HouseMode, type HousePack, type Building } from './hexhouses.ts';
 import { snowGround, snowContext } from './hexsnow.ts';
 import { HexFog } from './primundi/hexfog.ts';
-import { Nav, Caravan, townSpots, townLandmark, noticeBoard, findModel, animalModel, LANDMARKS, type TownSpot } from './primundi/hexcaravan.ts';
+import { Nav, Caravan, townSpots, townLandmark, noticeBoard, findModel, animalModel, campModel, LANDMARKS, type TownSpot } from './primundi/hexcaravan.ts';
 import { FOLK_LABEL, ANIMAL_NAMES, type FolkKind, type AnimalKind } from './primundi/life.ts';
 import { makeRng } from './rng.ts';
 import { noiseTexture } from './primundi/fog.ts';
@@ -1646,6 +1646,8 @@ function dress(root: THREE.Object3D) {
 }
 function setupCaravan(m: LocalMap) {
   nav = null;
+  // A camp (and its night) belongs to the hex it was made in.
+  if (camp || timeTo) { camp = null; timeTo = null; userHour = null; }
   const K = houseMode === 'plain' ? 1 : style.town.scale;
   const cartName = housePack?.index.props.find((n) => n.endsWith('/Cart'));
   caravan = new Caravan((x, y) => groundAtMap(m, x, y), K, cartName ? housePack!.geos.get(cartName)!.clone() : null);
@@ -1749,6 +1751,36 @@ function placeFolk(m: LocalMap, n: Nav, K: number, cartGeo: THREE.BufferGeometry
     spots.push({ tab: '', label: FOLK_LABEL[kind as FolkKind] ?? 'Someone', door: [x, y], top: [x, y, groundAtMap(m, x, y) + 3 * K], centre: [x, y], radius: 2 * K,
       find: 'folk', folk: id, seen: true, used: false, obj: c.group });
   }
+}
+/** Primundi: a camp for the night where the caravan stands, and the hour going to night and back. */
+let camp: THREE.Group | null = null;
+let timeTo: { from: number; to: number; t: number; dur: number; then: (() => void) | null } | null = null;
+/** Sweep the hour from now to `to` (forward round the clock) over `dur` seconds. */
+function sweepHour(to: number, dur: number, then: (() => void) | null = null) {
+  const from = hourNow();
+  timeTo = { from, to: from + ((to - from + 24) % 24), t: 0, dur, then };
+}
+function stepTimeTo(dt: number) {
+  if (!timeTo || !map) return;
+  timeTo.t = Math.min(timeTo.dur, timeTo.t + dt);
+  const k = timeTo.t / timeTo.dur, e = k * k * (3 - 2 * k);
+  userHour = (timeTo.from + (timeTo.to - timeTo.from) * e) % 24;
+  applyTime();
+  if (timeTo.t >= timeTo.dur) { const f = timeTo.then; timeTo = null; f?.(); }
+}
+function makeCampHere() {
+  if (!caravan || !map) return;
+  caravan.stop();
+  if (camp) caravan.group.remove(camp);
+  const K = style.town.scale;
+  camp = campModel(K);
+  const x = caravan.x + 3 * K, y = caravan.y;
+  camp.position.set(x, groundAtMap(map, x, y) - 0.03, -y);
+  caravan.group.add(camp);
+  dress(camp);
+  controls.glideTo(x, -y, 40 * K);
+  // Evening comes on, then night; then the game plays out the night.
+  sweepHour(22, 3.5, () => parent.postMessage({ type: 'primundi-camped' }, location.origin));
 }
 /** Primundi: a herd grazing, to stalk. They drift about their spot; come too close in the open and
  * each second there's a chance they see you and bolt (less with a keen eye in the caravan). */
@@ -2093,6 +2125,8 @@ const loop = () => {
   }
   // Playing: a day in 48 seconds.
   if (playing && map) { userHour = (hourNow() + dt * 0.5) % 24; applyTime(); }
+  stepTimeTo(dt);
+  if (camp) camp.userData.flicker?.(performance.now() / 1000);
   if (fpsT > 1) { $('fps').textContent = `${Math.round(frames / fpsT)} fps`; frames = 0; fpsT = 0; }
   if (game) updateCaravan(dt);
   if (walker.active) walker.update(dt);
@@ -2195,6 +2229,9 @@ if (embedded) {
       const v = herd.nav.nearest(herd.x + 400, herd.y + 400, 200);
       herd.flee = v >= 0 ? herd.nav.xy(v) : [herd.x + 300, herd.y + 300];
     }
+    // Primundi: make camp here; and the morning after.
+    if (e.data.type === 'primundi-camp') makeCampHere();
+    if (e.data.type === 'primundi-dawn') sweepHour(hourForElevation(lat, style.sun.elev), 4, () => { userHour = null; applyTime(); });
     // Primundi: someone met on the road goes on their way.
     if (e.data.type === 'primundi-folk-done') {
       for (const s of spots) if (s.folk === e.data.id) s.used = true;

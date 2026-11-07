@@ -18,9 +18,9 @@ import { findPath, G, hasWater, ringCells, seasonalTemp, SNOW_TEMP, stepDays, wa
 import { quotes, rationPrice, remember, trade, type Known, type Stocks } from './market.ts';
 import { appetite, cargoUsed, living, newCaravan, pace, passDay, sight, thirst, waterCap, TRAITS, ROLE_NAMES, type Caravan, type Origin, type Role } from './caravan.ts';
 import { findReady, findsIn, FINDS, type FindKind } from './finds.ts';
-import { applyEffect, contextAt, drawEncounter, type Choice, type Ctx, type Encounter, type Outcome } from './encounters.ts';
+import { ENCOUNTERS, applyEffect, contextAt, drawEncounter, type Choice, type Ctx, type Encounter, type Outcome } from './encounters.ts';
 import { MAX_QUESTS, canHandIn, offersAt, questTarget, questTitle, type Quest } from './quests.ts';
-import { folkEncounter, folkIn, gameIn, gameReady, huntEncounter, type AnimalKind, type Folk } from './life.ts';
+import { CAMP_NIGHTS, CAMP_P, folkEncounter, folkIn, gameIn, gameReady, huntEncounter, type AnimalKind, type Folk } from './life.ts';
 
 /** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
 export const RATES = [0, 0.22, 0.6, 1.6];
@@ -418,6 +418,23 @@ export function huntHere(g: Game, kind: AnimalKind): Pending {
   const p = pending(huntEncounter(kind), ctxHere(g, rng, snowAt(g, g.s.cell)));
   p.hunt = true;
   return p;
+}
+/** A night in camp where the caravan stands, out in the country: free, but it mends less than an
+ * inn (the day passes as on the road, with a little cheer from the fire). Sometimes the night brings
+ * something: its card, or null for a quiet night. */
+export function makeCamp(g: Game): Pending | null {
+  const s = g.s, c = s.caravan;
+  passDays(g, 1, false);
+  c.morale = Math.min(100, c.morale + 2);
+  log(g, 'Made camp for the night.');
+  const rng = draw(g);
+  if (rng() >= CAMP_P) return null;
+  const ctx = ctxHere(g, rng, snowAt(g, s.cell));
+  const table = [...CAMP_NIGHTS, ENCOUNTERS.find((e) => e.id === 'wolves')!];
+  const ws = table.map((e) => Math.max(0, e.weight(ctx)));
+  let r = rng() * ws.reduce((a, b) => a + b, 0);
+  const e = table.find((_, i) => (r -= ws[i]) < 0) ?? table[0];
+  return pending(e, ctx);
 }
 /** Went on without stopping: they're gone. */
 export function passFolk(g: Game, id: string) { g.s.finds[`folk:${id}`] = g.s.day; }

@@ -163,3 +163,36 @@ export function huntEncounter(kind: AnimalKind): Encounter {
     ],
   };
 }
+
+// --- A night in camp ------------------------------------------------------------------------------
+/** Chance a night in camp brings something. */
+export const CAMP_P = 0.35;
+/** What a night out in the country can bring (with the road's wolves). */
+export const CAMP_NIGHTS: Encounter[] = [
+  {
+    id: 'camp-sky', title: 'A clear night', weight: (x) => (x.high ? 2 : 1),
+    text: () => 'The cloud tears open after dark and the whole sky comes out. From the rise behind the camp you can see a long way by starlight.',
+    choices: () => [
+      { label: 'Climb up and sketch it', hint: 'Maps the country round', resolve: () => ({ text: 'Cold hands and a stub of charcoal. By dawn the map has grown.', effect: { reveal: 2, morale: 2 } }) },
+      { label: 'Sleep while you can', resolve: () => ({ text: 'The best night\'s sleep in weeks.', effect: { morale: 5 } }) },
+    ],
+  },
+  {
+    id: 'camp-visitor', title: 'Someone at the fire', weight: (x) => (x.road ? 2 : 1),
+    text: (x) => `A traveller comes out of the dark with their hands open, and asks to sit by your fire. ${x.name()}, they say, walking home.`,
+    choices: () => [
+      { label: 'Share your fire and food', hint: 'Two rations', resolve: () => ({ text: 'They talk half the night about a place you haven\'t been, and draw it for you in the ashes.', effect: { rations: -2, rumour: true, morale: 2 } }) },
+      { label: 'Send them on', resolve: (c) => c.rng() < 0.2
+        ? { text: 'They go. In the morning a waterskin has gone with them.', effect: { water: -6 } }
+        : { text: 'They go without a word.', effect: {} } },
+    ],
+  },
+  {
+    id: 'camp-storm', title: 'Rain in the night', weight: (x) => (x.dry ? 0.3 : 1.5),
+    text: () => 'The rain comes in sideways an hour before dawn and finds every gap in every cover.',
+    choices: () => [
+      { label: 'Ride it out under the carts', resolve: () => ({ text: 'A wet, cold, miserable night. But the skins are full.', effect: { morale: -4, water: 99 } }) },
+      { label: 'Pack up and walk through it', resolve: (c) => ({ text: 'Moving keeps you warm. Some of the food doesn\'t keep dry.', effect: { rations: -living(c.caravan).length * 2, morale: -2 } }) },
+    ],
+  },
+];

@@ -36,7 +36,7 @@ import { FOLK_LABEL, type FolkKind } from './life.ts';
 import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
 import {
   START_DOY, RATES, doyOf, worldParams, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
-  jobsOffered, shortHere, chartRate, folkHere, meetFolk, passFolk, gameHere, huntHere, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
+  jobsOffered, shortHere, chartRate, folkHere, meetFolk, passFolk, gameHere, huntHere, makeCamp, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
   reveal as simReveal, advance as simAdvance, plan as simPlan,
   buy as simBuy, sell as simSell, rest as simRest,
   type Game, type Pending, type Save, type Ui,
@@ -417,6 +417,21 @@ const paused = () => speed === 0 || modal || hexOpen || !save || save.over;
 /** The calendar's seasons are home's: they don't flip when the caravan crosses the equator. */
 const north = () => !!world && !!save && !!atlas && world.grid.centers[atlas.places[save.home].cell * 3 + 1] >= 0;
 
+/** Making camp: the hex is going to night; and whether the morning waits on a card. */
+let camping = false, dawnAfterCard = false;
+/** The night itself, once the hex has gone dark (sim.ts makeCamp). */
+function campNight() {
+  if (!g || !save) return;
+  const p = makeCamp(g);
+  hud(); store();
+  if (p) { dawnAfterCard = true; showPending(p); }
+  else { toast('A quiet night by the fire.', 4000); setTimeout(campDawn, 1500); }
+}
+function campDawn() {
+  camping = false; dawnAfterCard = false;
+  hexSend({ type: 'primundi-dawn' });
+  syncBar();
+}
 /** Someone on the road, offered as you pass: the hex and who. */
 let folkOffered: { cell: number; id: string } | null = null;
 const FOLK_TEXT: Record<FolkKind, (name: string, home: string) => string> = {
@@ -630,6 +645,7 @@ function openHex(c: number) {
 function closeHex() {
   if (!hexOpen) return;
   hexOpen = false;
+  camping = false; dawnAfterCard = false;
   hexFrame?.classList.remove('open');
   hexSend({ type: 'mundi-hex-close' });
   view.setRunning(true);
@@ -656,6 +672,8 @@ addEventListener('message', (e) => {
     const q = save.jobs.find((x) => x.id === e.data.id && !x.done);
     if (q && g && (q.kind === 'bounty' || q.kind === 'relic')) showPending(jobHere(g, q, QUEST_ENCOUNTERS));
   }
+  // The hex has gone dark round the fire: the night.
+  if (e.data.type === 'primundi-camped' && hexOpen && camping) campNight();
   // Stalked game to within reach; or it saw you first.
   if (e.data.type === 'primundi-hunt' && hexOpen && g && save && hexCell === save.cell && !modal) {
     const k = gameHere(g, save.cell);
@@ -951,6 +969,7 @@ function choose(i: number) {
 }
 function afterEncounter() {
   if (!save) return;
+  if (dawnAfterCard) campDawn();
   const c = save.caravan;
   if (!living(c).length) return gameOver();
   if (!leader(c)) return showAppoint();
@@ -1109,12 +1128,20 @@ function syncBar() {
   $('civname').textContent = save?.caravan.name ?? '';
   for (let i = 0; i < 4; i++) $(`b-s${i}`).classList.toggle('on', (paused() ? 0 : speed) === i);
   $('bar').classList.toggle('held', modal || hexOpen);
+  // Camp: looking round a hex out in the country, nothing pending.
+  $('b-camp').hidden = !(hexOpen && save && atlas && atlas.placeAt[save.cell] < 0 && !modal && !camping);
   // The Town button (the whole card at once) is off for now: you walk to each building in the hex.
   $('b-town').hidden = true;
   $('b-stop').hidden = !save?.route.length;
   document.body.classList.toggle('in-hex', hexOpen);
 }
 $('hud').onclick = () => toast(HUD_KEY, 6000);
+$('b-camp').onclick = () => {
+  if (!hexOpen || !g || modal || camping) return;
+  camping = true;
+  syncBar();
+  hexSend({ type: 'primundi-camp' });
+};
 $('b-hex').onclick = () => { if (save) { closePanel(); openHex(save.cell); } };
 $('b-planet').onclick = () => closeHex();
 for (let i = 0; i < 4; i++) $(`b-s${i}`).onclick = () => setSpeed(i);

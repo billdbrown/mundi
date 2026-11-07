@@ -328,3 +328,18 @@ test('game you can see: only where there is foraging, never in a town, back a wh
   assert.ok(kinds.size >= 3, [...kinds].join(','));
   assert.ok(gameReady(undefined, 0) && !gameReady(10, 10 + GAME_RETURNS - 1) && gameReady(10, 10 + GAME_RETURNS));
 });
+
+import { makeCamp } from '../src/primundi/sim.ts';
+test('a night in camp: a day passes, a little cheer, and about a third of nights bring something', () => {
+  const s = simNewGame(hw, atlas, 9, { name: 'T', origin: 'traders', bias: 'gentle', world: 't' });
+  const g = makeGame(hw, atlas, hgd, 9, s, quietUi(), makeRng(4));
+  const ids = new Set<string>();
+  let cards = 0;
+  for (let n = 0; n < 200; n++) {
+    const day = s.day, p = makeCamp(g);
+    assert.ok(Math.abs(s.day - day - 1) < 1e-9);
+    if (p) { cards++; ids.add(p.e.id); assert.ok(p.choices.length >= 2); }
+  }
+  assert.ok(cards > 40 && cards < 100, `${cards} of 200 nights`);
+  assert.ok(ids.size >= 3, [...ids].join(','));
+});

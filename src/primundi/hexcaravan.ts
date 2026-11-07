@@ -618,3 +618,52 @@ export function animalModel(kind: string, K: number, seed: number): THREE.Group 
   w.scale.setScalar(K);
   return w;
 }
+
+/** A camp for the night: a ring of stones, logs, a fire with its light (flicker it with
+ * `userData.flicker(t)`), bedrolls round it. Centred on the origin. */
+export function campModel(K: number): THREE.Group {
+  const g = new THREE.Group();
+  const stone = new THREE.MeshStandardMaterial({ color: 0x6d6a64, roughness: 0.95, flatShading: true });
+  const wood = new THREE.MeshStandardMaterial({ color: 0x4a3322, roughness: 0.9, flatShading: true });
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * Math.PI * 2, m = new THREE.Mesh(new THREE.DodecahedronGeometry(0.16, 0), stone);
+    m.position.set(Math.cos(a) * 0.55, 0.08, Math.sin(a) * 0.55); g.add(m);
+  }
+  for (let i = 0; i < 3; i++) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.8, 5), wood);
+    m.rotation.set(Math.PI / 2 - 0.35, i / 3 * Math.PI * 2, 0); m.position.y = 0.18; g.add(m);
+  }
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.7, 6).translate(0, 0.45, 0), new THREE.MeshBasicMaterial({ color: 0xffa23a, transparent: true, opacity: 0.9 }));
+  const core = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.45, 6).translate(0, 0.33, 0), new THREE.MeshBasicMaterial({ color: 0xfff0b0 }));
+  g.add(flame, core);
+  // Firelight on the ground: a warm glow, not a real light (in the looks drawn on the planet the
+  // map is scaled down, and a point light's reach isn't, so it lit the whole hex).
+  const glow = new THREE.Mesh(new THREE.CircleGeometry(3.2, 32).rotateX(-Math.PI / 2).translate(0, 0.05, 0),
+    new THREE.MeshBasicMaterial({ map: glowTexture(), color: 0xff9a40, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+  glow.renderOrder = 3;
+  g.add(glow);
+  const roll = new THREE.MeshStandardMaterial({ color: 0x7a5a3a, roughness: 0.95, flatShading: true });
+  const roll2 = new THREE.MeshStandardMaterial({ color: 0x4f5a6a, roughness: 0.95, flatShading: true });
+  for (let i = 0; i < 4; i++) {
+    const a = 0.4 + i / 4 * Math.PI * 2, m = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.14, 1.8).translate(0, 0.07, 0), i % 2 ? roll : roll2);
+    m.position.set(Math.cos(a) * 2, 0, Math.sin(a) * 2); m.rotation.y = -a; m.castShadow = true; g.add(m);
+  }
+  g.userData.flicker = (t: number) => {
+    const f = 0.8 + 0.2 * Math.sin(t * 13) * Math.sin(t * 7.3 + 1);
+    (glow.material as THREE.MeshBasicMaterial).opacity = 0.45 * f;
+    flame.scale.set(1, 0.85 + 0.3 * f, 1);
+  };
+  g.scale.setScalar(K);
+  return g;
+}
+let glowTex: THREE.Texture | null = null;
+/** A soft round falloff, white in the middle. */
+function glowTexture(): THREE.Texture {
+  if (glowTex) return glowTex;
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const x = c.getContext('2d')!, gr = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.4, 'rgba(255,255,255,0.45)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  x.fillStyle = gr; x.fillRect(0, 0, 64, 64);
+  glowTex = new THREE.CanvasTexture(c);
+  return glowTex;
+}

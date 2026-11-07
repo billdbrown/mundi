@@ -95,6 +95,7 @@ body:has(#launch:not([hidden])) #bar, body:has(#launch:not([hidden])) #hud { dis
 #bar .town { background: var(--gold); color: #1a1406; font-weight: 600; }
 #bar .town:hover { background: var(--gold-hi); color: #1a1406; }
 #bar .stop { color: var(--gold); }
+#bar .camp { color: var(--gold); }
 #bar .tools { display: flex; border-left: 1px solid var(--edge); padding-left: 4px; margin-left: 2px; }
 #bar .tools button { padding: 8px; }
 #b-sound .off-ico, #b-sound.off .on-ico { display: none; }
@@ -250,7 +251,7 @@ body.gathering::after { content: 'The storm gathers…'; position: fixed; inset:
 #speeds.pm-pulse { border-radius: 999px; }
 @media (max-width: 640px) {
   #bar { left: 8px; right: 8px; transform: none; bottom: calc(8px + env(safe-area-inset-bottom)); justify-content: space-between; gap: 0; padding: 3px; }
-  #bar .civ, #bar .seg button span, #bar .town span { display: none; }
+  #bar .civ, #bar .seg button span, #bar .town span, #bar .camp span { display: none; }
   /* Finger-sized: 44 px tall, and as wide as nine across a phone allows. */
   #bar button { padding: 8px 4px; min-height: 44px; min-width: 38px; justify-content: center; }
   #bar .speed button { padding: 8px 4px; }
