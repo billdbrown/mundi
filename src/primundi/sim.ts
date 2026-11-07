@@ -14,12 +14,13 @@ import { nameSeed, parseSeed } from '../seedname.ts';
 import { nameMaker, type GameData, RES_FERTILE, RES_FISH, RES_TIMBER } from '../gamedata.ts';
 import { makeRng } from '../rng.ts';
 import { pickHome, type StartBias } from './start.ts';
-import { findPath, G, hasWater, ringCells, seasonalTemp, SNOW_TEMP, stepDays, walkable, type Atlas, type Place } from './atlas.ts';
+import { findPath, G, GOODS, hasWater, ringCells, seasonalTemp, SNOW_TEMP, stepDays, walkable, type Atlas, type Place } from './atlas.ts';
 import { quotes, rationPrice, remember, trade, type Known, type Stocks } from './market.ts';
 import { appetite, cargoUsed, living, newCaravan, pace, passDay, sight, thirst, waterCap, TRAITS, ROLE_NAMES, type Caravan, type Origin, type Role } from './caravan.ts';
 import { findReady, findsIn, FINDS, type FindKind } from './finds.ts';
 import { ENCOUNTERS, applyEffect, contextAt, drawEncounter, type Choice, type Ctx, type Encounter, type Outcome } from './encounters.ts';
 import { MAX_QUESTS, canHandIn, offersAt, questTarget, questTitle, type Quest } from './quests.ts';
+import { tradesOf, TRADES, type Trade } from './towns.ts';
 import { CAMP_NIGHTS, CAMP_P, folkEncounter, folkIn, gameIn, gameReady, huntEncounter, type AnimalKind, type Folk } from './life.ts';
 
 /** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
@@ -600,6 +601,57 @@ export function hire(g: Game, pid: number, role: Role, cost: number): boolean {
   c.members.push({ name: nm, role, trait: traits[Math.floor(g.dice() * traits.length)], health: 'well', alive: true, joined: s.day });
   log(g, `${nm} joined as a ${ROLE_NAMES[role].toLowerCase()}, in ${g.a.places[pid].name}.`);
   return true;
+}
+/** A town's own offer, by its trade, once a month: goods straight from where they're made, cheap;
+ * or, where nothing is made, a boat down the coast, the news from every road, a blessing. */
+export interface LocalOffer { label: string; note: string; cost: number }
+const LOCAL_GOODS: Partial<Record<Trade, [string, number]>> = {
+  fishing: ['', 0], mining: ['Buy ore at the pit head', 4], salt: ['Buy salt at the pans', 4], trapping: ['Buy furs from the trappers', 2],
+  herding: ['Buy wool off the shearing', 5], farming: ['Buy grain at the threshing floor', 6], timber: ['Buy timber at the sawpit', 5],
+  weaving: ['Buy cloth from the looms', 3], smithing: ['Buy tools from the forge', 2],
+};
+export const LOCAL_DISCOUNT = 0.6;
+const localKey = (g: Game, pid: number) => `local:${pid}:${Math.floor(g.s.day / 30)}`;
+export function localOffer(g: Game, pid: number): LocalOffer | null {
+  const s = g.s, p = g.a.places[pid], t = tradesOf(g.w, g.a, p)[0];
+  if (s.finds[localKey(g, pid)] !== undefined) return null;
+  if (t === 'fishing') return { label: 'Hire a boat down the coast', note: 'A day at sea: the shore mapped both ways', cost: 20 };
+  if (t === 'market') return { label: 'Hear the news from every road', note: 'Prices from the two nearest markets you don\'t know', cost: 10 };
+  if (t === 'shrine') return { label: 'Ask a blessing at the shrine', note: 'Spirits lifted, the hurt mended', cost: 10 };
+  const lg = LOCAL_GOODS[t], gi = TRADES[t].good;
+  if (!lg || gi == null) return null;
+  const n = lg[1], q = quotes(g.w, p, s.stocks, s.day, doyOf(s.day))[gi];
+  return { label: lg[0], note: `${n} ${GOODS[gi].name.toLowerCase()} at ${Math.round(LOCAL_DISCOUNT * 100)}% of the market price`, cost: Math.max(1, Math.round(q.buy * n * LOCAL_DISCOUNT)) };
+}
+/** Take the town's offer: what came of it, or '' if it couldn't be done. */
+export function takeLocal(g: Game, pid: number): string {
+  const o = localOffer(g, pid), s = g.s, c = s.caravan, p = g.a.places[pid];
+  if (!o || c.orrels < o.cost) return '';
+  const t = tradesOf(g.w, g.a, p)[0];
+  let text = '';
+  if (t === 'fishing') {
+    // The coast both ways: land hexes on the water within a few days' sail.
+    const coast = ringCells(g.w, p.cell, 6).filter((x) => g.w.water[x] === 0 && g.w.grid.neighbors[x].some((n) => g.w.water[n] === 1));
+    passDays(g, 1, false);
+    text = `A day at sea in a fishing boat. You draw ${reveal(g, coast, true)} hexes of coast.`;
+  } else if (t === 'market') {
+    const near = g.a.places.filter((x) => x.id !== pid && !s.known[x.id]).map((x) => ({ x, d: angle(g.w, x.cell, p.cell) })).sort((a, b) => a.d - b.d).slice(0, 2);
+    for (const { x } of near) remember(s.known, x, quotes(g.w, x, s.stocks, s.day, doyOf(s.day)), Math.floor(s.day));
+    text = near.length ? `Carters from every road, all talking. You learn what things fetch in ${near.map(({ x }) => x.name).join(' and ')}.` : 'You know every market they talk about.';
+  } else if (t === 'shrine') {
+    c.morale = Math.min(100, c.morale + 15);
+    for (const m of living(c)) if (m.health !== 'well') m.health = 'well';
+    text = 'The keepers of the shrine bless the carts and tend the hurt. Everyone stands a little straighter.';
+  } else {
+    const gi = TRADES[t].good!, n = LOCAL_GOODS[t]![1];
+    if (cargoUsed(c) + n > c.capacity) return '';
+    c.cargo[gi] += n; c.basis[gi] += o.cost;
+    text = `${n} ${GOODS[gi].name.toLowerCase()}, straight from where it's made.`;
+  }
+  c.orrels -= o.cost;
+  s.finds[localKey(g, pid)] = s.day;
+  log(g, `${p.name}: ${text}`);
+  return text;
 }
 export const BEAST_COST = 45;
 export function buyBeast(g: Game): boolean {

@@ -358,3 +358,22 @@ test('every place has a trade, and they are not all one kind', () => {
   assert.ok(kinds >= 5, JSON.stringify(count));
   assert.ok(top < 0.5, `one trade is ${Math.round(top * 100)}% of places: ${JSON.stringify(count)}`);
 });
+
+import { localOffer, takeLocal } from '../src/primundi/sim.ts';
+test("a town's own offer: once a month, and it does what it says", () => {
+  const s = simNewGame(hw, atlas, 21, { name: 'T', origin: 'traders', bias: 'gentle', world: 't' });
+  const g = makeGame(hw, atlas, hgd, 21, s, quietUi(), makeRng(2));
+  let took = 0;
+  for (const p of atlas.places.slice(0, 40)) {
+    const o = localOffer(g, p.id);
+    if (!o) continue;
+    s.caravan.orrels = 500; s.caravan.cargo.fill(0); s.caravan.basis.fill(0);
+    const text = takeLocal(g, p.id);
+    assert.ok(text.length > 0, `${p.name}: ${o.label}`);
+    assert.equal(localOffer(g, p.id), null, 'once a month');
+    took++;
+  }
+  assert.ok(took > 5, `${took} offers taken`);
+  s.day += 31;
+  assert.ok(atlas.places.slice(0, 40).some((p) => localOffer(g, p.id)), 'back next month');
+});

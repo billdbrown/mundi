@@ -35,8 +35,26 @@ function medianPrices(a: Atlas): number[] {
   }
   return m;
 }
+/** Trades worked out before the market leans on them (applyTradeWants), so they stay put. */
+const tradeCache = new WeakMap<Atlas, Trade[][]>();
 /** A place's trades: the main one, and sometimes a second. */
 export function tradesOf(w: World, a: Atlas, p: Place): Trade[] {
+  const c = tradeCache.get(a);
+  if (c && c[p.id]) return c[p.id];
+  return tradesFresh(w, a, p);
+}
+/** What each town's trade wants, a little dearer there: a fishing town pays more for salt and
+ * timber. Once per atlas, after it's built (main.ts, the playtest). */
+export const WANT_MARKUP = 1.15;
+const nudged = new WeakSet<Atlas>();
+export function applyTradeWants(w: World, a: Atlas) {
+  if (nudged.has(a)) return;
+  nudged.add(a);
+  const all = a.places.map((p) => tradesFresh(w, a, p));
+  tradeCache.set(a, all);
+  for (const p of a.places) for (const g of TRADES[all[p.id][0]].wants) p.price[g] *= WANT_MARKUP;
+}
+function tradesFresh(w: World, a: Atlas, p: Place): Trade[] {
   // Its goods, cheapest against what they cost elsewhere first (relics never).
   const med = medianPrices(a);
   const cheap = GOODS.map((_, i) => ({ i, k: p.price[i] / med[i] })).filter((x) => x.i !== G.relics && BY_GOOD.has(x.i)).sort((x, y) => x.k - y.k);

@@ -33,11 +33,11 @@ import { bestKnownSell, quotes, rationPrice, remember } from './market.ts';
 import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
 import { FOLK_LABEL, type FolkKind } from './life.ts';
-import { townLine, tradesOf } from './towns.ts';
+import { applyTradeWants, townLine, tradesOf } from './towns.ts';
 import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
 import {
   START_DOY, RATES, doyOf, worldParams, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
-  jobsOffered, shortHere, chartRate, folkHere, meetFolk, passFolk, gameHere, huntHere, makeCamp, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
+  jobsOffered, shortHere, chartRate, localOffer, takeLocal, folkHere, meetFolk, passFolk, gameHere, huntHere, makeCamp, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
   reveal as simReveal, advance as simAdvance, plan as simPlan,
   buy as simBuy, sell as simSell, rest as simRest,
   type Game, type Pending, type Save, type Ui,
@@ -166,6 +166,7 @@ function maybeStart() {
   const w = world, r = built;
   game = gameData(w);
   atlas = buildAtlas(w, game, history);
+  applyTradeWants(w, atlas);
   surf = surfaceQueries(r.surface, w.grid);
   if (!save) save = newGame(w, atlas, params.seed, pendingNew!);
   g = makeGame(w, atlas, game, params.seed, save, ui);
@@ -858,6 +859,7 @@ function openTown(pid: number, tab = townTab) {
           ${short.has(i) ? '<span class="nobuy" title="Wanted on the notice board: there is none to be had here">none to be had</span>' : q[i].buy ? `<button class="buy" data-act="buy" data-g="${i}" ${buyable ? '' : 'disabled'} title="Buy one (shift: five)"><span>buy</span>${q[i].buy}</button>` : '<span class="nobuy">not sold</span>'}
         </div>`;
       }).join('')}</div>
+      ${(() => { const o = localOffer(g!, p.id); return o ? `<h3>This town's own</h3><div class="opts">${opt('local', esc(o.label), esc(o.note), `${ORREL}${o.cost}`, '', c.orrels < o.cost)}</div>` : ''; })()}
       <p class="dim small">Prices move as you trade and settle back over a fortnight. Shift-click trades five.</p>`;
   } else if (tab === 'supplies') {
     const rp = rationPrice(w, p, s.stocks, day, doy), eat = appetite(c);
@@ -1044,6 +1046,7 @@ panel.addEventListener('click', (e) => {
       store();
       break;
     }
+    case 'local': { const t = takeLocal(g!, pid); if (t) { toast(t, 6000); openTown(pid, 'market'); store(); } break; }
     case 'rations': if (buyRations(g!, pid, Number(b.dataset.n))) { openTown(pid, 'supplies'); store(); } break;
     case 'charts': sellCharts(g!, pid); openTown(pid, 'supplies'); store(); break;
     case 'take': if (takeJob(g!, pid, b.dataset.q ?? '')) { openTown(pid, 'work'); store(); } break;

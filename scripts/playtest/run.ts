@@ -8,6 +8,7 @@ import { gameData } from '../../src/gamedata.ts';
 import { simulateHistory } from '../../src/civ.ts';
 import { makeRng } from '../../src/rng.ts';
 import { buildAtlas, ringCells, walkable, type Atlas } from '../../src/primundi/atlas.ts';
+import { applyTradeWants } from '../../src/primundi/towns.ts';
 import { quotes, trade } from '../../src/primundi/market.ts';
 import { bestKnownSell } from '../../src/primundi/market.ts';
 import { AMBITION_GOAL, appetite, cargoUsed, living, thirst, type Origin } from '../../src/primundi/caravan.ts';
@@ -34,6 +35,7 @@ export function worldFor(name: string): WorldSet {
     const w = generateWorld(params);
     const gd = gameData(w);
     const a = buildAtlas(w, gd, simulateHistory(w, gd));
+    applyTradeWants(w, a);
     ws = { name, w, gd, a, seed: params.seed };
     worlds.set(name, ws);
   }
