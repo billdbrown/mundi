@@ -343,3 +343,18 @@ test('a night in camp: a day passes, a little cheer, and about a third of nights
   assert.ok(cards > 40 && cards < 100, `${cards} of 200 nights`);
   assert.ok(ids.size >= 3, [...ids].join(','));
 });
+
+import { tradesOf, townLine, TRADES } from '../src/primundi/towns.ts';
+test('every place has a trade, and they are not all one kind', () => {
+  const count: Record<string, number> = {};
+  for (const p of atlas.places) {
+    const t = tradesOf(hw, atlas, p);
+    assert.ok(t.length >= 1 && t.length <= 2 && t.every((x) => x in TRADES));
+    count[t[0]] = (count[t[0]] ?? 0) + 1;
+    if (t[0] === 'fishing') assert.ok(hw.grid.neighbors[p.cell].some((n) => hw.water[n] !== 0), `${p.name} fishes inland`);
+    assert.ok(townLine(hw, atlas, p).length > 20);
+  }
+  const kinds = Object.keys(count).length, top = Math.max(...Object.values(count)) / atlas.places.length;
+  assert.ok(kinds >= 5, JSON.stringify(count));
+  assert.ok(top < 0.5, `one trade is ${Math.round(top * 100)}% of places: ${JSON.stringify(count)}`);
+});

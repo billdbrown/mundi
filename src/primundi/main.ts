@@ -33,6 +33,7 @@ import { bestKnownSell, quotes, rationPrice, remember } from './market.ts';
 import { AMBITION_GOAL, ORIGINS, ROLE_NAMES, TRAITS, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
 import { FOLK_LABEL, type FolkKind } from './life.ts';
+import { townLine } from './towns.ts';
 import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
 import {
   START_DOY, RATES, doyOf, worldParams, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
@@ -914,18 +915,7 @@ function openTown(pid: number, tab = townTab) {
 
 /** A line of who a place is: where it sits, what it's known for, where it came from. */
 function townCharacter(p: Place): string {
-  if (!world || !atlas || !game) return '';
-  const w = world, c = p.cell, nb = w.grid.neighbors[c];
-  const coast = nb.some((n) => w.water[n] === 1), river = !!w.river[c], lake = nb.some((n) => w.water[n] === 2);
-  const high = w.elevation[c] > 0.3;
-  const kind = p.capital ? 'the seat of its realm' : p.pop > 6000 ? 'a city' : p.town ? 'a market town' : p.pop < 300 ? 'a hamlet' : 'a village';
-  const where = coast ? (river ? 'where a river meets the sea' : 'on the coast') : lake ? 'on a lakeshore' : river ? 'on a river' : high ? 'up in the hills' : `in the ${BIOMES[w.biome[c]].name.toLowerCase()}`;
-  // Known for: whatever is cheapest here against its usual price.
-  let best = -1, bk = 0.8;
-  for (let g = 0; g < GOODS.length - 1; g++) { const k = p.price[g] / GOODS[g].base; if (k < bk) { bk = k; best = g; } }
-  const known = best >= 0 ? `, known for its ${GOODS[best].name.toLowerCase()}` : '';
-  const origin = p.parent ? ` Settled from ${esc(p.parent)} in year ${p.founded}.` : p.founded <= 200 ? ' One of the first places people settled.' : ` Founded in year ${p.founded}.`;
-  return `${kind[0].toUpperCase() + kind.slice(1)} ${where}${known}.${origin}`;
+  return world && atlas ? esc(townLine(world, atlas, p)) : '';
 }
 
 // The road: a card in the middle, the world dimmed behind it.
