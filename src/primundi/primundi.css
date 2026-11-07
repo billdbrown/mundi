@@ -243,11 +243,17 @@ body.gathering::after { content: 'The storm gathers…'; position: fixed; inset:
   background: radial-gradient(ellipse at 50% 60%, #262a33, #05070d 70%); color: var(--quiet); font-size: 14px; letter-spacing: .04em; }
 
 /* --- Phones, held upright. --- */
+/* A first-time hint's pulse on what it's about (main.ts hint()). */
+.pm-pulse { animation: pm-hint 1.4s ease-in-out infinite; }
+@keyframes pm-hint { 0%, 100% { box-shadow: 0 0 0 0 rgba(242, 193, 78, .0); } 50% { box-shadow: 0 0 0 4px rgba(242, 193, 78, .55); } }
+#hud { cursor: pointer; }
+#speeds.pm-pulse { border-radius: 999px; }
 @media (max-width: 640px) {
   #bar { left: 8px; right: 8px; transform: none; bottom: calc(8px + env(safe-area-inset-bottom)); justify-content: space-between; gap: 0; padding: 3px; }
   #bar .civ, #bar .seg button span, #bar .town span { display: none; }
-  #bar button { padding: 8px 7px; min-height: 40px; }
-  #bar .speed button { padding: 8px 6px; }
+  /* Finger-sized: 44 px tall, and as wide as nine across a phone allows. */
+  #bar button { padding: 8px 4px; min-height: 44px; min-width: 38px; justify-content: center; }
+  #bar .speed button { padding: 8px 4px; }
   #bar .tools { padding-left: 2px; }
   #hud { left: 8px; right: 8px; transform: none; justify-content: space-between; gap: 8px; padding: 6px 12px; border-radius: 16px; font-size: 12px; flex-wrap: wrap; row-gap: 2px; }
   #hud .date { flex-basis: 100%; text-align: center; }
@@ -257,6 +263,8 @@ body.gathering::after { content: 'The storm gathers…'; position: fixed; inset:
   #card .mrow { grid-template-columns: 1fr 52px 26px 52px; }
   .tiles { grid-template-columns: 1fr; }
   #toast { bottom: calc(64px + env(safe-area-inset-bottom)); }
+  /* A card fills the bottom: a toast then shows under the readouts, where it can be read. */
+  body:has(#card:not([hidden])) #toast { bottom: auto; top: calc(96px + env(safe-area-inset-top)); }
 }
 .primundi #card button:disabled:hover, .primundi #card button:disabled { border-color: var(--edge); }
 

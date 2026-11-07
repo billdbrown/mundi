@@ -67,6 +67,8 @@ export interface Save {
   speed: number;
   draws: number;
   over: boolean;
+  /** First-time hints already shown (main.ts), by id. */
+  hints?: string[];
 }
 /** A save as loaded: fields added since it was written get their defaults. Null if unusable. */
 export function migrateSave(s: Save | null): Save | null {

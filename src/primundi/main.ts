@@ -467,6 +467,7 @@ function travelTo(to: number) {
   if (!save) return;
   if (!g || !setRoute(g, to)) return;
   closePanel();
+  hint('clock', 'Time runs while you travel. Pause any time, or go faster.', 'speeds');
   if (hexOpen) closeHex();
   if (speed === 0) speed = lastSpeed;
   syncBar();
@@ -616,6 +617,7 @@ function closeHex() {
   void view.whenGateReady().then(() => document.body.classList.remove('gathering'));
   if (lookLater) { follow = lookLater; lookLater = null; }
   syncBar();
+  hint('map', 'The world map. Tap a town or a hex to see it, then Travel here. Roads are a little safer than open country.', undefined, 9000);
 }
 addEventListener('message', (e) => {
   if (e.origin !== location.origin || !e.data) return;
@@ -705,8 +707,13 @@ function showPanel(kind: string, html: string, isModal = false) {
   syncBar();
 }
 function closePanel() {
+  const was = panelKind;
   panel.hidden = true;
   panelKind = '';
+  // Done with the first building in town: where next.
+  if (was === 'town' && save && save.day < 1 && (cargoUsed(save.caravan) > 0 || save.jobs.length)) {
+    hint('set-out', 'When you are ready to set out, the globe button opens the world map.', 'b-planet');
+  }
   modal = false;
   document.body.classList.remove('scene');
   syncBar();
@@ -988,6 +995,7 @@ panel.addEventListener('click', (e) => {
       const gi = Number(b.dataset.g);
       if (act === 'buy') simBuy(g!, pid, gi, many); else simSell(g!, pid, gi, many);
       openTown(pid, 'market');
+      if (act === 'buy') hint('hud', `Bought. ${HUD_KEY} Tap it any time for a reminder.`, 'hud');
       store();
       break;
     }
@@ -1070,6 +1078,7 @@ function syncBar() {
   $('b-stop').hidden = !save?.route.length;
   document.body.classList.toggle('in-hex', hexOpen);
 }
+$('hud').onclick = () => toast(HUD_KEY, 6000);
 $('b-hex').onclick = () => { if (save) { closePanel(); openHex(save.cell); } };
 $('b-planet').onclick = () => closeHex();
 for (let i = 0; i < 4; i++) $(`b-s${i}`).onclick = () => setSpeed(i);
@@ -1089,6 +1098,22 @@ addEventListener('keydown', (e) => {
   if (e.key === '1' || e.key === '2' || e.key === '3') setSpeed(Number(e.key));
 });
 addEventListener('pagehide', () => store());
+
+/** A first-time hint: once per game, a toast and a pulse on the thing it's about. */
+function hint(id: string, text: string, target?: string, ms = 8000) {
+  if (!save) return;
+  save.hints ??= [];
+  if (save.hints.includes(id)) return;
+  save.hints.push(id);
+  toast(text, ms);
+  if (target) {
+    const el = document.getElementById(target);
+    if (el) { el.classList.add('pm-pulse'); setTimeout(() => el.classList.remove('pm-pulse'), ms); }
+  }
+  store();
+}
+/** What the readouts along the top are. */
+const HUD_KEY = 'Up top: orrels, days of water, days of food, loads carried of what the beasts can take, and people.';
 
 let toastTimer = 0;
 function toast(text: string, ms = 3500) {

@@ -1591,7 +1591,7 @@ if (game) {
   document.body.appendChild(spotLayer);
   const css = document.createElement('style');
   css.textContent = `#spots { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
-    #spots button { position: absolute; left: 0; top: 0; pointer-events: auto; min-height: 40px; min-width: 44px;
+    #spots button { position: absolute; left: 0; top: 0; pointer-events: auto; min-height: 44px; min-width: 44px;
       padding: 0 14px; border-radius: 20px; border: 1px solid rgba(242, 193, 78, 0.55); background: rgba(22, 20, 16, 0.72); color: #f4ead2;
       font: 600 14px/38px system-ui, sans-serif; letter-spacing: 0.02em; white-space: nowrap; cursor: pointer; backdrop-filter: blur(6px);
       -webkit-backdrop-filter: blur(6px); box-shadow: 0 2px 10px rgba(0,0,0,0.35); transition: opacity 0.25s, background 0.2s; touch-action: manipulation; }
