@@ -264,3 +264,22 @@ test('the rules run headless: the same seed plays the same, and a trader gets th
   assert.ok(a.s.day >= 120 - 1e-6);
   assert.ok(a.s.caravan.earned !== 0, 'traded');
 });
+
+import { shortHere, buy as simBuy2 } from '../src/primundi/sim.ts';
+test('a supply job cannot be done with goods bought on the spot: the market has none of what its board wants', () => {
+  const ui = quietUi();
+  let found = 0;
+  for (let pid = 0; pid < atlas.places.length && found < 5; pid++) {
+    const s = simNewGame(hw, atlas, 3, { name: 'T', origin: 'traders', bias: 'gentle', world: 't' });
+    s.cell = atlas.places[pid].cell;
+    const g = makeGame(hw, atlas, hgd, 3, s, ui, makeRng(1));
+    const short = shortHere(g, pid);
+    if (!short.size) continue;
+    found++;
+    for (const gi of short) assert.equal(simBuy2(g, pid, gi, 3), 0, `bought wanted good ${gi} at ${atlas.places[pid].name}`);
+    // Anything else still sells.
+    const other = [0, 1, 2, 3, 4, 5].find((gi) => !short.has(gi))!;
+    assert.ok(simBuy2(g, pid, other, 1) > 0);
+  }
+  assert.ok(found > 0, 'some board wants something');
+});

@@ -413,13 +413,24 @@ export function jobsOffered(g: Game, p: Place): Quest[] {
   const price = (pl: Place, gi: number) => quotes(w, pl, s.stocks, s.day, doyOf(s.day))[gi].buy || pl.price[gi];
   return offersAt(w, g.a, g.game.continent, p, month, g.seed, g.revealed, price).filter((q) => !s.taken.includes(q.id));
 }
+/** Goods a place is short of: what its notice board wants brought this month, and what you've
+ * taken a job to bring it. Its market has none of them to sell, or the job could be done with
+ * goods bought on the spot. */
+export function shortHere(g: Game, pid: number): Set<number> {
+  const s = g.s, w = g.w, p = g.a.places[pid], month = Math.floor(s.day / 30);
+  const price = (pl: Place, gi: number) => quotes(w, pl, s.stocks, s.day, doyOf(s.day))[gi].buy || pl.price[gi];
+  const out = new Set<number>();
+  for (const q of offersAt(w, g.a, g.game.continent, p, month, g.seed, g.revealed, price)) if (q.kind === 'procure') out.add(q.good!);
+  for (const q of s.jobs) if (q.kind === 'procure' && q.from === pid) out.add(q.good!);
+  return out;
+}
 export function chartRate(g: Game, p: Place) { return (g.s.caravan.origin === 'cartographers' ? 1.5 : 0.6) * (p.town ? 1 : 0.5); }
 
 /** Buy up to `many` of a good, as many as the purse and the pack allow. The number bought. */
 export function buy(g: Game, pid: number, gi: number, many: number): number {
   const s = g.s, c = s.caravan, p = g.a.places[pid];
   let n = Math.min(many, c.capacity - cargoUsed(c));
-  if (n <= 0) return 0;
+  if (n <= 0 || shortHere(g, pid).has(gi)) return 0;
   // No more than the purse allows.
   while (n > 0) { const st = JSON.parse(JSON.stringify(s.stocks)) as Stocks; if (trade(g.w, p, st, s.day, doyOf(s.day), gi, n) <= c.orrels) break; n--; }
   if (n <= 0) return 0;

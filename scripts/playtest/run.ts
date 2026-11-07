@@ -17,7 +17,7 @@ import { MAX_QUESTS, canHandIn, questTarget } from '../../src/primundi/quests.ts
 import type { StartBias } from '../../src/primundi/start.ts';
 import {
   RATES, worldParams, newGame, makeGame, doyOf, setRoute, plan, advance, resolve, jobHere, findHere, findsAt,
-  buy, sell, buyRations, sellCharts, takeJob, handIn, jobsOffered, rest, hire, appoint, angle, cellAngleOf,
+  buy, sell, shortHere, buyRations, sellCharts, takeJob, handIn, jobsOffered, rest, hire, appoint, angle, cellAngleOf,
   type Game, type Pending, type Ui,
 } from '../../src/primundi/sim.ts';
 import type { World } from '../../src/world.ts';
@@ -117,7 +117,7 @@ const guessSell = (price: number, k: number) => price * Math.pow(0.93, k);
 /** The best load to carry from here to one place the caravan knows prices for: a basket of goods,
  * bought a unit at a time while each still pays, and its profit per day of travel. */
 function bestTrade(g: Game, pid: number, capacity: number, purse: number) {
-  const s = g.s, p = g.a.places[pid];
+  const s = g.s, p = g.a.places[pid], short = shortHere(g, pid);
   let best: { to: number; basket: number[]; rate: number } | null = null;
   for (const [id, k] of Object.entries(s.known)) {
     const to = Number(id);
@@ -132,7 +132,7 @@ function bestTrade(g: Game, pid: number, capacity: number, purse: number) {
       let bc = 0;
       for (let gi = 0; gi < basket.length; gi++) {
         const q = quotes(g.w, p, st, s.day, doyOf(s.day))[gi];
-        if (!q.buy || q.stock < 1 || spent + q.buy > purse) continue;
+        if (short.has(gi) || !q.buy || q.stock < 1 || spent + q.buy > purse) continue;
         const m = guessSell(k.sell[gi], basket[gi]) - q.buy;
         if (m > bm) { bm = m; bg = gi; bc = q.buy; }
       }
@@ -226,6 +226,17 @@ function explorerBot(g: Game, rng: () => number): Bot {
   };
 }
 
+/** Where the jobs in hand lead: their targets, or for a supply job still short of its goods, the
+ * nearest known market selling them cheaply. */
+function jobTargets(g: Game): number[] {
+  const s = g.s, c = s.caravan;
+  return s.jobs.map((q) => {
+    if (q.kind !== 'procure' || c.cargo[q.good!] >= q.qty!) return questTarget(q, g.a);
+    const src = Object.entries(s.known).filter(([id, k]) => Number(id) !== q.from && k.buy[q.good!] * q.qty! < q.reward * 0.8)
+      .map(([id]) => g.a.places[Number(id)].cell).map((cell) => ({ cell, d: daysTo(g, cell) })).sort((x, y) => x.d - y.d)[0];
+    return src ? src.cell : questTarget(q, g.a);
+  });
+}
 function jobberBot(g: Game, rng: () => number): Bot {
   const trader = traderBot(g, rng, false);
   let dest = -1;
@@ -233,6 +244,12 @@ function jobberBot(g: Game, rng: () => number): Bot {
     style: 'careful',
     town(pid) {
       const s = g.s, c = s.caravan;
+      // Goods for a supply job, if they're to be had here for less than it pays.
+      for (const q of s.jobs) {
+        if (q.kind !== 'procure' || q.from === pid || c.cargo[q.good!] >= q.qty!) continue;
+        const qt = quotes(g.w, g.a.places[pid], s.stocks, s.day, doyOf(s.day))[q.good!];
+        if (qt.buy && qt.buy * q.qty! < q.reward * 0.8) buy(g, pid, q.good!, q.qty! - c.cargo[q.good!]);
+      }
       for (const q of [...s.jobs]) if (canHandIn(q, pid, c.cargo)) booked(g, `job:${q.kind}`, () => handIn(g, pid, q.id));
       if (c.unsoldCharts) booked(g, 'charts', () => sellCharts(g, pid));
       sellHere(g, pid, true);
@@ -241,23 +258,22 @@ function jobberBot(g: Game, rng: () => number): Bot {
       for (const q of jobsOffered(g, g.a.places[pid])) {
         if (s.jobs.length >= MAX_QUESTS) break;
         if (q.kind === 'procure') {
-          // Only if the goods are to be had here: buy them and hand straight in, if it pays.
-          const qt = quotes(g.w, g.a.places[pid], s.stocks, s.day, doyOf(s.day))[q.good!];
-          if (!qt.buy || qt.stock < q.qty! || qt.buy * q.qty! > c.orrels - 30 || qt.buy * q.qty! >= q.reward) continue;
-          if (takeJob(g, pid, q.id) && buy(g, pid, q.good!, q.qty!) >= q.qty!) booked(g, 'job:procure-on-the-spot', () => handIn(g, pid, q.id));
-          continue;
+          // Worth it if some market you know sells the goods for well under the reward, not far off.
+          const src = Object.entries(s.known).filter(([id, k]) => Number(id) !== pid && k.buy[q.good!] * q.qty! < q.reward * 0.7)
+            .map(([id]) => daysTo(g, g.a.places[Number(id)].cell)).sort((x, y) => x - y)[0];
+          if (src == null || src > 15) continue;
         }
         if (daysTo(g, questTarget(q, g.a)) > 25) continue;
         takeJob(g, pid, q.id);
       }
-      const ts = s.jobs.map((q) => questTarget(q, g.a)).filter((t) => t !== s.cell).map((t) => ({ t, d: daysTo(g, t) })).filter((x) => x.d < Infinity).sort((x, y) => x.d - y.d);
+      const ts = jobTargets(g).filter((t) => t !== s.cell).map((t) => ({ t, d: daysTo(g, t) })).filter((x) => x.d < Infinity).sort((x, y) => x.d - y.d);
       dest = ts.length ? ts[0].t : -1;
       if (dest < 0) { trader.town(pid); dest = trader.next() ?? -1; }
       provision(g, pid, Math.min(40, Math.ceil((dest >= 0 ? daysTo(g, dest) : 5) * 1.6) + 8));
     },
     next() {
       const s = g.s;
-      const ts = s.jobs.map((q) => questTarget(q, g.a)).filter((t) => t !== s.cell).map((t) => ({ t, d: daysTo(g, t) })).filter((x) => x.d < Infinity).sort((x, y) => x.d - y.d);
+      const ts = jobTargets(g).filter((t) => t !== s.cell).map((t) => ({ t, d: daysTo(g, t) })).filter((x) => x.d < Infinity).sort((x, y) => x.d - y.d);
       if (ts.length) return ts[0].t;
       if (dest >= 0 && dest !== s.cell) return dest;
       const ks = knownPlaces(g);

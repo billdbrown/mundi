@@ -35,7 +35,7 @@ import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
 import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
 import {
   START_DOY, RATES, doyOf, worldParams, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
-  jobsOffered, chartRate, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
+  jobsOffered, shortHere, chartRate, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
   reveal as simReveal, advance as simAdvance, plan as simPlan,
   buy as simBuy, sell as simSell, rest as simRest,
   type Game, type Pending, type Save, type Ui,
@@ -781,6 +781,7 @@ function openTown(pid: number, tab = townTab) {
   const purse = chips([`${ORREL}${fmt(c.orrels)}`, `${cargoUsed(c)} of ${c.capacity} loads`]);
   let body = '';
   if (tab === 'market') {
+    const short = shortHere(g!, p.id);
     body = `${purse}<div class="mkt">
       ${GOODS.map((g, i) => {
         const best = bestKnownSell(a, s.known, i, p.id);
@@ -788,12 +789,12 @@ function openTown(pid: number, tab = townTab) {
         const better = best && best.price > here;
         const k = q[i].buy ? q[i].buy / g.base : 1;
         const hint = k < 0.7 ? '<em class="cheap">cheap here</em>' : k > 1.4 ? '<em class="dear">dear here</em>' : '';
-        const buyable = q[i].buy && q[i].stock >= 1 && c.orrels >= q[i].buy && cargoUsed(c) < c.capacity;
+        const buyable = !short.has(i) && q[i].buy && q[i].stock >= 1 && c.orrels >= q[i].buy && cargoUsed(c) < c.capacity;
         return `<div class="mrow${c.cargo[i] ? ' held' : ''}">
           <div class="g"><b>${g.name}</b>${hint}${better ? `<small class="up">fetches ${best!.price} in ${esc(best!.place.name)}, ${agoText(day - best!.day)}</small>` : ''}</div>
           <button class="sell" data-act="sell" data-g="${i}" ${c.cargo[i] < 1 ? 'disabled' : ''} title="Sell one (shift: five)"><span>sell</span>${q[i].sell}</button>
           <span class="have" title="You carry">${c.cargo[i] || '·'}</span>
-          ${q[i].buy ? `<button class="buy" data-act="buy" data-g="${i}" ${buyable ? '' : 'disabled'} title="Buy one (shift: five)"><span>buy</span>${q[i].buy}</button>` : '<span class="nobuy">not sold</span>'}
+          ${short.has(i) ? '<span class="nobuy" title="Wanted on the notice board: there is none to be had here">none to be had</span>' : q[i].buy ? `<button class="buy" data-act="buy" data-g="${i}" ${buyable ? '' : 'disabled'} title="Buy one (shift: five)"><span>buy</span>${q[i].buy}</button>` : '<span class="nobuy">not sold</span>'}
         </div>`;
       }).join('')}</div>
       <p class="dim small">Prices move as you trade and settle back over a fortnight. Shift-click trades five.</p>`;
