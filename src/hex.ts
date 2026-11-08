@@ -1859,7 +1859,9 @@ function makeCampHere() {
 /** Primundi: a herd grazing, to stalk. They drift about their spot; come too close in the open and
  * each second there's a chance they see you and bolt (less with a keen eye in the caravan). */
 interface Herd { kind: string; x: number; y: number; members: { o: THREE.Object3D; dx: number; dy: number; tx: number; ty: number; h: number }[];
-  flee: [number, number] | null; stalking: boolean; done: boolean; nav: Nav; m: LocalMap }
+  flee: [number, number] | null; stalking: boolean; done: boolean; nav: Nav; m: LocalMap;
+  /** The hunt's been offered on this approach; walk off out of sight to be offered it again. */
+  offered: boolean }
 let herd: Herd | null = null;
 /** Seen within this (map metres, by the town scale), and reached within this. */
 const HERD_NOTICE = 45, HERD_REACH = 12;
@@ -1948,7 +1950,7 @@ function placeHerd(m: LocalMap, n: Nav, K: number) {
     caravan.group.add(o);
     members.push({ o, dx, dy, tx: dx, ty: dy, h });
   }
-  herd = { kind: gameGame, x: at[0], y: at[1], members, flee: null, stalking: false, done: false, nav: n, m };
+  herd = { kind: gameGame, x: at[0], y: at[1], members, flee: null, stalking: false, done: false, nav: n, m, offered: false };
   spots.push({ tab: '', label: ANIMAL_NAMES[gameGame as AnimalKind] ?? 'Game', door: at, top: [at[0], at[1], groundAtMap(m, at[0], at[1]) + 3 * K], centre: at, radius: 6 * K,
     find: 'game', game: gameGame, seen: true, used: false });
 }
@@ -1975,12 +1977,16 @@ function updateHerd(dt: number) {
   }
   const s = spots.find((x) => x.game);
   if (s) { s.centre = [hd.x, hd.y]; s.door = [hd.x, hd.y]; s.top = [hd.x, hd.y, groundAtMap(map, hd.x, hd.y) + 3 * K]; }
-  if (!hd.stalking || hd.done || hd.flee) return;
+  if (hd.done || hd.flee) return;
+  // However you came (their label, or tapping the ground near them), close enough is a hunt.
   const d = Math.hypot(caravan.x - hd.x, caravan.y - hd.y);
-  if (d < HERD_REACH * K) {
-    hd.stalking = false; caravan.stop();
+  if (d > HERD_NOTICE * K) { hd.offered = false; return; }
+  if (hd.offered) return;
+  if (d < HERD_REACH * K * 1.5) {
+    hd.stalking = false; hd.offered = true; caravan.stop();
+    for (const b of spotLayer.children) b.classList.remove('going');
     parent.postMessage({ type: 'primundi-hunt' }, location.origin);
-  } else if (d < HERD_NOTICE * K && Math.random() < dt * (gameKeen ? 0.12 : 0.25)) {
+  } else if (caravan.moving && Math.random() < dt * (gameKeen ? 0.12 : 0.25)) {
     // Seen: they bolt, away from you, and settle again further off.
     hd.stalking = false; caravan.stop();
     const ax = hd.x - caravan.x, ay = hd.y - caravan.y, l = Math.hypot(ax, ay) || 1;
@@ -2418,6 +2424,7 @@ void LAYERS; void L_DEPTH;
   get spots() { return spots; },
   get tradePlaced() { return tradePlaced; },
   get strollers() { return strollers; },
+  get herd() { return herd; }, controls, get K() { return style.town.scale; },
   tap, goTo, goSpot, onScreen, camera, get worldGroup() { return world; },
   resetView, scene, setTilt, setTime, setAround, walker, wind, clouds, csm, waterUniforms, groundTex, canopy, shoreUniforms,
   /** The camera: position, the point looked at, distance (scripts/camtest.mjs). */

@@ -16,7 +16,7 @@ import { makeRng } from '../rng.ts';
 
 const CS = 2;                     // walking grid, metres a cell
 /** The cart model's turn, so its shafts lead. */
-const CART_TURN = -Math.PI / 2;
+const CART_TURN = 0;
 const SQ2 = Math.SQRT2;
 
 export interface NavInput {
