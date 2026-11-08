@@ -24,6 +24,7 @@ import { MAX_QUESTS, canHandIn, offersAt, questTarget, questTitle, type Quest } 
 import { tradesOf, townsfolk, TRADES, type Trade } from './towns.ts';
 import { CAMP_NIGHTS, CAMP_P, folkEncounter, folkIn, gameIn, gameReady, huntEncounter, type AnimalKind, type Folk } from './life.ts';
 import { Traffic, trafficId } from './traffic.ts';
+import { bornIn, landOf } from './crew.ts';
 
 /** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
 export const RATES = [0, 0.22, 0.6, 1.6];
@@ -153,6 +154,8 @@ export interface Game {
 export function trafficOf(g: Game): Traffic { return (g.traffic ??= new Traffic(g.w, g.a, g.seed)); }
 
 export function makeGame(w: World, a: Atlas, game: GameData, seed: number, s: Save, ui: Ui, dice: () => number = () => Math.random()): Game {
+  // Saves from before papers: everyone is from home (no knack: their skills stand as they are).
+  for (const m of s.caravan.members) if (!m.born) bornIn(m, w, a, a.places[s.home], false);
   return { w, a, game, seed, s, revealed: new Set(s.revealed), dice, ui, from: -1, warned: { water: false, rations: false } };
 }
 
@@ -160,6 +163,7 @@ export function makeGame(w: World, a: Atlas, game: GameData, seed: number, s: Sa
 export function newGame(w: World, a: Atlas, seed: number, n: { name: string; origin: Origin; bias: StartBias; world: string; setup?: boolean }): Save {
   const home = a.places[pickHome(w, a.places, n.bias, seed)];
   const caravan = newCaravan(n.name, n.origin, seed);
+  for (const m of caravan.members) bornIn(m, w, a, home);
   const s: Save = {
     v: 2, world: n.world, bias: n.bias, home: home.id, caravan, day: 0, cell: home.cell, route: [], progress: 0,
     revealed: [], charted: 0, known: {}, stocks: {}, jobs: [], taken: [], jobsDone: 0, maps: [], finds: {}, log: [], speed: 0, draws: 0, over: false,
@@ -451,6 +455,7 @@ export function enter(g: Game, cell: number) {
   g.from = s.cell;
   s.cell = cell;
   s.route.shift();
+  for (const m of living(s.caravan)) { const k = (m.walked ??= []); if (!k.includes(cell)) k.push(cell); }
   s.progress = 0;
   // A route through the storm was a guess. When what's just been seen of it turns out worse than
   // guessed, think again; otherwise keep going, so the caravan doesn't wander between guesses.
@@ -538,7 +543,7 @@ export function newDay(g: Game, resting: boolean) {
   const atWater = hasWater(g.w, g.a, s.cell);
   // In a town you eat what you buy; on the road the land helps.
   const forage = g.a.placeAt[s.cell] >= 0 ? 1 : forageAt(g, s.cell);
-  for (const n of passDay(c, atWater, resting, forage, g.dice)) { g.ui.toast(n); log(g, n); }
+  for (const n of passDay(c, atWater, resting, forage, g.dice, landOf(g.w, s.cell))) { g.ui.toast(n); log(g, n); }
   const wd = c.water / Math.max(1, thirst(c)), rd = c.rations / Math.max(1, appetite(c));
   const warned = g.warned;
   if (wd <= 2 && !atWater && !warned.water && c.water > 0) { warned.water = true; g.ui.halt(); g.ui.toast(`Water for ${Math.floor(wd)} more days.`, 5000); }
@@ -810,7 +815,7 @@ export function townRecruits(g: Game, pid: number): Recruit[] {
   const leans: Lean[] = ['hand', 'fighter', p.town ? 'scout' : 'hunter'];
   const t = LEAN_OF_TRADE[tradesOf(g.w, g.a, p)[0]];
   if (t && !leans.includes(t)) leans.push(t);
-  return leans.map((lean, i) => { const m = makeMember(names(), lean, rng, Math.floor(g.s.day)); return { m, cost: hireCost(m), lean, i }; })
+  return leans.map((lean, i) => { const m = bornIn(makeMember(names(), lean, rng, Math.floor(g.s.day)), g.w, g.a, p); return { m, cost: hireCost(m), lean, i }; })
     .filter((r) => g.s.finds[hireKey(g, pid, r.i)] === undefined);
 }
 export function hire(g: Game, pid: number, i: number): boolean {

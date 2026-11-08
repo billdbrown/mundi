@@ -12,6 +12,7 @@ import type { World } from '../world.ts';
 import type { Atlas, Place } from './atlas.ts';
 import { hireCost, makeMember, type Lean, type Member, type Origin } from './caravan.ts';
 import { tradesOf } from './towns.ts';
+import { bornIn } from './crew.ts';
 
 /** Someone in the tavern looking for a place in a caravan. */
 export interface Candidate { m: Member; cost: number; lean: Lean }
@@ -44,7 +45,7 @@ export function candidates(w: World, a: Atlas, home: Place, origin: Origin, seed
   // Shuffle the wishes, so no two share one.
   for (let i = wishes.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [wishes[i], wishes[j]] = [wishes[j], wishes[i]]; }
   return leans.map((lean, i) => {
-    const m = makeMember(names(), lean, rng);
+    const m = bornIn(makeMember(names(), lean, rng), w, a, home);
     m.wish = wishes[i];
     return { m, cost: hireCost(m), lean };
   });

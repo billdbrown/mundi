@@ -30,6 +30,7 @@ import { Thunder } from './thunder.ts';
 import { BIASES, type StartBias } from './start.ts';
 import { buildAtlas, GOODS, ringCells, type Atlas, type Place } from './atlas.ts';
 import { bestKnownSell, quotes, remember } from './market.ts';
+import { crewHtml, type Layout } from './sheet.ts';
 import { AMBITION_GOAL, BANDIT_FIGHT, BEASTS, crewDiff, crewSheet, memberStats, type Stat, ORIGIN_CAPACITY, ORIGINS, TRAITS, type Beasts, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
 import { FOLK_LABEL, type Folk, type FolkKind } from './life.ts';
@@ -1224,6 +1225,48 @@ function gameOver() {
 }
 
 let journalTab = 'work';
+// The crew's papers (sheet.ts): which layout, whether globes show, the roster's chosen row.
+let sheetLayout: Layout = (['papers', 'roster', 'ledger'] as const).find((l) => l === localStorage.getItem('primundi.layout')) ?? 'papers';
+let showGlobes = localStorage.getItem('primundi.globes') === '1';
+let rosterSel = -1;
+/** Each person's globe: the hexes they've walked (gold) over what the caravan has seen (grey),
+ * turned so where they are now faces you. */
+function drawGlobes() {
+  if (!save || !world) return;
+  const P = world.grid.centers, s = save;
+  for (const cv of panel.querySelectorAll<HTMLCanvasElement>('canvas.globe')) {
+    const m = s.caravan.members[Number(cv.dataset.m)], ctx = cv.getContext('2d');
+    if (!m || !ctx) continue;
+    const walked = m.walked ?? [], at = s.cell;
+    const cx = P[at * 3], cy = P[at * 3 + 1], cz = P[at * 3 + 2];
+    // A frame with `at` facing the viewer and north roughly up.
+    let rx = -cz, ry = 0, rz = cx; const rl = Math.hypot(rx, rz) || 1; rx /= rl; rz /= rl;
+    const ux = cy * rz - cz * ry, uy = cz * rx - cx * rz, uz = cx * ry - cy * rx;
+    const W = cv.width, R0 = W / 2 - 3;
+    // Zoomed to fit where they've been: a newcomer's few hexes fill the disc, a veteran's whole globe shows.
+    let far = 0.02;
+    for (const c of walked) { const x = P[c * 3], y = P[c * 3 + 1], z = P[c * 3 + 2]; far = Math.max(far, Math.hypot(x * rx + y * ry + z * rz, x * ux + y * uy + z * uz)); }
+    const zoom = Math.min(8, Math.max(1, 0.7 / far)), R = R0 * zoom;
+    ctx.clearRect(0, 0, W, W);
+    ctx.save(); ctx.beginPath(); ctx.arc(W / 2, W / 2, R0, 0, Math.PI * 2); ctx.clip();
+    ctx.fillStyle = '#0e1820'; ctx.fillRect(0, 0, W, W);
+    ctx.fillStyle = '#16212b'; ctx.beginPath(); ctx.arc(W / 2, W / 2, R, 0, Math.PI * 2); ctx.fill();
+    const sz = Math.min(2.2, Math.max(1, zoom * 0.5));
+    const dot = (c: number, r: number) => {
+      const x = P[c * 3], y = P[c * 3 + 1], z = P[c * 3 + 2];
+      if (x * cx + y * cy + z * cz < 0.05) return;
+      r *= sz;
+      ctx.fillRect(W / 2 + (x * rx + y * ry + z * rz) * R - r / 2, W / 2 - (x * ux + y * uy + z * uz) * R - r / 2, r, r);
+    };
+    ctx.fillStyle = 'rgba(160, 175, 190, .28)';
+    for (const c of s.revealed) if (world.water[c] === 0) dot(c, 1.6);
+    ctx.fillStyle = '#f2c14e';
+    for (const c of walked) dot(c, 2.4);
+    ctx.fillStyle = '#fff'; dot(at, 3);
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,.15)'; ctx.beginPath(); ctx.arc(W / 2, W / 2, R0, 0, Math.PI * 2); ctx.stroke();
+  }
+}
 function showJournal(tab = journalTab) {
   if (!save || !atlas || !world) return;
   journalTab = tab;
@@ -1250,7 +1293,7 @@ function showJournal(tab = journalTab) {
       }).join('') : '<p class="dim">No jobs in hand. Town notice boards have work.</p>'}`;
   } else if (tab === 'caravan') {
     body = `<p class="dim small">${living(c).length} people, ${mood}. ${cargoUsed(c)} of ${c.capacity} loads carried.</p>
-      <ul class="people">${c.members.filter((m) => m.alive).map((m) => `<li><span class="who"><b>${esc(m.name)}</b><small><span class="chips">${stats(memberStats(m))}</span>${m.wish ? `<span class="wish">${esc(m.wish.charAt(0).toUpperCase() + m.wish.slice(1))}</span>` : ''}</small></span>${m.lead ? '<span class="role lead">Leader</span>' : ''}${m.health !== 'well' ? `<span class="hp">${m.health}</span>` : ''}</li>`).join('')}</ul>
+      ${crewHtml(sheetLayout, { c, day: s.day, place: (pid) => a.places[pid]?.name ?? '?', globe: showGlobes }, rosterSel)}
       ${c.members.some((m) => !m.alive) ? `<p class="dim small">Lost on the road: ${c.members.filter((m) => !m.alive).map((m) => esc(m.name)).join(', ')}.</p>` : ''}
       ${c.cargo.some((x) => x) ? `<h3>Cargo</h3>${chips(c.cargo.map((n, g) => (n ? `${n} ${GOODS[g].name.toLowerCase()}` : '')).filter(Boolean))}` : ''}`;
   } else {
@@ -1259,8 +1302,18 @@ function showJournal(tab = journalTab) {
   showPanel('journal', `${close}${head(`Journal · ${o.label}`, esc(c.name), `From ${esc(a.places[s.home].name)} · ${dateText(s.day, north())}`)}
     <nav class="tabs">${tabs.map(([k, l]) => `<button data-act="jtab" data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</nav>
     <div class="tab-body">${body}</div>`);
+  if (tab === 'caravan' && showGlobes) drawGlobes();
 }
 
+// The roster's rows and the globes' switch (not buttons).
+panel.addEventListener('click', (e) => {
+  const tr = (e.target as HTMLElement).closest<HTMLElement>('tr[data-act="pick"]');
+  if (tr) { rosterSel = Number(tr.dataset.i); showJournal('caravan'); }
+});
+panel.addEventListener('change', (e) => {
+  const t = e.target as HTMLInputElement;
+  if (t.dataset.act === 'globe') { showGlobes = t.checked; localStorage.setItem('primundi.globes', showGlobes ? '1' : '0'); showJournal('caravan'); }
+});
 panel.addEventListener('click', (e) => {
   const b = (e.target as HTMLElement).closest('button');
   if (!b || !save || !world || !atlas) return;
@@ -1303,6 +1356,7 @@ panel.addEventListener('click', (e) => {
       break;
     }
     case 'jtab': showJournal(b.dataset.tab); break;
+    case 'layout': sheetLayout = b.dataset.l as Layout; localStorage.setItem('primundi.layout', sheetLayout); showJournal('caravan'); break;
     case 'round': {
       const r = standRound(g!);
       // The rumour, from whoever pours.
@@ -1439,7 +1493,7 @@ function toast(text: string, ms = 3500) {
   get speed() { return speed; },
   reveal: (cells: number[]) => reveal(cells),
   revealRing: () => reveal(frontier()),
-  travelTo, setSpeed, advance, openTown, openHex, closeHex, plan,
+  travelTo, setSpeed, advance, openTown, openHex, closeHex, plan, showJournal,
   /** What there is to find in a hex (finds.ts). */
   findsIn: (c: number) => (world && atlas ? findsIn(world, atlas, c, params.seed) : []),
   /** Others on the road in a hex this week, not yet met (life.ts). */

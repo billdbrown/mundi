@@ -38,7 +38,11 @@ export interface Member { name: string; skills: Skills; trait?: Trait; health: '
   /** Who the caravan follows (and who takes over when they die: sim.ts appoint). */
   lead?: boolean;
   /** What they want from the road, in their words (opening.ts). Flavour, for now. */
-  wish?: string }
+  wish?: string;
+  /** Where they're from (crew.ts bornIn): a place, its land, its trade. */
+  born?: { pid: number; land: string; trade?: string };
+  /** Every hex they've walked with you, in order of first visit (sim.ts enter): their own globe. */
+  walked?: number[] }
 
 /** What kind of person a recruit is: one or two strong skills, the rest low. */
 export type Lean = 'fighter' | 'scout' | 'hunter' | 'trader' | 'mender' | 'hand';
@@ -145,8 +149,11 @@ export const living = (c: Caravan) => c.members.filter((m) => m.alive);
 export const leader = (c: Caravan) => c.members.find((m) => m.alive && m.lead) ?? null;
 export const cargoUsed = (c: Caravan) => c.cargo.reduce((a, b) => a + b, 0);
 export const waterCap = (c: Caravan) => living(c).length * WATER_DAYS;
-/** Rations eaten a day (a ration is a person's food for a day; the frugal eat less). */
-export const appetite = (c: Caravan) => living(c).reduce((a, m) => a + (m.trait === 'frugal' ? 0.7 : 1), 0);
+/** Born to a kind of country (crew.ts): eats this share of a ration while the caravan is in it. */
+export const BORN_EATS = 0.9;
+/** Rations eaten a day (a ration is a person's food for a day; the frugal eat less, and so do those
+ * born to the country the caravan is in: crew.ts BORN_EATS). */
+export const appetite = (c: Caravan, land?: string) => living(c).reduce((a, m) => a + (m.trait === 'frugal' ? 0.7 : 1) * (land && m.born?.land === land ? BORN_EATS : 1), 0);
 export const thirst = (c: Caravan) => living(c).length;
 
 /** What a Fight pip counts for in a fight (strength()): a guard of old was Fight 3. */
@@ -186,7 +193,8 @@ export const barterEdge = (c: Caravan) => (best(c, 'barter') - 2) * BARTER_STEP;
 export const SCOUT_SIGHT = [3, 5];
 /** What one person is, as the rules apply it: the tavern's and the journal's sheet. */
 export function memberStats(m: Member): Stat[] {
-  const out: Stat[] = SKILLS.map((s) => ({ k: SKILL_NAMES[s], v: String(m.skills[s]), good: m.skills[s] >= 3 ? true : null }));
+  // Only what they're good at: a 1 is everyone's floor, and reads as noise.
+  const out: Stat[] = SKILLS.filter((s) => m.skills[s] > 1).map((s) => ({ k: SKILL_NAMES[s], v: String(m.skills[s]), good: m.skills[s] >= 3 ? true : null }));
   if (m.trait === 'cheerful') out.push({ k: 'Spirits', v: '+0.5/day', good: true });
   if (m.trait === 'steady') out.push({ k: 'Mends', v: '×1.5', good: true });
   out.push({ k: 'Eats', v: m.trait === 'frugal' ? '0.7/day' : '1/day', good: false });
@@ -232,10 +240,10 @@ export function pace(c: Caravan): number {
 /** One day passes. Returns notes worth telling the player. */
 /** `forage`: the share of the day's food the caravan has to take from its stores; the rest it
  * finds (game, fish, fruit, a farm that sells eggs), more in kind country than in hard. */
-export function passDay(c: Caravan, atWater: boolean, resting: boolean, forage = 1, dice: () => number = Math.random): string[] {
+export function passDay(c: Caravan, atWater: boolean, resting: boolean, forage = 1, dice: () => number = Math.random, land?: string): string[] {
   const notes: string[] = [];
   const hadR = c.rations > 0, hadW = c.water > 0;
-  c.rations = Math.max(0, c.rations - appetite(c) * forage);
+  c.rations = Math.max(0, c.rations - appetite(c, land) * forage);
   if (atWater) c.water = waterCap(c);
   else c.water = Math.max(0, c.water - thirst(c));
   let dm = resting ? 3 : 0.3;

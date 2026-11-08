@@ -34,7 +34,7 @@ test('harsh starts are harsher than gentle ones', () => {
 import { simulateHistory } from '../src/civ.ts';
 import { buildAtlas, findPath, stepDays, terrainCost, GOODS, G } from '../src/primundi/atlas.ts';
 import { quotes, trade, stockAt } from '../src/primundi/market.ts';
-import { newCaravan, passDay, living, strength } from '../src/primundi/caravan.ts';
+import { newCaravan, passDay, living, strength, appetite } from '../src/primundi/caravan.ts';
 import { ENCOUNTERS, applyEffect, contextAt } from '../src/primundi/encounters.ts';
 import { pickHome } from '../src/primundi/start.ts';
 import { makeRng } from '../src/rng.ts';
@@ -444,13 +444,13 @@ test("the tavern's stat sheet says what the rules do", () => {
   const c = newCaravan('Test', 'traders', 5);
   // Each person's Fight is what strength() counts for them.
   for (const m of living(c)) {
-    const f = +memberStats(m).find((x) => x.k === 'Fight')!.v;
+    const f = +(memberStats(m).find((x) => x.k === 'Fight')?.v ?? 1);
     assert.equal(f, m.skills.fight);
   }
   const sheet = Object.fromEntries(crewSheet(c).map((x) => [x.k, x.v]));
   assert.equal(+sheet.Fight, +strength(c).toFixed(1));
   // A scout shows; frugal eats less.
-  assert.ok(memberStats(living(c)[0]).some((x) => x.k === 'Scout'));
+  assert.ok(memberStats(living(c)[0]).some((x) => x.k === 'Barter'));
   assert.equal(memberStats({ ...living(c)[0], trait: 'frugal' }).find((x) => x.k === 'Eats')!.v, '0.7/day');
 });
 
@@ -495,6 +495,24 @@ test('the tavern shows what someone changes, and recruits lean the way they say'
   const d = Object.fromEntries(crewDiff(c, makeMember('F', 'fighter', makeRng(1))).map((x) => [x.k, x.v]));
   assert.match(d.Fight, /^10\.5 → 1[34]\.5$/);
   assert.match(d.Eats, /→/);
+});
+
+import { bornIn, KNACK, landOf } from '../src/primundi/crew.ts';
+test('papers: everyone is from somewhere, the knack is one pip of the trade, never Fight', () => {
+  for (const p of atlas.places.slice(0, 30)) {
+    const m = makeMember('X', 'hand', makeRng(p.id)), before = { ...m.skills };
+    bornIn(m, hw, atlas, p);
+    assert.equal(m.born!.pid, p.id);
+    assert.equal(m.born!.land, landOf(hw, p.cell));
+    assert.equal(m.skills.fight, before.fight);
+    const k = KNACK[m.born!.trade as keyof typeof KNACK];
+    if (k) assert.equal(m.skills[k], Math.min(5, before[k] + 1));
+  }
+  // Born to the country: eats less there, not elsewhere.
+  const c = newCaravan('T', 'traders', 2);
+  for (const m of c.members) m.born = { pid: 0, land: 'desert' };
+  assert.ok(Math.abs(appetite(c, 'desert') - appetite(c) * 0.9) < 1e-9);
+  assert.equal(appetite(c, 'forest'), appetite(c));
 });
 
 import { Traffic } from '../src/primundi/traffic.ts';
