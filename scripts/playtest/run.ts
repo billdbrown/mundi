@@ -17,7 +17,7 @@ import { findReady } from '../../src/primundi/finds.ts';
 import { MAX_QUESTS, canHandIn, questTarget } from '../../src/primundi/quests.ts';
 import type { StartBias } from '../../src/primundi/start.ts';
 import {
-  RATES, worldParams, newGame, meetFolk, makeGame, doyOf, setRoute, plan, advance, resolve, jobHere, findHere, findsAt,
+  RATES, worldParams, newGame, quickSetup, meetFolk, makeGame, doyOf, setRoute, plan, advance, resolve, jobHere, findHere, findsAt,
   buy, sell, shortHere, buyRations, sellCharts, takeJob, handIn, jobsOffered, rest, hire, appoint, angle, cellAngleOf,
   type Game, type Pending, type Ui,
 } from '../../src/primundi/sim.ts';
@@ -336,9 +336,11 @@ export function playRun(opts: RunOpts): RunResult {
     folk(_cell, f) { queue.push(meetFolk(g, f)); },
     folkMet() {},
   };
-  const s = newGame(w, a, seed, { name: 'Bot', origin: opts.origin, bias: opts.bias, world: opts.world });
+  // The game a newcomer plays: building the caravan in town (Choose for me), then the errand.
+  const s = newGame(w, a, seed, { name: 'Bot', origin: opts.origin, bias: opts.bias, world: opts.world, setup: true });
   const rng = makeRng((seed * 31 + opts.run * 7919 + opts.bot.length * 104729) >>> 0);
   const g = makeGame(w, a, gd, seed, s, ui, makeRng((seed * 13 + opts.run * 1009) >>> 0));
+  quickSetup(g);
   const bot = makeBot(opts.bot, g, rng);
   const out: RunResult = { opts, home: a.places[s.home].name, days: [], encounters: [], deaths: [], events: [0], ambitionDay: null, wiped: null, trips: 0, ledger: {}, stuck: 0, ms: 0 };
   ledger = out.ledger;

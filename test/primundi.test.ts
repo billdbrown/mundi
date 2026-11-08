@@ -417,7 +417,7 @@ test('the opening: six people to choose from, each with their own wish, and a pu
   const l = firstLoads(g)[0];
   if (l) assert.ok(setupLoad(g, l.gi, l.n) > 0);
   const q = finishSetup(g);
-  assert.ok(q && q.kind === 'deliver' && s.jobs.length === 1 && !s.setup);
+  assert.ok(q && q.kind === 'deliver' && s.jobs.filter((x) => x.kind === 'deliver').length === 1 && !s.setup);
   assert.equal(s.caravan.rations, s.caravan.members.length * 30);
 });
 test('the opening: every quick start can set out, and the first road has someone on it', () => {
@@ -478,4 +478,38 @@ test('traders keep to the roads, go town to town, and are the same on a reload',
   // Someone in a hex is someone on the road there.
   const r = t1.onRoad(30)[0];
   assert.ok(t1.inCell(r.cell, 30).some((x) => x.trader.i === r.trader.i));
+});
+
+import { FIRST_LOAD_GAIN } from '../src/primundi/sim.ts';
+test('a first load pays: sold where it says, it makes what it says', () => {
+  let offered = 0, starts = 0;
+  const gains: number[] = [];
+  for (const origin of ['traders', 'cartographers'] as const) for (let seed = 1; seed <= 12; seed++) {
+    const s = simNewGame(hw, atlas, seed, { name: 'T', origin, bias: 'any', world: 't', setup: true });
+    const g = makeGame(hw, atlas, hgd, seed, s, quietUi(), makeRng(seed));
+    starts++;
+    setupBeasts(g, 'mules');
+    const l = firstLoads(g)[0];
+    if (!l) continue;
+    offered++;
+    const before = s.caravan.orrels;
+    const n = setupLoad(g, l.gi, l.n);
+    assert.equal(n, l.n);
+    const cost = before - s.caravan.orrels;
+    // Carry it there and sell it all.
+    finishSetup(g);
+    assert.ok(setRoute(g, atlas.places[l.at].cell));
+    while (s.route.length) enter(g, s.route[0]);
+    s.day = Math.max(s.day, 0);
+    // An order is handed in; a market load is sold.
+    const before2 = s.caravan.orrels;
+    if (l.order) assert.ok(handIn(g, l.at, `order-${s.home}`), `${origin} ${seed}: order not handed in`);
+    const got = l.order ? s.caravan.orrels - before2 : simSell(g, l.at, l.gi, n);
+    const gain = got / cost - 1;
+    gains.push(gain);
+    assert.ok(gain >= FIRST_LOAD_GAIN - 0.08, `${origin} ${seed}: ${GOODS[l.gi].name} cost ${cost}, fetched ${got} (${Math.round(gain * 100)}%)`);
+  }
+  // Most starts have a first load to offer.
+  // (A start whose home has nothing in stock to speak of has none.)
+  assert.ok(offered >= starts * 0.9, `first loads offered in ${offered} of ${starts} starts; gains ${gains.map((x) => Math.round(x * 100)).join(',')}`);
 });

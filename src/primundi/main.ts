@@ -335,7 +335,7 @@ function setupBody(tab: string, purse: string, body: string): string {
   }
   if (tab === 'market') {
     const ls = firstLoads(g);
-    return `<h3>A first load</h3>${ls.length ? `<div class="opts">${ls.map((l) => opt('load', `${l.n} ${GOODS[l.gi].name.toLowerCase()}`, `Fetches about ${l.each} each in ${esc(atlas!.places[l.at].name)}`, `${ORREL}${l.cost}`, `data-g="${l.gi}" data-n="${l.n}"`, c.orrels < l.cost || cargoUsed(c) + l.n > c.capacity)).join('')}</div>`
+    return `<h3>A first load</h3>${ls.length ? `<div class="opts">${ls.map((l) => opt('load', `${l.n} ${GOODS[l.gi].name.toLowerCase()}${l.order ? ' · an order' : ''}`, `<span class="chips">${stats([{ k: esc(atlas!.places[l.at].name), v: `${l.each} each`, good: null }, { k: 'Gain', v: `+${Math.round(l.gain * 100)}%`, good: true }])}</span>`, `${ORREL}${l.cost}`, `data-g="${l.gi}" data-n="${l.n}"`, c.orrels < l.cost || cargoUsed(c) + l.n > c.capacity)).join('')}</div>`
       : '<p class="dim">Nothing here sells much better anywhere you know of yet.</p>'}${!st.beasts ? '<p class="dim small">Beasts first, in the yard at Home: they decide how much you can carry.</p>' : ''}${body}`;
   }
   return body;

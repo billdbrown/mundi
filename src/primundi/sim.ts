@@ -207,31 +207,74 @@ export function setupBeasts(g: Game, b: Beasts): boolean {
   st.beasts = b; c.beasts = b; c.capacity = cap;
   return true;
 }
-/** A first load: a good home makes cheaply and a neighbour you know pays more for. */
-export interface Load { gi: number; n: number; cost: number; at: number; each: number }
+/** A first load: a good home makes cheaply and a neighbour you know pays more for. `gain`: what
+ * selling it all there should make over its cost, as a share (0.4 is 40%). */
+export interface Load { gi: number; n: number; cost: number; at: number; each: number; gain: number;
+  /** Not the market's price but a buyer's order: they pay `each` a unit on delivery (a procure job). */
+  order?: boolean }
+/** What an order pays over the load's cost. */
+export const ORDER_GAIN = 0.5;
+/** A first load has to pay clearly (Bill, 2026-11-07: salt bought at 5 sold at 6 was no lesson). */
+export const FIRST_LOAD_GAIN = 0.3;
 export function firstLoads(g: Game): Load[] {
   const s = g.s, home = g.a.places[s.home], q = quotes(g.w, home, s.stocks, s.day, doyOf(s.day));
-  const out: (Load & { k: number })[] = [];
+  const out: Load[] = [];
+  // Where a load could go: the places you know, and how long to get there.
+  const dests = Object.keys(s.known).map(Number).filter((pid) => pid !== home.id)
+    .map((pid) => ({ pid, p: plan(g, g.a.places[pid].cell) })).filter((x) => x.p);
   for (let gi = 0; gi < GOODS.length; gi++) {
-    if (!q[gi].buy || q[gi].stock < 6) continue;
-    let best: { at: number; each: number } | null = null;
-    for (const [pid, kn] of Object.entries(s.known)) {
-      if (Number(pid) === home.id) continue;
-      const sell = kn.sell[gi] ?? 0;
-      if (sell > (best?.each ?? 0)) best = { at: Number(pid), each: sell };
+    if (gi === G.relics || !q[gi].buy || q[gi].stock < 6) continue;
+    let best: Load | null = null;
+    for (const { pid, p } of dests) {
+      const each = s.known[pid].sell[gi] ?? 0;
+      if (each <= q[gi].buy) continue;
+      // Priced as the markets really trade, unit by unit: buying here pushes the price up, selling
+      // there pushes it down. Fewer, if a full load would eat the margin.
+      const day = s.day + p!.days, at = g.a.places[pid];
+      for (let n = Math.min(8, Math.floor(q[gi].stock / 2)); n >= 3; n--) {
+        const cost = trade(g.w, home, structuredClone(s.stocks), s.day, doyOf(s.day), gi, n);
+        const got = -trade(g.w, at, structuredClone(s.stocks), day, doyOf(day), gi, -n);
+        const gain = got / cost - 1;
+        if (gain >= FIRST_LOAD_GAIN) { if (!best || got - cost > best.n * best.each - best.cost) best = { gi, n, cost, at: pid, each: Math.round(got / n), gain }; break; }
+      }
     }
-    if (!best || best.each <= q[gi].buy * 1.15) continue;
-    const n = Math.min(8, Math.floor(q[gi].stock / 2));
-    out.push({ gi, n, cost: q[gi].buy * n, at: best.at, each: best.each, k: best.each / q[gi].buy });
+    if (best) out.push(best);
   }
-  return out.sort((x, y) => y.k - x.k).slice(0, 3);
+  out.sort((x, y) => (y.n * y.each - y.cost) - (x.n * x.each - x.cost));
+  // Where no market pays well enough (neighbouring villages often price alike), someone in the
+  // errand's town has put in an order for what home makes cheaply: the first load still pays.
+  if (!out.length) {
+    const to = errandTo(g);
+    let gi = -1, k = Infinity;
+    for (let x = 0; x < GOODS.length; x++) {
+      if (x === G.relics || !q[x].buy || q[x].stock < 6 || shortHere(g, s.home).has(x)) continue;
+      const r = q[x].buy / GOODS[x].base + x * 1e-6;
+      if (r < k) { k = r; gi = x; }
+    }
+    if (to && gi >= 0) {
+      const n = Math.min(6, Math.floor(q[gi].stock / 2));
+      const cost = trade(g.w, home, structuredClone(s.stocks), s.day, doyOf(s.day), gi, n);
+      const pay = Math.max(cost + 6, Math.round(cost * (1 + ORDER_GAIN)));
+      out.push({ gi, n, cost, at: to.pid, each: Math.round(pay / n), gain: Math.round(pay / n) * n / cost - 1, order: true });
+    }
+  }
+  return out.slice(0, 3);
 }
 /** Buy a first load (it moves the price as any buying does). The number bought. */
 export function setupLoad(g: Game, gi: number, n: number): number {
   const st = g.s.setup;
   if (!st) return 0;
+  const l = firstLoads(g).find((x) => x.gi === gi && x.n === n);
   const got = buy(g, g.s.home, gi, n);
   if (got && !st.loads.includes(gi)) st.loads.push(gi);
+  if (got && l?.order && !g.s.jobs.some((q) => q.id === `order-${g.s.home}`)) {
+    const at = g.a.places[l.at];
+    const giver = townsfolk(at, g.seed, nameMaker(g.seed * 101 + at.id * 7)).market?.name ?? `A buyer in ${at.name}`;
+    const q: Quest = { id: `order-${g.s.home}`, kind: 'procure', giver, from: at.id, good: gi, qty: got, reward: l.each * got, taken: g.s.day };
+    g.s.jobs.push(q); g.s.taken.push(q.id);
+    log(g, `Took on: ${questTitle(q, g.a)}, an order from ${giver} of ${at.name}.`);
+    g.ui.jobsChanged();
+  }
   return got;
 }
 export const setupReady = (s: Save) => !!s.setup && s.setup.hired.length > 0 && !!s.setup.beasts;
@@ -246,10 +289,15 @@ export function finishSetup(g: Game): Quest | null {
   return giveErrand(g);
 }
 /** The first errand: a letter to the nearest place you know, paid on delivery. */
+/** Where the first errand goes: the nearest place you know, by the days to get there. */
+function errandTo(g: Game): { pid: number; p: { days: number } } | null {
+  const s = g.s;
+  return Object.keys(s.known).map(Number).filter((pid) => pid !== s.home)
+    .map((pid) => ({ pid, p: plan(g, g.a.places[pid].cell)! })).filter((x) => x.p).sort((x, y) => x.p.days - y.p.days)[0] ?? null;
+}
 function giveErrand(g: Game): Quest | null {
   const s = g.s, home = g.a.places[s.home];
-  const to = Object.keys(s.known).map(Number).filter((pid) => pid !== home.id)
-    .map((pid) => ({ pid, p: plan(g, g.a.places[pid].cell) })).filter((x) => x.p).sort((x, y) => x.p!.days - y.p!.days)[0];
+  const to = errandTo(g);
   if (!to) return null;
   const giver = townsfolk(home, g.seed, nameMaker(g.seed * 101 + home.id * 7)).work?.name ?? 'Someone at home';
   const q: Quest = { id: `first-${home.id}`, kind: 'deliver', giver, from: home.id, to: to.pid, item: 'sealed letter', reward: Math.round(30 + to.p!.days * 8), taken: s.day };
