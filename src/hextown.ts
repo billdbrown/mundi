@@ -12,6 +12,7 @@ import type { World } from './world.ts';
 import { WATER_OCEAN } from './world.ts';
 import type { History } from './civ.ts';
 import { popAt, realmAt, HISTORY_YEARS } from './civ.ts';
+import { townTheme } from './hexhouses.ts';
 import type { Noise3 } from './noise.ts';
 
 export interface TownContext {
@@ -35,8 +36,9 @@ export interface TownContext {
 }
 
 /** Per house: x, y, h (ground), rotation, width, depth, wall height, colour (0..1), kind (0 a house,
- * 1..3 the landmark on a village's, town's or city's square), people (the realm + 1, 0 for none). */
-export const HOUSE_STRIDE = 10;
+ * 1..3 the landmark on a village's, town's or city's square), people (the realm + 1, 0 for none),
+ * theme (hexhouses.ts THEMES: the town's look, from its land and size). */
+export const HOUSE_STRIDE = 11;
 
 /** The small things of town life (hexhouses.ts draws them from the pack's props, in this order):
  * per prop x, y, ground, heading, kind, size (the wider side, metres). */
@@ -79,7 +81,7 @@ export function layoutTowns(c: TownContext): Towns {
     .map((s) => {
       const i = indexOf.get(s.cell)!, pop = popAt(s, HISTORY_YEARS);
       const n = Math.round(Math.max(8, Math.min(220, Math.sqrt(pop) * 2.2)));
-      return { s, x: cellXY[i * 2], y: cellXY[i * 2 + 1], pop, n, r: 45 + 10 * Math.sqrt(n), people: realmAt(s, HISTORY_YEARS) + 1 };
+      return { s, x: cellXY[i * 2], y: cellXY[i * 2 + 1], pop, n, r: 45 + 10 * Math.sqrt(n), people: realmAt(s, HISTORY_YEARS) + 1, theme: townTheme(w, s.cell, pop) };
     });
   // The square goes on level, dry ground near the cell's middle, not wherever the middle falls: a
   // village's square stood on top of a knoll with its houses round the foot (2026-11-06).
@@ -256,7 +258,7 @@ export function layoutTowns(c: TownContext): Towns {
     // The square, and on it the place's landmark: a well, a hall, a great building, by its size.
     const tier = t.pop < 1500 ? 1 : t.pop < 5000 ? 2 : 3, lw = [8, 12, 16][tier - 1];
     claim(t.x, t.y, 1, 0, 26, 26, 2);
-    if (!wet(t.x, t.y)) houses.push(t.x, t.y, hAt(t.x, t.y), c.rng() * Math.PI * 2, lw, lw, 6 + tier * 3, c.rng(), tier, t.people);
+    if (!wet(t.x, t.y)) houses.push(t.x, t.y, hAt(t.x, t.y), c.rng() * Math.PI * 2, lw, lw, 6 + tier * 3, c.rng(), tier, t.people, t.theme);
     // Life on the square: a well beside the hall, stalls in a market town, a cart, benches.
     const sa = c.rng() * Math.PI * 2;
     if (tier > 1) prop(t.x + Math.cos(sa) * 10, t.y + Math.sin(sa) * 10, c.rng() * 6.28, P_WELL, 2.4);
@@ -298,7 +300,7 @@ export function layoutTowns(c: TownContext): Towns {
         let placed = false;
         if (keep && slopeAt(hx, hy) < 0.45 && rectFree(hx, hy, ux, uy, w, d)) {
           claim(hx, hy, ux, uy, w, d, 1);
-          houses.push(hx, hy, hAt(hx, hy), facing(-nx, -ny), w, d, 3 + 1.5 * c.rng() + big * 2.5, c.rng(), 0, t.people);
+          houses.push(hx, hy, hAt(hx, hy), facing(-nx, -ny), w, d, 3 + 1.5 * c.rng() + big * 2.5, c.rng(), 0, t.people, t.theme);
           counts[ti]++;
           placed = true;
           // The yard behind: a garden in most, smaller in the middle of a town.
@@ -346,7 +348,7 @@ export function layoutTowns(c: TownContext): Towns {
       const w = 6 + 3 * c.rng(), d = 5 + 2.5 * c.rng();
       if (slopeAt(hx, hy) > 0.45 || !rectFree(hx, hy, ux, uy, w, d)) continue;
       claim(hx, hy, ux, uy, w, d, 1);
-      houses.push(hx, hy, hAt(hx, hy), facing(-nx, -ny), w, d, 3 + 1.5 * c.rng(), c.rng(), 0, t.people);
+      houses.push(hx, hy, hAt(hx, hy), facing(-nx, -ny), w, d, 3 + 1.5 * c.rng(), c.rng(), 0, t.people, t.theme);
       counts[ti]++;
       const gd = 6 + c.rng() * 8, gx = hx + nx * (d / 2 + 0.8 + gd / 2), gy = hy + ny * (d / 2 + 0.8 + gd / 2);
       if (c.rng() < 0.7 && rectFree(gx, gy, ux, uy, w, gd)) { claim(gx, gy, ux, uy, w, gd, 3); gardens.push({ cx: gx, cy: gy, ax: ux, ay: uy, w, d: gd, hedge: c.rng() < 0.6, town: ti }); }

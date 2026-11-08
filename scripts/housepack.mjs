@@ -5,7 +5,16 @@
  *
  * - village: Medieval Village (timber-framed houses, an inn, a bell tower, a well, workshops);
  * - timber: Ultimate Fantasy RTS, First Age (log and plank, palisades);
- * - stone: Ultimate Fantasy RTS, Second Age (whitewash and stone, tiled roofs).
+ * - stone: Ultimate Fantasy RTS, Second Age (whitewash and stone, tiled roofs);
+ * - coast: Medieval Village houses with RTS storehouses and ports (the view gives them sea-grey
+ *   roofs): fishing and wetland towns;
+ * - desert: Medieval Village's flat-roofed stone houses (walls tinted to sand by the view), the
+ *   Survival pack's tent, and RTS markets and temples: dry country;
+ * - snow: the timber models again, with snow on them: upward-facing triangles in a building's upper
+ *   part become roof, which the view tints white (the timber roofs are bare wood, nothing to tint).
+ * (2026-11-08, Bill: "I'd love for different towns to have different themes": hexhouses.ts themes.)
+ * The Pirate Kit's houses were tried for the coast and dropped: tall boat-hull shapes that become
+ * spires at house size.
  *
  * Each family has houses, extras (workshops, mills, stores), and three town landmarks for the
  * square (village, town, city). Each model: footprint centred, base at y = 0, scaled so its wider
@@ -27,6 +36,7 @@ await MeshoptSimplifier.ready;
 const Q = 'C:/Users/Bill/assets/cc0/quaternius/';
 const OUT = 'public/assets/hex/';
 const VB = Q + 'medievalvillage/Buildings/FBX/', VP = Q + 'medievalvillage/Props/FBX/', RTS = Q + 'ultimatefantasyrts/glTF/';
+const SV = Q + 'survival/FBX/';
 const lv = (base) => [1, 2, 3].map((l) => `${base}_Level${l}`);
 /** Small things for the towns, in hextown.ts PROPS order. */
 export const PROPS = ['Well', 'MarketStand_1', 'MarketStand_2', 'Bench_1', 'Cart', 'Barrel', 'Crate', 'Bags', 'Hay', 'Logs', 'Fence']
@@ -45,19 +55,41 @@ export const FAMILIES = {
     extra: ['Windmill_FirstAge', 'Storage_FirstAge_Level1', 'Barracks_FirstAge_Level1'].map((n) => RTS + n + '.gltf'),
     hall: ['Market_FirstAge_Level1', 'TownCenter_FirstAge_Level2', 'TownCenter_FirstAge_Level3'].map((n) => RTS + n + '.gltf'),
   },
+  snow: {
+    source: 'Quaternius Ultimate Fantasy RTS, First Age, with snow on the roofs (CC0)',
+    house: [1, 2, 3].flatMap((i) => lv(`Houses_FirstAge_${i}`)).map((n) => RTS + n + '.gltf'),
+    extra: ['Storage_FirstAge_Level1', 'Barracks_FirstAge_Level1'].map((n) => RTS + n + '.gltf'),
+    hall: ['Market_FirstAge_Level1', 'TownCenter_FirstAge_Level2', 'TownCenter_FirstAge_Level3'].map((n) => RTS + n + '.gltf'),
+  },
   stone: {
     source: 'Quaternius Ultimate Fantasy RTS, Second Age (CC0)',
     house: [1, 2, 3].flatMap((i) => lv(`Houses_SecondAge_${i}`)).map((n) => RTS + n + '.gltf'),
     extra: ['Windmill_SecondAge', 'Storage_SecondAge_Level1', 'Temple_SecondAge_Level1'].map((n) => RTS + n + '.gltf'),
     hall: ['Market_SecondAge_Level2', 'TownCenter_SecondAge_Level2', 'Temple_SecondAge_Level3'].map((n) => RTS + n + '.gltf'),
   },
+  coast: {
+    source: 'Quaternius Medieval Village and Ultimate Fantasy RTS storehouses and ports (CC0)',
+    house: ['House_1', 'House_2'].map((n) => VB + n + '.fbx'),
+    extra: [RTS + 'Storage_FirstAge_Level1.gltf', VB + 'Sawmill.fbx'],
+    hall: [VP + 'Well.fbx', RTS + 'Port_FirstAge_Level1.gltf', RTS + 'Port_SecondAge_Level2.gltf'],
+  },
+  desert: {
+    source: 'Quaternius Medieval Village (flat-roofed houses), Survival (tent), Ultimate Fantasy RTS (CC0)',
+    house: [VB + 'House_3.fbx', VB + 'House_4.fbx'],
+    extra: [SV + 'Tent.fbx'],
+    hall: [VP + 'Well.fbx', RTS + 'Market_FirstAge_Level1.gltf', RTS + 'Temple_SecondAge_Level1.gltf'],
+  },
 };
 
 const ROOF = 85, WALL = 170, WINDOW = 255;
 /** Colour (sRGB hex) and role for a material, by its name. Roofs and walls are white here: the view
  * tints them per house. */
-function role(name, file) {
+function role(name, file, fam) {
   const n = name.replace(/\.\d+$/, '');
+  // In dry country the stone is sun-dried plaster: tinted as wall.
+  if (fam === 'desert' && /^Stone/.test(n)) return [0xffffff, WALL];
+  // A tent's canvas, tinted as roof.
+  if (n === 'LightGreen' && /Tent/.test(file)) return [0xffffff, ROOF];
   if (/^RoofTiles|^Main$|^Roof/.test(n)) return [0xffffff, ROOF];
   if (/^(Plaster|Beige|Walls|White)$/.test(n)) return [0xffffff, WALL];
   if (/^Window/.test(n)) return [0x2a2420, WINDOW];
@@ -65,6 +97,7 @@ function role(name, file) {
     Wood: 0x6b4a2f, Wood_Light: 0x8c6a45, Wood_Side: 0x7d5c3b, Wood_Dark: 0x4f3622,
     Stone: 0x7c7a72, Stone_Dark: 0x5f5e59, Stone_Light: 0x9b988f, Bell: 0xb38a3a, Metal: 0x6a6d70,
     Green: 0x5d7a2e, Yellow: 0xc9b23a, Red: 0xa8322a, Water: 0x4f8790, Fabric: 0xd8c49a, Black: 0x2a2826,
+    Brown: 0x6b4a2f, Grey: 0x8a8a86, LightWood: 0x8c6a45, Green_Tent: 0xb8a47a, DarkRed: 0x7a2a22, LightRed: 0x9a3a2e, RoofBlack: 0x3a3836, Windows: 0x2a2420,
     Rope: 0xa58a5c, Hay: 0xc9ad5a, Bag: 0xc2a878, DarkWood: 0x4a3322, Metal_Light: 0x9a9da0, Dirt: 0x6b5a44, Leaves: 0x587a32, Gold: 0xc9a13a, Blue: 0x3d6a9c,
   };
   if (fixed[n] != null) return [fixed[n], 0];
@@ -79,7 +112,7 @@ async function loadRoot(file) {
   return await new Promise((res, rej) => gltf.parse(b.toString(), '', (g) => res(g.scene), rej));
 }
 /** One model as groups of triangles by colour and role. */
-async function load(file) {
+async function load(file, fam) {
   const root = await loadRoot(file);
   root.updateMatrixWorld(true);
   const groups = new Map();
@@ -89,16 +122,40 @@ async function load(file) {
     const p = g.attributes.position, mats = [o.material].flat();
     const ranges = g.groups.length ? g.groups : [{ start: 0, count: p.count, materialIndex: 0 }];
     const v = new THREE.Vector3();
-    for (const r of ranges) {
-      const m = mats[r.materialIndex] ?? mats[0];
-      const [hex, rl] = role(m.name, file);
+    const groupOf = (hex, rl) => {
       const key = hex + ':' + rl;
       if (!groups.has(key)) { const c = new THREE.Color(hex); groups.set(key, { pos: [], col: [Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255), rl] }); }
-      const G = groups.get(key);
-      for (let i = r.start; i < Math.min(p.count, r.start + r.count); i++) { v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld); G.pos.push(v.x, v.y, v.z); }
+      return groups.get(key);
+    };
+    for (const r of ranges) {
+      const m = mats[r.materialIndex] ?? mats[0];
+      const end = Math.min(p.count, r.start + r.count);
+      const [hex, rl] = role(m.name, file, fam);
+      const G = groupOf(hex, rl);
+      for (let i = r.start; i < end; i++) { v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld); G.pos.push(v.x, v.y, v.z); }
     }
   });
   return [...groups.values()];
+}
+/** Snow lies on what faces up in a building's upper part: those triangles become roof (tinted white
+ * by the view). */
+function snowOn(groups) {
+  let lo = Infinity, hi = -Infinity;
+  for (const g of groups) for (let i = 1; i < g.pos.length; i += 3) { lo = Math.min(lo, g.pos[i]); hi = Math.max(hi, g.pos[i]); }
+  const cut = lo + (hi - lo) * 0.3, snow = { pos: [], col: [255, 255, 255, ROOF] };
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+  for (const g of groups) {
+    if (g.col[3] === WINDOW) continue;
+    const keep = [];
+    for (let i = 0; i < g.pos.length; i += 9) {
+      a.fromArray(g.pos, i); b.fromArray(g.pos, i + 3); c.fromArray(g.pos, i + 6);
+      n.subVectors(b, a).cross(c.clone().sub(a)).normalize();
+      const up = n.y > 0.45 && (a.y + b.y + c.y) / 3 > cut;
+      (up ? snow.pos : keep).push(...g.pos.slice(i, i + 9));
+    }
+    g.pos = keep;
+  }
+  return [...groups.filter((g) => g.pos.length), ...(snow.pos.length ? [snow] : [])];
 }
 function weld(soup) {
   const map = new Map(), pos = [], idx = [];
@@ -130,7 +187,7 @@ for (const [fam, F] of Object.entries(FAMILIES)) index[fam] = { source: F.source
   for (const { fam, kind, file } of jobs) {
     {
       const name = `${fam}/${file.split('/').pop().replace(/\.(fbx|gltf)$/, '')}`;
-      const groups = (await load(file)).map((g) => ({ ...weld(g.pos), col: g.col }));
+      const groups = (fam === 'snow' ? snowOn(await load(file, fam)) : await load(file, fam)).map((g) => ({ ...weld(g.pos), col: g.col }));
       // Footprint centred, base at 0, the wider side one unit.
       const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
       for (const g of groups) for (let i = 0; i < g.pos.length; i += 3) for (let a = 0; a < 3; a++) { lo[a] = Math.min(lo[a], g.pos[i + a]); hi[a] = Math.max(hi[a], g.pos[i + a]); }

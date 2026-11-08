@@ -57,7 +57,7 @@ for (const k of ['mag', 'vScale', 'vSoft', 'res'] as const) if (h.get(k)) opts[k
 if (h.get('river') === 'scaled' || h.get('river') === 'flow') opts.riverMode = h.get('river') as LocalOptions['riverMode'];
 if (h.get('crags')) opts.crags = h.get('crags') === '1';
 /** How towns' buildings are drawn (hexhouses.ts): CC0 model families, or the plain boxes. */
-let houseMode: HouseMode = (HOUSE_MODES.find(([k]) => k === h.get('houses'))?.[0]) ?? 'people';
+let houseMode: HouseMode = (HOUSE_MODES.find(([k]) => k === h.get('houses'))?.[0]) ?? 'place';
 let housePack: HousePack | null = null;
 let housesGroup: THREE.Group | null = null;
 // One look: Golden Earth (hexstyle.ts), Bill's pick of six on 2026-11-04.
@@ -1031,7 +1031,7 @@ function drawHouses(m: LocalMap) {
     for (let k = 0; k < nh; k++) {
       const o = k * HOUSE_STRIDE;
       if (!inFrame(HS[o], HS[o + 1])) continue;
-      bs.push({ x: HS[o], y: HS[o + 1], gy: HS[o + 2], rot: HS[o + 3], wd: HS[o + 4], dp: HS[o + 5], ch: HS[o + 7], kind: HS[o + 8], culture: HS[o + 9] });
+      bs.push({ x: HS[o], y: HS[o + 1], gy: HS[o + 2], rot: HS[o + 3], wd: HS[o + 4], dp: HS[o + 5], ch: HS[o + 7], kind: HS[o + 8], culture: HS[o + 9], theme: HS[o + 10] });
     }
     // One new material for this drawing, given the atmosphere and the shadows once, here (the
     // build's own passes skip the house models).
@@ -1433,7 +1433,7 @@ function writeHash() {
   if (opts.res !== D.res) o.set('res', String(opts.res));
   if (userHour !== null) o.set('time', userHour.toFixed(2));
   if (!showCtx) o.set('around', '0');
-  if (houseMode !== 'people') o.set('houses', houseMode);
+  if (houseMode !== 'place') o.set('houses', houseMode);
   history.replaceState(null, '', location.pathname + '#' + o.toString());
 }
 
@@ -1670,7 +1670,7 @@ function setupCaravan(m: LocalMap) {
   if (gameTown) {
     // What the landmark is (a market, an inn...), by the family it's drawn in.
     const lm = townLandmark(m.houses);
-    const landmark = lm >= 0 && houseMode !== 'plain' ? LANDMARKS[familyOf(houseMode, m.houses[lm + 9])][Math.min(2, m.houses[lm + 8] - 1)] : null;
+    const landmark = lm >= 0 && houseMode !== 'plain' ? LANDMARKS[familyOf(houseMode, m.houses[lm + 9], m.houses[lm + 10])][Math.min(2, m.houses[lm + 8] - 1)] : null;
     const t = townSpots(m.houses, m.props ?? new Float32Array(0), K, gameTown === 'home', landmark, (x, y) => groundAtMap(m, x, y), (x, y) => n.ok(x, y));
     spots = t.spots;
     // Someone at each door: the town's people (the game names them, towns.ts).

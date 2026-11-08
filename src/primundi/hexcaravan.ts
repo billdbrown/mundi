@@ -224,6 +224,9 @@ export const LANDMARKS: Record<string, Landmark[]> = {
   village: ['well', 'inn', 'hall'],          // Well, Inn, Bell_Tower
   timber: ['market', 'hall', 'hall'],        // Market, TownCenter x2
   stone: ['market', 'hall', 'temple'],       // Market, TownCenter, Temple
+  coast: ['well', 'hall', 'hall'],           // Well, Port x2
+  snow: ['market', 'hall', 'hall'],          // as timber
+  desert: ['well', 'market', 'temple'],      // Well, Market, Temple
 };
 
 /** The square's landmark nearest the hex's middle: its index in the houses, or -1. */

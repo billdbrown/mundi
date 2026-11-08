@@ -145,3 +145,12 @@ and `CARAVAN_GEAR` (cart: `CART_LOAD`, `CART_FIGHT`; lantern: Sight +1 in Wild a
 and out), `take` puts a new item on `bestHolder` (fight valued as `fightOf` counts it), `equip` and
 `unequip` move items through the caravan's `stores`. Deep ruins hold tier-3 gear at
 `DEEP_GEAR_CHANCE`. The outfitter is on a town's Supplies card; gear shows on each person's papers.
+
+Town themes (hexhouses.ts, 2026-11-08): each town's buildings take a theme from where it stands and
+its size (`townTheme`: dry country desert, cold snow, cities stone, highland slate, coast and wetland
+coast, woods timber, else village), stored per house in hextown.ts (`HOUSE_STRIDE` 11, last value).
+The hex view's default house mode is "By place"; "By people" and the single families are still in
+the settings. A theme is a model set in the pack (`scripts/housepack.mjs` FAMILIES: village, timber,
+stone, coast, desert, snow) plus roof and wall colours; snow is the timber models with up-facing
+upper triangles made roof and tinted white. Rebuild the pack with `node scripts/housepack.mjs`
+(needs the CC0 library at `C:/Users/Bill/assets/cc0`).
