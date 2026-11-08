@@ -32,7 +32,7 @@ import { buildAtlas, GOODS, ringCells, type Atlas, type Place } from './atlas.ts
 import { bestKnownSell, quotes, remember } from './market.ts';
 import { AMBITION_GOAL, BANDIT_FIGHT, BEASTS, crewSheet, memberStats, roleStats, type Stat, ORIGIN_CAPACITY, ORIGINS, ROLE_NAMES, TRAITS, type Beasts, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
-import { FOLK_LABEL, type FolkKind } from './life.ts';
+import { FOLK_LABEL, type Folk, type FolkKind } from './life.ts';
 import { applyTradeWants, townLine, townsfolk, tradesOf } from './towns.ts';
 import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
 import {
@@ -581,6 +581,9 @@ function campDawn() {
 }
 /** Someone on the road, offered as you pass: the hex and who. */
 let folkOffered: { cell: number; id: string } | null = null;
+/** Who was put in the hex on show: traders move on as the days pass, but the one walking up to you
+ * in the hex is still the one you stopped for. */
+let hexFolk: { cell: number; folk: Folk[] } | null = null;
 const FOLK_TEXT: Record<FolkKind, (name: string, home: string) => string> = {
   traders: (n, h) => `Carts on the road ahead: ${n}'s caravan, out of ${h}.`,
   pilgrims: (n, h) => `A file of pilgrims from ${h} on the road ahead, ${n} at the front.`,
@@ -826,7 +829,7 @@ function hexHash(cell: number) {
   if (world && atlas && save) {
     const f = findsIn(world, atlas, cell, params.seed);
     if (f.length) h.set('finds', f.join('.'));
-    if (g) { const folk = folkHere(g, cell); if (folk.length) h.set('folk', folk.map((x) => `${x.kind}~${x.id}`).join('.')); }
+    if (g) { const folk = folkHere(g, cell); hexFolk = { cell, folk }; if (folk.length) h.set('folk', folk.map((x) => `${x.kind}~${x.id}`).join('.')); }
     // Game grazing here, and whether someone in the caravan has a keen eye for stalking it.
     const game = g ? gameHere(g, cell) : null;
     if (game) { h.set('game', game); if (hasKeen(save.caravan)) h.set('keen', '1'); }
@@ -897,7 +900,8 @@ addEventListener('message', (e) => {
   if (e.data.type === 'primundi-fled' && hexOpen) toast(hasKeen(save!.caravan) ? 'They saw you first, and they\'re off. They\'ll settle again.' : "They saw you first, and they're off. Try again when they settle: someone with a keen eye would help.", 5000);
   // The caravan walked up to someone on the road.
   if (e.data.type === 'primundi-meet' && hexOpen && g && save && hexCell === save.cell && !modal) {
-    const f = folkHere(g, save.cell).find((x) => x.id === e.data.id);
+    const f = folkHere(g, save.cell).find((x) => x.id === e.data.id)
+      ?? (hexFolk?.cell === save.cell ? hexFolk.folk.find((x) => x.id === e.data.id && save!.finds[`folk:${x.id}`] === undefined) : undefined);
     if (f) showPending(meetFolk(g, f));
   }
   // The caravan reached a building's door in the town's hex: that part of the town.
@@ -1067,7 +1071,7 @@ function openTown(pid: number, tab = townTab) {
         const buyable = !short.has(i) && q[i].buy && q[i].stock >= 1 && c.orrels >= q[i].buy && cargoUsed(c) < c.capacity;
         // What you carry: what it cost you, and what selling one here makes or loses.
         const paid = c.cargo[i] && c.basis[i] > 0 ? c.basis[i] / c.cargo[i] : 0, gain = paid ? q[i].sell - paid : 0;
-        const pl = paid ? `<small class="pl ${gain >= 0 ? 'gain' : 'loss'}">paid ${fmt(Math.round(paid))} · ${gain >= 0 ? '+' : '−'}${fmt(Math.abs(Math.round(gain)))} each</small>` : '';
+        const pl = paid ? `<small class="pl ${Math.round(gain) > 0 ? 'gain' : Math.round(gain) < 0 ? 'loss' : ''}">paid ${fmt(Math.round(paid))} · ${Math.round(gain) >= 0 ? '+' : '−'}${fmt(Math.abs(Math.round(gain)))} each</small>` : '';
         return `<div class="mrow${c.cargo[i] ? ' held' : ''}">
           <div class="g"><b>${g.name}</b>${hint}${pl}${better ? `<small class="up">fetches ${best!.price} in ${esc(best!.place.name)}, ${agoText(day - best!.day)}</small>` : ''}</div>
           <button class="sell" data-act="sell" data-g="${i}" ${c.cargo[i] < 1 ? 'disabled' : ''} title="Sell one (shift: five)"><span>sell</span>${q[i].sell}</button>
@@ -1325,7 +1329,7 @@ panel.addEventListener('click', (e) => {
     case 'beast': if (buyBeast(g!)) { openTown(pid, 'rest'); store(); } break;
     case 'choose': choose(Number(b.dataset.i)); break;
     case 'after': afterEncounter(); break;
-    case 'meet': if (folkOffered) { const c0 = folkOffered.cell; folkOffered = null; closePanel(); openHex(c0); toast('Walk up to them: tap their label.', 5000); } break;
+    case 'meet': if (folkOffered) { const c0 = folkOffered.cell; folkOffered = null; closePanel(); openHex(c0); toast('They\'re coming over.', 4000); } break;
     case 'pressOn': if (folkOffered) { passFolk(g!, folkOffered.id); folkOffered = null; } afterEncounter(); break;
     case 'appoint': {
       appoint(g!, Number(b.dataset.i));

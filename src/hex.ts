@@ -1763,11 +1763,22 @@ function placeFolk(m: LocalMap, n: Nav, K: number, cartGeo: THREE.BufferGeometry
     const [kind, id] = entry.split('~');
     // A way across the middle (the walk grid keeps to roads and tracks where there are any).
     let path: [number, number][] | null = null;
-    for (let k = 0; k < 6 && !path; k++) {
-      const a = rng() * Math.PI * 2;
-      path = n.find(Math.cos(a) * R, Math.sin(a) * R, -Math.cos(a) * R, -Math.sin(a) * R);
+    // Shorter ways across if water or cliffs cut the long ones; at the last, a short stretch near
+    // the middle, so whoever you stopped for is always there.
+    for (const r of [R, R * 0.5, R * 0.2, 30 * K]) {
+      for (let k = 0; k < 6 && !(path && path.length >= 2); k++) {
+        const a = rng() * Math.PI * 2;
+        path = n.find(Math.cos(a) * r, Math.sin(a) * r, -Math.cos(a) * r, -Math.sin(a) * r);
+      }
+      if (path && path.length >= 2) break;
     }
-    if (!path || path.length < 2) continue;
+    if (!path || path.length < 2) {
+      const v0 = n.nearest(0, 0, 200);
+      if (v0 < 0) continue;
+      const [qx, qy] = n.xy(v0);
+      const v1 = n.nearest(qx + 25 * K, qy, 200), v2 = n.nearest(qx - 25 * K, qy, 200);
+      path = [v1 >= 0 ? n.xy(v1) : [qx + 25 * K, qy], [qx, qy], v2 >= 0 ? n.xy(v2) : [qx - 25 * K, qy]];
+    }
     const c = new Caravan((x, y) => groundAtMap(m, x, y), K, cartGeo ? cartGeo.clone() : null, { cloak: FOLK_CLOAK[kind] ?? 0x2f5d7c, guide: false, pace: 1.6 * K });
     caravan.group.add(c.group);
     // Out in the country, the first you stopped for is a short way off along the road, coming up
