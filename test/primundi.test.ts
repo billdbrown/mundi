@@ -439,19 +439,62 @@ test('the opening: every quick start can set out, and the first road has someone
   }
 });
 
-import { memberStats, crewSheet, ROLE_FIGHT } from '../src/primundi/caravan.ts';
+import { memberStats, crewSheet, crewDiff, fightOf, fromRole, best, sight, huntOdds, makeMember, HUNT_PIP, type Member } from '../src/primundi/caravan.ts';
 test("the tavern's stat sheet says what the rules do", () => {
   const c = newCaravan('Test', 'traders', 5);
   // Each person's Fight is what strength() counts for them.
   for (const m of living(c)) {
     const f = +memberStats(m).find((x) => x.k === 'Fight')!.v;
-    assert.equal(f, ROLE_FIGHT[m.role] + (m.trait === 'stout' ? 1 : 0));
+    assert.equal(f, m.skills.fight);
   }
   const sheet = Object.fromEntries(crewSheet(c).map((x) => [x.k, x.v]));
   assert.equal(+sheet.Fight, +strength(c).toFixed(1));
   // A scout shows; frugal eats less.
-  assert.ok(memberStats({ ...living(c)[0], role: 'scout' }).some((x) => x.k === 'Sight'));
+  assert.ok(memberStats(living(c)[0]).some((x) => x.k === 'Scout'));
   assert.equal(memberStats({ ...living(c)[0], trait: 'frugal' }).find((x) => x.k === 'Eats')!.v, '0.7/day');
+});
+
+test('skills, not roles: old crews convert and fight as before', () => {
+  // The old rules: leader 1.5, guard 3, scout 1, hand 1; stout +1; keen hunts at 85%.
+  const old = (role: string, trait: string) => ({ name: role, role, trait, health: 'well', alive: true, joined: 0 }) as unknown as Member;
+  const before = [old('leader', 'steady'), old('guard', 'stout'), old('guard', 'cheerful'), old('hand', 'frugal'), old('scout', 'keen')];
+  const after = before.map(fromRole);
+  assert.deepEqual(after.map(fightOf), [1.5, 4, 3, 1, 1]);
+  assert.ok(after[0].lead && !after[1].lead);
+  assert.equal(after[0].trait, 'steady');
+  assert.equal(after[1].trait, undefined, 'stout is a Fight pip now');
+  assert.ok(after.every((m) => !('role' in m)));
+  const c = { ...newCaravan('T', 'cartographers', 1), members: after };
+  assert.equal(strength(c), 10.5);
+  assert.equal(sight(c), 2, 'a scout of old sees a hex further');
+  assert.equal(huntOdds(c), 0.85, 'a keen eye of old');
+  // The best does a one-person task, among the well.
+  after[4].health = 'hurt';
+  assert.equal(best(c, 'hunt'), 1);
+  assert.equal(huntOdds(c), HUNT_PIP[1]);
+  assert.equal(sight(c), 1);
+});
+
+test('starting caravans are as strong as before skills', () => {
+  for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    assert.equal(strength(newCaravan('T', 'traders', seed)), 10.5);
+    const k = newCaravan('C', 'cartographers', seed);
+    assert.equal(strength(k), 7.5);
+    assert.equal(sight(k), 2);
+    assert.equal(huntOdds(k), 0.85);
+  }
+});
+
+test('the tavern shows what someone changes, and recruits lean the way they say', () => {
+  const c = newCaravan('T', 'traders', 3), rng = makeRng(9);
+  for (let i = 0; i < 40; i++) {
+    const f = makeMember('F', 'fighter', rng), s = makeMember('S', 'scout', rng), h = makeMember('H', 'hunter', rng);
+    assert.ok(f.skills.fight >= 3 && s.skills.scout >= 3 && h.skills.hunt >= 3);
+    for (const m of [f, s, h]) assert.ok(Object.values(m.skills).every((x) => x >= 1 && x <= 5));
+  }
+  const d = Object.fromEntries(crewDiff(c, makeMember('F', 'fighter', makeRng(1))).map((x) => [x.k, x.v]));
+  assert.match(d.Fight, /^10\.5 → 1[34]\.5$/);
+  assert.match(d.Eats, /→/);
 });
 
 import { Traffic } from '../src/primundi/traffic.ts';

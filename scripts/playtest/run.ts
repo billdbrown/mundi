@@ -11,14 +11,14 @@ import { buildAtlas, ringCells, walkable, type Atlas } from '../../src/primundi/
 import { applyTradeWants } from '../../src/primundi/towns.ts';
 import { quotes, trade } from '../../src/primundi/market.ts';
 import { bestKnownSell } from '../../src/primundi/market.ts';
-import { AMBITION_GOAL, appetite, cargoUsed, living, thirst, type Origin } from '../../src/primundi/caravan.ts';
+import { AMBITION_GOAL, appetite, best, cargoUsed, living, thirst, type Origin, type Skill } from '../../src/primundi/caravan.ts';
 import { QUEST_ENCOUNTERS } from '../../src/primundi/encounters.ts';
 import { findReady } from '../../src/primundi/finds.ts';
 import { MAX_QUESTS, canHandIn, questTarget } from '../../src/primundi/quests.ts';
 import type { StartBias } from '../../src/primundi/start.ts';
 import {
   RATES, worldParams, newGame, quickSetup, meetFolk, makeGame, doyOf, setRoute, plan, advance, resolve, jobHere, findHere, findsAt,
-  buy, sell, shortHere, buyRations, sellCharts, takeJob, handIn, jobsOffered, rest, hire, appoint, angle, cellAngleOf,
+  buy, sell, shortHere, buyRations, sellCharts, takeJob, handIn, jobsOffered, rest, hire, townRecruits, appoint, angle, cellAngleOf,
   type Game, type Pending, type Ui,
 } from '../../src/primundi/sim.ts';
 import type { World } from '../../src/world.ts';
@@ -47,7 +47,7 @@ export function worldFor(name: string): WorldSet {
 const CAREFUL = [
   'Draw what you see', 'Fill the skins', 'Gather for half a day', 'Dig it out carefully', 'Wait for dark and take them sleeping',
   'Wait for it to drop', 'Hunker down', 'Dig in and wait it out', 'Make camp until it breaks', 'Rest it a day', 'Pour it out',
-  'Keep the fires high and stand watch', 'Turn and run', 'Ask the way', 'Swap news', 'Climb and sketch it', 'Add a stone',
+  'Keep the fires high and stand watch', 'Slip past', 'Talk it down', 'Turn and run', 'Ask the way', 'Swap news', 'Climb and sketch it', 'Add a stone',
   'Let them be', 'Leave it to the dead', 'Leave it be', 'Send them on', 'Share your food', 'Pass by', 'Walk on',
   'Swap news', 'Help them mend it', 'Sell them', 'Ask about the country',
 ];
@@ -60,8 +60,8 @@ const BOLD = [
 ];
 function pick(p: Pending, style: 'careful' | 'bold'): number {
   const order = style === 'careful' ? CAREFUL : BOLD;
-  let best = 0, bi = Infinity;
-  p.choices.forEach((c, i) => { const k = order.findIndex((l) => c.label.startsWith(l)); if (k >= 0 && k < bi) { bi = k; best = i; } });
+  let best = Math.max(0, p.choices.findIndex((c) => !c.locked)), bi = Infinity;
+  p.choices.forEach((c, i) => { if (c.locked) return; const k = order.findIndex((l) => c.label.startsWith(l)); if (k >= 0 && k < bi) { bi = k; best = i; } });
   return best;
 }
 
@@ -96,6 +96,12 @@ function knownPlaces(g: Game, except = -1) {
     .map((p) => ({ p, d: daysTo(g, p.cell) })).filter((x) => x.d < Infinity).sort((x, y) => x.d - y.d);
 }
 /** Food for `days` days, topped up if the purse allows (keeping `keep` orrels). */
+/** Take on whoever's best at `k` (or the cheapest, with null) among this month's recruits, within `max`. */
+function hireBest(g: Game, pid: number, k: Skill | null, max: number) {
+  const r = townRecruits(g, pid).filter((x) => x.cost <= max && x.cost <= g.s.caravan.orrels)
+    .sort((a, b) => (k ? b.m.skills[k] - a.m.skills[k] : 0) || a.cost - b.cost)[0];
+  if (r) hire(g, pid, r.i);
+}
 function provision(g: Game, pid: number, days: number, keep = 0) {
   const c = g.s.caravan, have = c.rations / Math.max(1, appetite(c));
   if (have >= days) return;
@@ -162,7 +168,7 @@ function traderBot(g: Game, rng: () => number, bold: boolean): Bot {
       if (c.unsoldCharts) booked(g, 'charts', () => sellCharts(g, pid));
       // Mend: rest when spirits are low or someone is hurt (free at home). The reckless never do.
       if (!bold && (c.morale < 35 || c.members.some((m) => m.alive && m.health !== 'well')) && (pid === s.home || c.orrels > 120)) rest(g, pid, 2);
-      if (!bold && living(c).length < 5 && c.orrels > 200) hire(g, pid, 'guard', 55);
+      if (!bold && living(c).length < 5 && c.orrels > 200) hireBest(g, pid, 'fight', 80);
       // Keep enough for the road's food; carry the best basket the purse and the pack allow.
       const t = bestTrade(g, pid, c.capacity - cargoUsed(c), c.orrels - 40);
       dest = -1;
@@ -199,7 +205,7 @@ function explorerBot(g: Game, rng: () => number): Bot {
       if (c.unsoldCharts) booked(g, 'charts', () => sellCharts(g, pid));
       sellHere(g, pid, true);
       if (c.morale < 35 && (pid === g.s.home || c.orrels > 80)) rest(g, pid, 2);
-      if (living(c).length < 5 && c.orrels > 160) hire(g, pid, c.members.some((m) => m.alive && m.role === 'scout') ? 'hand' : 'scout', c.members.some((m) => m.alive && m.role === 'scout') ? 30 : 70);
+      if (living(c).length < 5 && c.orrels > 160) hireBest(g, pid, best(c, 'scout') >= 3 ? null : 'scout', 90);
       provision(g, pid, 30);
       out = g.s.day;
     },
@@ -258,7 +264,7 @@ function jobberBot(g: Game, rng: () => number): Bot {
       if (c.unsoldCharts) booked(g, 'charts', () => sellCharts(g, pid));
       sellHere(g, pid, true);
       if ((c.morale < 35 || c.members.some((m) => m.alive && m.health !== 'well')) && (pid === s.home || c.orrels > 100)) rest(g, pid, 2);
-      if (living(c).length < 5 && c.orrels > 200) hire(g, pid, 'guard', 55);
+      if (living(c).length < 5 && c.orrels > 200) hireBest(g, pid, 'fight', 80);
       for (const q of jobsOffered(g, g.a.places[pid])) {
         if (s.jobs.length >= MAX_QUESTS) break;
         if (q.kind === 'procure') {
@@ -355,7 +361,7 @@ export function playRun(opts: RunOpts): RunResult {
       out.encounters.push({ day: s.day, id: p.e.id, choice: p.choices[i].label, deaths: lost });
       for (let k = 0; k < lost; k++) out.deaths.push({ day: s.day, cause: p.e.id });
       out.events.push(s.day);
-      if (living(s.caravan).length && !s.caravan.members.some((m) => m.alive && m.role === 'leader')) appoint(g, s.caravan.members.findIndex((m) => m.alive));
+      if (living(s.caravan).length && !s.caravan.members.some((m) => m.alive && m.lead)) appoint(g, s.caravan.members.findIndex((m) => m.alive));
     }
   };
   const record = () => {

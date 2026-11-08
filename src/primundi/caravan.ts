@@ -16,22 +16,68 @@ export type Origin = 'traders' | 'cartographers';
 export const AMBITION_GOAL: Record<Origin, number> = { traders: 5000, cartographers: 1500 };
 export const ORIGINS: { id: Origin; label: string; note: string; ambition: string }[] = [
   { id: 'traders', label: 'Traders', note: 'More beasts, more orrels, a nose for a price', ambition: `Earn ${AMBITION_GOAL.traders.toLocaleString('en')} orrels` },
-  { id: 'cartographers', label: 'Cartographers', note: 'A scout, sharp eyes, charts that sell', ambition: `Chart ${AMBITION_GOAL.cartographers.toLocaleString('en')} hexes` },
+  { id: 'cartographers', label: 'Cartographers', note: 'A scout, a sharp eye for game, charts that sell', ambition: `Chart ${AMBITION_GOAL.cartographers.toLocaleString('en')} hexes` },
 ];
 
-export type Role = 'leader' | 'guard' | 'scout' | 'hand';
-export const ROLE_NAMES: Record<Role, string> = { leader: 'Leader', guard: 'Guard', scout: 'Scout', hand: 'Hand' };
-export type Trait = 'stout' | 'keen' | 'cheerful' | 'frugal' | 'steady';
+/** Skills, not roles (decision 2026-11-08): everyone has a stat line, 1 to 5 pips each. A task one
+ * person does takes the caravan's best at it (Scout, Hunt, Barter, Mend); fighting is everyone's,
+ * summed. */
+export type Skill = 'fight' | 'scout' | 'hunt' | 'barter' | 'mend';
+export const SKILLS: Skill[] = ['fight', 'scout', 'hunt', 'barter', 'mend'];
+export const SKILL_NAMES: Record<Skill, string> = { fight: 'Fight', scout: 'Scout', hunt: 'Hunt', barter: 'Barter', mend: 'Mend' };
+export type Skills = Record<Skill, number>;
+export const SKILL_MAX = 5;
+/** A way about someone, besides their skills. */
+export type Trait = 'cheerful' | 'frugal' | 'steady';
 export const TRAITS: Record<Trait, string> = {
-  stout: 'Stout: a better fighter',
-  keen: 'Keen-eyed: sees further, hunts better',
   cheerful: 'Cheerful: keeps spirits up',
   frugal: 'Frugal: eats little',
-  steady: 'Steady: hard to shake',
+  steady: 'Steady: mends faster',
 };
-export interface Member { name: string; role: Role; trait: Trait; health: 'well' | 'hurt' | 'sick'; alive: boolean; joined: number;
+export interface Member { name: string; skills: Skills; trait?: Trait; health: 'well' | 'hurt' | 'sick'; alive: boolean; joined: number;
+  /** Who the caravan follows (and who takes over when they die: sim.ts appoint). */
+  lead?: boolean;
   /** What they want from the road, in their words (opening.ts). Flavour, for now. */
   wish?: string }
+
+/** What kind of person a recruit is: one or two strong skills, the rest low. */
+export type Lean = 'fighter' | 'scout' | 'hunter' | 'trader' | 'mender' | 'hand';
+export const LEAN_NAMES: Record<Lean, string> = { fighter: 'A fighter', scout: 'A scout', hunter: 'A hunter', trader: 'A trader', mender: 'A mender', hand: 'A hand' };
+const ones = (): Skills => ({ fight: 1, scout: 1, hunt: 1, barter: 1, mend: 1 });
+/** Someone new, from their lean and the dice. */
+export function makeMember(name: string, lean: Lean, rng: () => number, joined = 0): Member {
+  const k = ones(), up = (s: Skill, n: number) => { k[s] = Math.min(SKILL_MAX, Math.max(k[s], n)); };
+  const other = (not: Skill) => { const o = SKILLS.filter((x) => x !== not && x !== 'fight'); return o[Math.floor(rng() * o.length)]; };
+  if (lean === 'fighter') { up('fight', rng() < 0.25 ? 4 : 3); if (rng() < 0.4) up(other('fight'), 2); }
+  else if (lean === 'scout') { up('scout', rng() < 0.2 ? 4 : 3); up('hunt', 2); }
+  else if (lean === 'hunter') { up('hunt', rng() < 0.25 ? 4 : 3); up('fight', 2); }
+  else if (lean === 'trader') { up('barter', rng() < 0.2 ? 4 : 3); }
+  else if (lean === 'mender') { up('mend', rng() < 0.2 ? 4 : 3); }
+  else { up(other('fight'), 2); }
+  const r = rng(), trait: Trait | undefined = r < 0.17 ? 'cheerful' : r < 0.34 ? 'frugal' : r < 0.5 ? 'steady' : undefined;
+  return { name, skills: k, ...(trait ? { trait } : {}), health: 'well', alive: true, joined };
+}
+/** What someone asks to join: more for what they're good at. */
+export const SKILL_WORTH: Skills = { fight: 12, scout: 18, hunt: 8, barter: 10, mend: 5 };
+export function hireCost(m: Member): number {
+  return 30 + SKILLS.reduce((a, s) => a + SKILL_WORTH[s] * (m.skills[s] - 1), 0) - (m.trait === 'frugal' ? 5 : 0);
+}
+/** A member from before skills (a role and a trait): what they become. */
+export function fromRole(m: Member): Member {
+  if (m.skills) return m;
+  const old = m as Member & { role?: string }, was = (m as { trait?: string }).trait;
+  const k = ones(), stout = was === 'stout', keen = was === 'keen';
+  if (old.role === 'leader') { k.fight = 2; k.barter = 2; }
+  else if (old.role === 'guard') k.fight = 3;
+  else if (old.role === 'scout') { k.scout = 3; k.hunt = 2; }
+  if (stout) k.fight += 1;
+  if (keen) k.hunt = 4;
+  const out: Member & { role?: string } = { ...m, skills: k };
+  if (old.role === 'leader') out.lead = true;
+  delete out.role;
+  if (stout || keen) delete out.trait;
+  return out;
+}
 
 /** What pulls the caravan, chosen when setting out (opening.ts): how much it carries, how fast. */
 export type Beasts = 'mules' | 'oxen' | 'cart';
@@ -72,12 +118,13 @@ export interface Caravan {
 /** A caravan as it sets out from home. */
 export function newCaravan(name: string, origin: Origin, seed: number): Caravan {
   const rng = makeRng((seed * 31 + 7) >>> 0), names = nameMaker(seed * 13 + 5);
-  const traitList = Object.keys(TRAITS) as Trait[];
-  const person = (role: Role, trait?: Trait): Member => ({ name: names(), role, trait: trait ?? traitList[Math.floor(rng() * traitList.length)], health: 'well', alive: true, joined: 0 });
   const t = origin === 'traders';
+  const person = (lean: Lean, fix?: Partial<Skills>): Member => { const m = makeMember(names(), lean, rng); if (fix) Object.assign(m.skills, fix); return m; };
+  const lead: Member = { ...person('trader', { fight: 2, barter: 2, ...(t ? {} : { hunt: 4 }) }), lead: true };
+  if (t) lead.trait = 'steady'; else delete lead.trait;
   const members = t
-    ? [person('leader', 'steady'), person('guard', 'stout'), person('guard'), person('hand'), person('hand')]
-    : [person('leader', 'keen'), person('scout'), person('guard', 'stout'), person('hand')];
+    ? [lead, person('fighter', { fight: 4 }), person('fighter', { fight: 3 }), person('hand'), person('hand')]
+    : [lead, person('scout', { scout: 3 }), person('fighter', { fight: 4 }), person('hand')];
   return {
     name, origin, members,
     orrels: t ? 220 : 120,
@@ -95,64 +142,82 @@ export function newCaravan(name: string, origin: Origin, seed: number): Caravan 
 /** How many days of water a caravan can carry. */
 export const WATER_DAYS = 12;
 export const living = (c: Caravan) => c.members.filter((m) => m.alive);
-export const leader = (c: Caravan) => c.members.find((m) => m.alive && m.role === 'leader') ?? null;
+export const leader = (c: Caravan) => c.members.find((m) => m.alive && m.lead) ?? null;
 export const cargoUsed = (c: Caravan) => c.cargo.reduce((a, b) => a + b, 0);
 export const waterCap = (c: Caravan) => living(c).length * WATER_DAYS;
 /** Rations eaten a day (a ration is a person's food for a day; the frugal eat less). */
 export const appetite = (c: Caravan) => living(c).reduce((a, m) => a + (m.trait === 'frugal' ? 0.7 : 1), 0);
 export const thirst = (c: Caravan) => living(c).length;
 
-/** Fighting strength, for encounters. */
+/** What a Fight pip counts for in a fight (strength()): a guard of old was Fight 3. */
+export const FIGHT_PIP = [0, 1, 1.5, 3, 4, 5.5];
+export const fightOf = (m: Member) => FIGHT_PIP[Math.max(0, Math.min(SKILL_MAX, m.skills.fight))];
+/** Fighting strength, for encounters: everyone's, summed; the hurt and sick at half. */
 export function strength(c: Caravan): number {
   let s = 0;
-  for (const m of living(c)) {
-    let x = ROLE_FIGHT[m.role];
-    if (m.trait === 'stout') x += 1;
-    if (m.health !== 'well') x *= 0.5;
-    s += x;
-  }
+  for (const m of living(c)) s += fightOf(m) * (m.health !== 'well' ? 0.5 : 1);
   return s;
+}
+/** The caravan's best at a one-person task, among the well (1 if nobody is). */
+export function best(c: Caravan, k: Skill): number {
+  let b = 1;
+  for (const m of living(c)) if (m.health === 'well' && m.skills[k] > b) b = m.skills[k];
+  return b;
+}
+/** Who that is. */
+export function bestAt(c: Caravan, k: Skill): Member | null {
+  let w: Member | null = null;
+  for (const m of living(c)) if (m.health === 'well' && (!w || m.skills[k] > w.skills[k])) w = m;
+  return w;
 }
 /** One line of a stat sheet: what it's of, the figure, and whether it helps (true), costs (false),
  * or just is (null). */
 export interface Stat { k: string; v: string; good: boolean | null }
-/** Hunting: the chance a shot brings something down, without and with a keen eye (life.ts). */
-export const HUNT_ODDS = { plain: 0.65, keen: 0.85 };
-/** Fighting strength by role (strength()), before traits. */
-export const ROLE_FIGHT: Record<Role, number> = { leader: 1.5, guard: 3, scout: 1, hand: 1 };
-/** What one person adds and costs, as the rules apply it: the tavern's and the journal's sheet. */
+/** Hunting: the chance a shot brings something down, by the best Hunt (life.ts). Hunt 1 is the old
+ * plain odds, Hunt 4 the old keen eye. */
+export const HUNT_PIP = [0, 0.65, 0.7, 0.78, 0.85, 0.9];
+export const huntOdds = (c: Caravan) => HUNT_PIP[best(c, 'hunt')];
+/** A good enough eye that game rarely sees you first (the hex's herds). */
+export const KEEN_HUNT = 4;
+/** Buying and selling: each Barter pip over 2 is this much off what you pay, on what you get. */
+export const BARTER_STEP = 0.02;
+export const barterEdge = (c: Caravan) => (best(c, 'barter') - 2) * BARTER_STEP;
+/** Sight, by the best Scout: a hex further at Scout 3, another at 5. */
+export const SCOUT_SIGHT = [3, 5];
+/** What one person is, as the rules apply it: the tavern's and the journal's sheet. */
 export function memberStats(m: Member): Stat[] {
-  const out: Stat[] = [{ k: 'Fight', v: `+${ROLE_FIGHT[m.role] + (m.trait === 'stout' ? 1 : 0)}`, good: true }];
-  if (m.role === 'scout') out.push({ k: 'Sight', v: '+1 hex', good: true });
-  if (m.trait === 'keen') out.push({ k: 'Hunt', v: `${Math.round(HUNT_ODDS.keen * 100)}%`, good: true });
+  const out: Stat[] = SKILLS.map((s) => ({ k: SKILL_NAMES[s], v: String(m.skills[s]), good: m.skills[s] >= 3 ? true : null }));
   if (m.trait === 'cheerful') out.push({ k: 'Spirits', v: '+0.5/day', good: true });
   if (m.trait === 'steady') out.push({ k: 'Mends', v: '×1.5', good: true });
   out.push({ k: 'Eats', v: m.trait === 'frugal' ? '0.7/day' : '1/day', good: false });
   return out;
 }
-/** What someone hired in a town adds, by role alone (their trait is a surprise). */
-export function roleStats(role: Role): Stat[] {
-  return [{ k: 'Fight', v: `+${ROLE_FIGHT[role]}`, good: true }, ...(role === 'scout' ? [{ k: 'Sight', v: '+1 hex', good: true }] : []), { k: 'Eats', v: '1/day', good: false }];
-}
+const pct = (x: number) => `${x >= 0 ? '+' : '−'}${Math.round(Math.abs(x) * 100)}%`;
 /** The whole caravan's sheet (the living): what the tavern shows as you build it. */
 export function crewSheet(c: Caravan): Stat[] {
   const fight = strength(c), eats = appetite(c);
   return [
     { k: 'Fight', v: String(+fight.toFixed(1)), good: null },
     { k: 'Sight', v: `${sight(c)} hex${sight(c) === 1 ? '' : 'es'}`, good: null },
-    { k: 'Hunt', v: `${Math.round((hasKeen(c) ? HUNT_ODDS.keen : HUNT_ODDS.plain) * 100)}%`, good: null },
+    { k: 'Hunt', v: `${Math.round(huntOdds(c) * 100)}%`, good: null },
+    { k: 'Barter', v: pct(barterEdge(c)), good: null },
     { k: 'Eats', v: `${+eats.toFixed(1)}/day`, good: null },
   ];
+}
+/** What taking someone on changes, line by line ("Hunt 65% → 85%"): only the lines that move. */
+export function crewDiff(c: Caravan, m: Member): Stat[] {
+  const before = crewSheet(c), after = crewSheet({ ...c, members: [...c.members, m] });
+  return after.flatMap((x, i) => x.v === before[i].v ? [] : [{ k: x.k, v: `${before[i].v} → ${x.v}`, good: x.k === 'Eats' ? false : true }]);
 }
 /** Bandits on the road fight at this (encounters.ts): the yardstick for how many guards. */
 export const BANDIT_FIGHT = { min: 4, max: 10 };
 
 /** Sight radius in hexes before high ground. */
 export function sight(c: Caravan): number {
-  const eyes = living(c).some((m) => m.role === 'scout' && m.health === 'well');
-  return 1 + (eyes ? 1 : 0);
+  const b = best(c, 'scout');
+  return 1 + SCOUT_SIGHT.filter((x) => b >= x).length;
 }
-export const hasKeen = (c: Caravan) => living(c).some((m) => m.trait === 'keen' && m.health === 'well');
+export const hasKeen = (c: Caravan) => best(c, 'hunt') >= KEEN_HUNT;
 
 /** How fast the caravan goes, as a multiple: hunger, thirst, low spirits and the sick slow it. */
 export function pace(c: Caravan): number {
@@ -194,6 +259,6 @@ export function passDay(c: Caravan, atWater: boolean, resting: boolean, forage =
 
 /** Someone, chosen at random among the living (the leader less often). */
 export function someone(c: Caravan, rng: () => number, notLeader = false): Member | null {
-  const pool = living(c).flatMap((m) => (m.role === 'leader' ? (notLeader ? [] : [m]) : [m, m, m]));
+  const pool = living(c).flatMap((m) => (m.lead ? (notLeader ? [] : [m]) : [m, m, m]));
   return pool.length ? pool[Math.floor(rng() * pool.length)] : null;
 }

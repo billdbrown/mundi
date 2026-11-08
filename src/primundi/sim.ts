@@ -16,7 +16,7 @@ import { makeRng } from '../rng.ts';
 import { pickHome, type StartBias } from './start.ts';
 import { findPath, G, GOODS, hasWater, ringCells, seasonalTemp, SNOW_TEMP, stepDays, walkable, type Atlas, type Place } from './atlas.ts';
 import { quotes, rationPrice, remember, trade, type Known, type Stocks } from './market.ts';
-import { appetite, cargoUsed, living, newCaravan, pace, passDay, sight, thirst, waterCap, TRAITS, ROLE_NAMES, BEASTS, ORIGIN_CAPACITY, SETUP_PURSE, WATER_DAYS, type Beasts, type Caravan, type Origin, type Role } from './caravan.ts';
+import { appetite, barterEdge, cargoUsed, fromRole, hireCost, living, makeMember, newCaravan, pace, passDay, sight, thirst, waterCap, BEASTS, ORIGIN_CAPACITY, SETUP_PURSE, WATER_DAYS, type Beasts, type Caravan, type Lean, type Member, type Origin } from './caravan.ts';
 import { candidates, farGuess, farPlace, SETUP_MAX, type Candidate } from './opening.ts';
 import { findReady, findsIn, FINDS, type FindKind } from './finds.ts';
 import { ENCOUNTERS, applyEffect, contextAt, drawEncounter, type Choice, type Ctx, type Encounter, type Outcome } from './encounters.ts';
@@ -90,6 +90,13 @@ export function migrateSave(s: Save | null): Save | null {
   // Saves from before several jobs at once.
   s.jobs ??= []; s.taken ??= []; s.maps ??= []; s.finds ??= {};
   delete (s as unknown as { job?: unknown }).job;
+  // Saves from before skills (decision 2026-11-08): roles become stat lines.
+  s.caravan.members = s.caravan.members.map(fromRole);
+  if (s.setup) for (const x of s.setup.offered) {
+    const role = (x.m as { role?: string }).role;
+    x.lean ??= role === 'guard' ? 'fighter' : role === 'scout' ? 'scout' : 'hand';
+    x.m = fromRole(x.m);
+  }
   return s;
 }
 
@@ -167,7 +174,7 @@ export function newGame(w: World, a: Atlas, seed: number, n: { name: string; ori
   s.log.push({ day: 0, text: `${caravan.name} sets out from ${home.name}. You know the prices here and in ${near.map((x) => x.p.name).join(' and ')}.` });
   // Built in town: the leader alone, and the purse to find the rest.
   if (n.setup) {
-    caravan.members = caravan.members.filter((m) => m.role === 'leader');
+    caravan.members = caravan.members.filter((m) => m.lead);
     caravan.orrels = SETUP_PURSE[n.origin];
     caravan.capacity = ORIGIN_CAPACITY[n.origin];
     caravan.rations = 30; caravan.water = WATER_DAYS;
@@ -312,9 +319,9 @@ function giveErrand(g: Game): Quest | null {
 export function quickSetup(g: Game): Quest | null {
   const s = g.s, st = s.setup;
   if (!st) return null;
-  const want: Role[] = s.caravan.origin === 'traders' ? ['guard', 'guard', 'hand', 'hand'] : ['scout', 'guard', 'hand'];
+  const want: Lean[] = s.caravan.origin === 'traders' ? ['fighter', 'fighter', 'hand', 'hand'] : ['scout', 'fighter', 'hand'];
   for (const r of want) {
-    const i = st.offered.findIndex((x, k) => x.m.role === r && !st.hired.includes(k));
+    const i = st.offered.findIndex((x, k) => x.lean === r && !st.hired.includes(k));
     if (i >= 0) setupHire(g, i);
   }
   if (!st.beasts) setupBeasts(g, 'mules');
@@ -627,6 +634,8 @@ export function passFolk(g: Game, id: string) { g.s.finds[`folk:${id}`] = g.s.da
 /** The player answers: what came of it, the changes as lines, and anything more to say. */
 export function resolve(g: Game, p: Pending, i: number): { out: Outcome; lines: string[]; extra: string } {
   const s = g.s;
+  // A locked choice can't be taken (the screen greys it): the first open one instead.
+  if (p.choices[i]?.locked) i = Math.max(0, p.choices.findIndex((c) => !c.locked));
   const out = p.choices[i].resolve(p.ctx);
   // A find is used once something comes of it (walking away leaves it for later).
   if (p.find && Object.keys(out.effect).length) {
@@ -680,7 +689,8 @@ export function buy(g: Game, pid: number, gi: number, many: number): number {
   // No more than the purse allows.
   while (n > 0) { const st = JSON.parse(JSON.stringify(s.stocks)) as Stocks; if (trade(g.w, p, st, s.day, doyOf(s.day), gi, n) <= c.orrels) break; n--; }
   if (n <= 0) return 0;
-  const cost = trade(g.w, p, s.stocks, s.day, doyOf(s.day), gi, n);
+  // A good haggler pays less (caravan.ts barterEdge): never more than the market asks.
+  const cost = Math.max(n, Math.round(trade(g.w, p, s.stocks, s.day, doyOf(s.day), gi, n) * (1 - barterEdge(c))));
   c.orrels -= cost;
   c.basis[gi] += cost; c.cargo[gi] += n;
   return n;
@@ -690,7 +700,7 @@ export function sell(g: Game, pid: number, gi: number, many: number): number {
   const s = g.s, c = s.caravan, p = g.a.places[pid];
   const n = Math.min(many, c.cargo[gi]);
   if (n <= 0) return 0;
-  const cost = trade(g.w, p, s.stocks, s.day, doyOf(s.day), gi, -n);
+  const cost = Math.round(trade(g.w, p, s.stocks, s.day, doyOf(s.day), gi, -n) * (1 + barterEdge(c)));
   c.orrels -= cost;
   // The Traders' ambition counts profit: what it sold for, less what it cost.
   const paid = c.cargo[gi] ? (c.basis[gi] / c.cargo[gi]) * n : 0;
@@ -789,15 +799,27 @@ export function rest(g: Game, pid: number, days: number): boolean {
   c.water = waterCap(c);
   return true;
 }
-export const HIRES: [Role, number, string][] = [['hand', 30, 'Carries, cooks, keeps watch'], ['guard', 55, 'Fights when it comes to it'], ['scout', 70, 'Sees a hex further']];
-export function hire(g: Game, pid: number, role: Role, cost: number): boolean {
-  const s = g.s, c = s.caravan;
-  if (c.orrels < cost) return false;
-  c.orrels -= cost;
-  const nm = nameMaker(g.seed * 17 + s.day * 3 + c.members.length)();
-  const traits = Object.keys(TRAITS) as (keyof typeof TRAITS)[];
-  c.members.push({ name: nm, role, trait: traits[Math.floor(g.dice() * traits.length)], health: 'well', alive: true, joined: s.day });
-  log(g, `${nm} joined as a ${ROLE_NAMES[role].toLowerCase()}, in ${g.a.places[pid].name}.`);
+/** Who's looking for work in a town this month: a few people, seeded, each with a stat line. A
+ * hand and a fighter anywhere; a scout in towns, a hunter elsewhere; and someone of the town's trade. */
+export interface Recruit { m: Member; cost: number; lean: Lean; i: number }
+const LEAN_OF_TRADE: Partial<Record<Trade, Lean>> = { market: 'trader', shrine: 'mender', trapping: 'hunter', herding: 'hunter', weaving: 'trader' };
+const hireKey = (g: Game, pid: number, i: number) => `hire:${pid}:${Math.floor(g.s.day / 30)}:${i}`;
+export function townRecruits(g: Game, pid: number): Recruit[] {
+  const p = g.a.places[pid], month = Math.floor(g.s.day / 30);
+  const rng = makeRng((g.seed * 7919 + pid * 131 + month * 17) >>> 0), names = nameMaker(g.seed * 17 + pid * 3 + month * 101);
+  const leans: Lean[] = ['hand', 'fighter', p.town ? 'scout' : 'hunter'];
+  const t = LEAN_OF_TRADE[tradesOf(g.w, g.a, p)[0]];
+  if (t && !leans.includes(t)) leans.push(t);
+  return leans.map((lean, i) => { const m = makeMember(names(), lean, rng, Math.floor(g.s.day)); return { m, cost: hireCost(m), lean, i }; })
+    .filter((r) => g.s.finds[hireKey(g, pid, r.i)] === undefined);
+}
+export function hire(g: Game, pid: number, i: number): boolean {
+  const s = g.s, c = s.caravan, r = townRecruits(g, pid).find((x) => x.i === i);
+  if (!r || c.orrels < r.cost) return false;
+  c.orrels -= r.cost;
+  c.members.push(r.m);
+  s.finds[hireKey(g, pid, i)] = s.day;
+  log(g, `${r.m.name} joined, in ${g.a.places[pid].name}.`);
   return true;
 }
 /** A town's own offer, by its trade, once a month: goods straight from where they're made, cheap;
@@ -861,7 +883,7 @@ export function buyBeast(g: Game): boolean {
 /** Someone new leads (the leader is dead). */
 export function appoint(g: Game, i: number) {
   const c = g.s.caravan, m = c.members[i];
-  for (const x of c.members) if (x.alive && x.role === 'leader') x.role = 'hand';
-  m.role = 'leader';
+  for (const x of c.members) delete x.lead;
+  m.lead = true;
   log(g, `${m.name} leads the caravan now.`);
 }

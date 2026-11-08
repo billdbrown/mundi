@@ -109,5 +109,11 @@ each trader's legs town to neighbouring town along `atlas.roadPaths` from the se
 saved. `onRoad(day)` and `inCell(cell, day)`; a meeting id is `trafficId` (`t<i>-<leg>`, in
 `save.finds` as `folk:<id>`). sim.ts `folkHere` puts the real trader first and drops chance-drawn
 traders on road hexes. main.ts `placeTraffic` draws them as DOM dots (`#traffic .tr`) where seen.
-Crew stats: caravan.ts `memberStats`/`crewSheet`/`roleStats` read the same constants the rules use
-(`ROLE_FIGHT`, `HUNT_ODDS`, `BANDIT_FIGHT`); keep it that way, so the sheet can't drift.
+Crew are skills, not roles (vault decision 2026-11-08): each `Member` has `skills` (fight, scout,
+hunt, barter, mend; 1–5) and the leader is `lead: true`. One-person tasks use the caravan's best among
+the well (`best(c, k)`: Sight from Scout via `SCOUT_SIGHT`, `huntOdds` via `HUNT_PIP`, `barterEdge`
+in sim.ts buy/sell); Fight is everyone's, summed through `FIGHT_PIP`. Recruits come from
+`makeMember(name, lean, rng)` and cost `hireCost`; old saves convert with `fromRole` in `migrateSave`.
+Encounter choices can be `locked: 'Scout 4'` (greyed on screen, skipped by the bot). The sheets
+(`memberStats`, `crewSheet`, `crewDiff`) read the same constants the rules use; keep it that way, so
+the sheet can't drift.

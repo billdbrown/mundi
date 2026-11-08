@@ -10,12 +10,11 @@ import { makeRng } from '../rng.ts';
 import { nameMaker } from '../gamedata.ts';
 import type { World } from '../world.ts';
 import type { Atlas, Place } from './atlas.ts';
-import { TRAITS, type Member, type Origin, type Role, type Trait } from './caravan.ts';
+import { hireCost, makeMember, type Lean, type Member, type Origin } from './caravan.ts';
 import { tradesOf } from './towns.ts';
 
 /** Someone in the tavern looking for a place in a caravan. */
-export interface Candidate { m: Member; cost: number }
-export const ROLE_COST: Record<Role, number> = { leader: 0, hand: 30, guard: 55, scout: 70 };
+export interface Candidate { m: Member; cost: number; lean: Lean }
 /** Most people you can take on before setting out (the leader besides). */
 export const SETUP_MAX = 5;
 
@@ -24,11 +23,10 @@ const dot = (w: World, a: number, b: number) => {
   return P[a * 3] * P[b * 3] + P[a * 3 + 1] * P[b * 3 + 1] + P[a * 3 + 2] * P[b * 3 + 2];
 };
 
-/** Six people in the home tavern, each with a role, a way about them and something they want. */
+/** Six people in the home tavern, each with a stat line, maybe a way about them, and something they want. */
 export function candidates(w: World, a: Atlas, home: Place, origin: Origin, seed: number): Candidate[] {
   const rng = makeRng((seed * 48271 + home.id * 7 + 3) >>> 0), names = nameMaker(seed * 29 + 11);
-  const traits = Object.keys(TRAITS) as Trait[];
-  const roles: Role[] = origin === 'cartographers' ? ['scout', 'scout', 'guard', 'guard', 'hand', 'hand'] : ['guard', 'guard', 'guard', 'hand', 'hand', 'scout'];
+  const leans: Lean[] = origin === 'cartographers' ? ['scout', 'scout', 'fighter', 'fighter', 'hunter', 'hand'] : ['fighter', 'fighter', 'fighter', 'hand', 'hand', 'scout'];
   const byNear = a.places.filter((p) => p.id !== home.id).sort((x, y) => dot(w, y.cell, home.cell) - dot(w, x.cell, home.cell));
   const near = byNear[0]?.name ?? 'the next town', far = byNear[Math.floor(byNear.length * 0.6)]?.name ?? 'the far towns';
   const shrine = byNear.slice(0, 30).find((p) => tradesOf(w, a, p)[0] === 'shrine')?.name;
@@ -45,11 +43,10 @@ export function candidates(w: World, a: Atlas, home: Place, origin: Origin, seed
   ];
   // Shuffle the wishes, so no two share one.
   for (let i = wishes.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [wishes[i], wishes[j]] = [wishes[j], wishes[i]]; }
-  return roles.map((role, i) => {
-    const trait = traits[Math.floor(rng() * traits.length)];
-    // A stout guard or a keen scout asks a little more; the frugal a little less.
-    const cost = ROLE_COST[role] + ((role === 'guard' && trait === 'stout') || (role === 'scout' && trait === 'keen') ? 10 : 0) - (trait === 'frugal' ? 5 : 0);
-    return { m: { name: names(), role, trait, health: 'well', alive: true, joined: 0, wish: wishes[i] }, cost };
+  return leans.map((lean, i) => {
+    const m = makeMember(names(), lean, rng);
+    m.wish = wishes[i];
+    return { m, cost: hireCost(m), lean };
   });
 }
 

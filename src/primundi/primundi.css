@@ -351,3 +351,6 @@ body.setting-up #toast { bottom: calc(200px + env(safe-area-inset-bottom)); }
 #card .mrow .g small.pl { font-variant-numeric: tabular-nums; }
 #card .mrow .g small.pl.gain { color: var(--good); }
 #card .mrow .g small.pl.loss { color: var(--bad); }
+/* What taking someone on changes (caravan.ts crewDiff): "Fight 10.5 → 13.5". */
+.chips.diff::before { content: 'With them'; font-size: 11px; color: var(--quiet); align-self: center; margin-right: 2px; }
+.chips.diff .st { background: rgba(159, 211, 138, .08); }

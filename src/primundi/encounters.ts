@@ -10,7 +10,7 @@ import { B } from '../biomes.ts';
 import { baseOf } from '../ecology.ts';
 import type { World } from '../world.ts';
 import { G, GOODS } from './atlas.ts';
-import { BANDIT_FIGHT, cargoUsed, hasKeen, living, someone, strength, waterCap, type Caravan, type Member } from './caravan.ts';
+import { BANDIT_FIGHT, best, cargoUsed, living, makeMember, someone, strength, waterCap, type Caravan, type Lean, type Member } from './caravan.ts';
 
 export interface Ctx {
   w: World;
@@ -54,7 +54,7 @@ export interface Effect {
   /** Reveal the hexes around the nearest unknown place: a rumour on the map. */
   rumour?: boolean;
   /** Someone new joins. */
-  recruit?: { role: Member['role']; name: string };
+  recruit?: { lean: Lean; name: string };
   /** The job that brought you here is done. */
   questDone?: boolean;
   /** Sell loads to someone met on the road: good, how many, orrels each. */
@@ -63,7 +63,12 @@ export interface Effect {
   learn?: number;
 }
 export interface Outcome { text: string; effect: Effect }
-export interface Choice { label: string; hint?: string; resolve(ctx: Ctx): Outcome }
+export interface Choice { label: string; hint?: string;
+  /** Not open to this caravan: what it would take ("Scout 4"). Shown greyed, can't be chosen. */
+  locked?: string;
+  resolve(ctx: Ctx): Outcome }
+/** A choice that needs the caravan's best at something. */
+export const SLIP_SCOUT = 4, PARLEY_BARTER = 3;
 export interface Encounter {
   id: string;
   title: string;
@@ -102,6 +107,12 @@ export const ENCOUNTERS: Encounter[] = [
           const d = c.rng() < 0.4 ? someone(c.caravan, c.rng) : null, h = d ? null : someone(c.caravan, c.rng);
           return { text: d ? `They overrun you. ${d.name} falls, and they take what they like.` : `They overrun you and take what they like. ${h?.name ?? 'Someone'} is hurt.`, effect: { loseCargo: 0.3, orrels: -Math.round(c.caravan.orrels * 0.2), dies: d, hurt: h, morale: -15 } };
         } },
+        { label: 'Slip past', hint: 'Off the road before they see you', locked: best(x.caravan, 'scout') >= SLIP_SCOUT ? undefined : `Scout ${SLIP_SCOUT}`, resolve: (c) => c.rng() < 0.8
+          ? { text: 'Your scout saw them first. You lead the beasts off the road and round, and they never know you were there.', effect: { days: 0.5 } }
+          : { text: 'A beast brays at the wrong moment. They come for you, and take more for the trouble.', effect: { loseCargo: 0.15, morale: -6 } } },
+        { label: `Talk it down to ${Math.round(toll / 2)}`, hint: 'Someone here knows how to haggle', locked: best(x.caravan, 'barter') >= PARLEY_BARTER ? undefined : `Barter ${PARLEY_BARTER}`, resolve: (c) => c.caravan.orrels >= Math.round(toll / 2)
+          ? { text: 'A long talk, some laughing, a cup shared. They settle for half and call it a favour.', effect: { orrels: -Math.round(toll / 2) } }
+          : { text: 'They like the talk, not the empty purse, and take a tenth of the cargo.', effect: { orrels: -c.caravan.orrels, loseCargo: 0.1, morale: -4 } } },
         { label: `Pay ${toll} orrels`, resolve: (c) => c.caravan.orrels >= toll
           ? { text: 'They count it twice and wave you through.', effect: { orrels: -toll, morale: -3 } }
           : { text: 'You turn out your purse. They take it, and a tenth of the cargo besides.', effect: { orrels: -c.caravan.orrels, loseCargo: 0.1, morale: -6 } } },
@@ -117,8 +128,8 @@ export const ENCOUNTERS: Encounter[] = [
     weight: (x) => (x.road ? 0.4 : 1) * (x.dry && !x.river ? 0.5 : 1),
     text: (x) => `${x.cold ? 'A herd of shaggy deer' : x.forest ? 'Wild pigs' : 'A herd of grazers'} ${x.cold ? 'paws at the snow' : 'feeds'} downwind of you, not far off.`,
     choices: (x) => [
-      { label: 'Hunt them', hint: hasKeen(x.caravan) ? 'Someone here has a keen eye' : undefined, resolve: (c) => {
-        const r = c.rng() + (hasKeen(c.caravan) ? 0.25 : 0);
+      { label: 'Hunt them', hint: `Hunt ${best(x.caravan, 'hunt')}`, resolve: (c) => {
+        const r = c.rng() + (best(c.caravan, 'hunt') - 1) * 0.08;
         if (r > 0.55) { const meat = Math.round(living(c.caravan).length * (3 + c.rng() * 4)); return { text: `A clean kill. You eat well tonight and smoke the rest: ${meat} days of rations.${c.cold ? ' The hides are worth something too.' : ''}`, effect: { rations: meat, morale: 5, cargo: c.cold ? [[G.furs, 1 + Math.floor(c.rng() * 2)]] : undefined, days: 0.5 } }; }
         if (r > 0.2) return { text: 'They scatter at the first shot. Half a day gone, nothing to show.', effect: { days: 0.5 } };
         const h = someone(c.caravan, c.rng); return { text: `${h?.name ?? 'Someone'} turns an ankle chasing them down a bank.`, effect: { hurt: h, days: 0.5 } };
@@ -182,7 +193,7 @@ export const ENCOUNTERS: Encounter[] = [
       { label: 'Offer them a place', resolve: (c) => {
         if (c.rng() >= 0.5) return { text: 'They thank you, and are gone before dawn. So is a waterskin.', effect: { water: -living(c.caravan).length } };
         const n = c.name();
-        return { text: `They give their name, ${n}, and take up a load in the morning.`, effect: { recruit: { role: c.rng() < 0.4 ? 'guard' : 'hand', name: n }, rations: -1 } };
+        return { text: `They give their name, ${n}, and take up a load in the morning.`, effect: { recruit: { lean: c.rng() < 0.4 ? 'fighter' : 'hand', name: n }, rations: -1 } };
       } },
       { label: 'Send them on', resolve: () => ({ text: 'They walk on without a word.', effect: {} }) },
     ],
@@ -389,7 +400,7 @@ export function applyEffect(c: Caravan, e: Effect, name: () => string, day: numb
   if (e.hurt && e.hurt.alive) { e.hurt.health = 'hurt'; out.push(`${e.hurt.name} hurt`); }
   if (e.sick && e.sick.alive) { e.sick.health = 'sick'; out.push(`${e.sick.name} sick`); }
   if (e.dies && e.dies.alive) { e.dies.alive = false; out.push(`${e.dies.name} dead`); }
-  if (e.recruit) { const m: Member = { name: e.recruit.name || name(), role: e.recruit.role, trait: (['stout', 'keen', 'cheerful', 'frugal', 'steady'] as const)[Math.floor(dice() * 5)], health: 'well', alive: true, joined: day }; c.members.push(m); out.push(`${m.name} joins as a ${m.role}`); }
+  if (e.recruit) { const m: Member = makeMember(e.recruit.name || name(), e.recruit.lean, dice, day); c.members.push(m); out.push(`${m.name} joins`); }
   if (e.days) out.push(`${plural(e.days, 'day')} lost`);
   return out;
 }

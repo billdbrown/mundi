@@ -12,7 +12,7 @@ import { WATER_LAND } from '../world.ts';
 import { nameMaker } from '../gamedata.ts';
 import { makeRng } from '../rng.ts';
 import { GOODS, G, type Atlas, type Place } from './atlas.ts';
-import { cargoUsed, hasKeen, living, someone, HUNT_ODDS } from './caravan.ts';
+import { best, cargoUsed, hasKeen, huntOdds, living, someone } from './caravan.ts';
 import { B } from '../biomes.ts';
 import { baseOf } from '../ecology.ts';
 import type { Encounter } from './encounters.ts';
@@ -151,9 +151,9 @@ export function huntEncounter(kind: AnimalKind): Encounter {
       `The ${name} graze on, a stone's throw off. Nobody breathes.`,
     ]),
     choices: (x) => [
-      { label: 'Take the shot', hint: hasKeen(x.caravan) ? 'A keen eye is steadier' : undefined, resolve: (c) => {
+      { label: 'Take the shot', hint: `Hunt ${best(x.caravan, 'hunt')}: ${Math.round(huntOdds(x.caravan) * 100)}%`, resolve: (c) => {
         const n = living(c.caravan).length;
-        if (c.rng() < (hasKeen(c.caravan) ? HUNT_ODDS.keen : HUNT_ODDS.plain)) {
+        if (c.rng() < huntOdds(c.caravan)) {
           const fur = big && c.rng() < 0.5;
           return { text: kind === 'fowl' ? 'A brace, and another, before the rest take wing. Feathers everywhere, and supper.' : `A clean kill. You eat well tonight and smoke the rest${fur ? ', and the hide is worth keeping' : ''}.`,
             effect: { rations: Math.round(n * (kind === 'fowl' ? 3 : big ? 6 : 5) * (0.8 + c.rng() * 0.4)), morale: 5, ...(fur ? { cargo: [[G.furs, 1]] as [number, number][] } : {}) } };
