@@ -92,13 +92,22 @@ food and beds 10% off for friends). sim.ts `localOffer` is each town's monthly o
 the trade with `hextrades.ts` props (`placeTrade`, game only: hash `trade=`), people at the doors
 and a few walking the streets (`placeStrollers`).
 `opening.ts` is the first ten minutes (vault decision 2026-11-07): a new game (`newGame(..., {setup:
-true})`, from the launch screen; the playtest bot still starts the old fixed way) is the leader and
+true})`, from the launch screen; the playtest bot plays it too, via `quickSetup`) is the leader and
 `SETUP_PURSE`. You build the caravan by walking home: crew at the tavern (`candidates`, each with a
 `wish`), beasts in the home yard (`BEASTS` in caravan.ts: capacity and pace), a first load at the
-market (sim.ts `firstLoads`). `save.setup` holds it until `finishSetup`/`quickSetup`, which give the
+market (sim.ts `firstLoads`: only loads making `FIRST_LOAD_GAIN` priced as the markets trade, else an
+order from the errand's town, a procure job paying `ORDER_GAIN`). `save.setup` holds it until `finishSetup`/`quickSetup`, which give the
 first errand (`save.errand`). The first open hex out of town has a caravan on it (`save.firstRoad`,
 folk id `first`); handing in the errand gives word of a far place (`save.far`, shown as a guess with
 an edge arrow, never revealed). main.ts: `startIntro` (planet from far, waits for
 `view.whenGateReady()` under a veil: the stand-in planet has no storm), `syncSetup` (the gathering
 bar; its items walk you there, hex message `primundi-go`), `showErrand`, `showFirstPay`, `farMark`.
 `window.primundi` is its debug handle (`travelTo(cell)`, `setSpeed(n)`, `encounter(id)`, `revealRing()`).
+
+`traffic.ts` is the other traders on the roads: `Traffic` (one per game, sim.ts `trafficOf(g)`) works
+each trader's legs town to neighbouring town along `atlas.roadPaths` from the seed, lazily, nothing
+saved. `onRoad(day)` and `inCell(cell, day)`; a meeting id is `trafficId` (`t<i>-<leg>`, in
+`save.finds` as `folk:<id>`). sim.ts `folkHere` puts the real trader first and drops chance-drawn
+traders on road hexes. main.ts `placeTraffic` draws them as DOM dots (`#traffic .tr`) where seen.
+Crew stats: caravan.ts `memberStats`/`crewSheet`/`roleStats` read the same constants the rules use
+(`ROLE_FIGHT`, `HUNT_ODDS`, `BANDIT_FIGHT`); keep it that way, so the sheet can't drift.
