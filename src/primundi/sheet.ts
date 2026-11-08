@@ -6,7 +6,7 @@
  *
  * Pure HTML from the caravan; main.ts puts it in the journal and draws the globes.
  */
-import { best, crewSheet, SKILLS, SKILL_MAX, SKILL_NAMES, TRAITS, type Caravan, type Member, type Stat } from './caravan.ts';
+import { best, CARAVAN_GEAR, crewSheet, itemOf, SKILLS, SKILL_MAX, SKILL_NAMES, SLOT_NAMES, TRAITS, type Caravan, type Member, type Stat } from './caravan.ts';
 import { bornStats } from './crew.ts';
 import { bondedWith, markOf, XP_NEXT } from './learn.ts';
 
@@ -22,9 +22,18 @@ export const pips = (n: number, bonus = 0, title = '') => { const b = Math.max(0
 /** A skill's pips for `m`, with what marks add and how far to the next. */
 const skillPips = (m: Member, k: (typeof SKILLS)[number]) => {
   const n = m.skills[k], x = Math.floor(m.xp?.[k] ?? 0);
-  return pips(n, m.bonus?.[k] ?? 0, `${SKILL_NAMES[k]} ${n}${m.bonus?.[k] ? ` +${m.bonus[k]} from marks` : ''}${n < SKILL_MAX ? ` · ${x} of ${XP_NEXT[n]} to ${n + 1}` : ''}`);
+  const g = Object.values(m.gear ?? {}).reduce((a, id) => a + (itemOf(id)?.adds[k] ?? 0), 0);
+  return pips(n, (m.bonus?.[k] ?? 0) + g, `${SKILL_NAMES[k]} ${n}${m.bonus?.[k] ? ` +${m.bonus[k]} from marks` : ''}${g ? ` +${g} from gear` : ''}${n < SKILL_MAX ? ` · ${x} of ${XP_NEXT[n]} to ${n + 1}` : ''}`);
 };
-const eff = (m: Member, k: (typeof SKILLS)[number]) => Math.min(SKILL_MAX, m.skills[k] + (m.bonus?.[k] ?? 0));
+const eff = (m: Member, k: (typeof SKILLS)[number]) => Math.min(SKILL_MAX, m.skills[k] + (m.bonus?.[k] ?? 0) + Object.values(m.gear ?? {}).reduce((a, id) => a + (itemOf(id)?.adds[k] ?? 0), 0));
+/** A person's gear as chips, and what in the stores they could take. */
+const gearRow = (m: Member, i: number, c: Caravan) => {
+  const have = Object.entries(m.gear ?? {}).map(([, id]) => itemOf(id)).filter((x) => x);
+  const give = [...new Set(c.stores ?? [])].map((id) => itemOf(id)).filter((x) => x);
+  return `${have.length ? chips(have.map((it) => ({ k: it!.name, v: Object.entries(it!.adds).map(([k, v]) => `${SKILL_NAMES[k as keyof typeof SKILL_NAMES]} +${v}`).join(' '), good: true }))) : '<span class="dim">Nothing but what they stand in.</span>'}
+    ${Object.keys(m.gear ?? {}).map((sl) => `<button class="give" data-act="ungive" data-i="${i}" data-slot="${sl}">Take off ${esc(itemOf(m.gear![sl as keyof typeof SLOT_NAMES])!.name)}</button>`).join('')}
+    ${give.map((it) => `<button class="give" data-act="give" data-i="${i}" data-id="${it!.id}">Give ${esc(it!.name)} (${SLOT_NAMES[it!.slot].toLowerCase()})</button>`).join('')}`;
+};
 
 export interface SheetCtx {
   c: Caravan;
@@ -61,6 +70,7 @@ export function sheet(m: Member, i: number, x: SheetCtx): string {
     <dl>
       <dt>Born</dt><dd>${m.born ? chips(bornStats(m)) : '<span class="dim">—</span>'}</dd>
       ${m.trait ? `<dt>${esc(traitName(m))}</dt><dd>${chips(traitStats(m))}</dd>` : ''}
+      <dt>Gear</dt><dd>${gearRow(m, i, x.c)}</dd>
       <dt>Marks</dt><dd>${m.marks?.length ? chips(m.marks.map((id) => markOf(id)).filter((k) => k).map((k) => ({ k: k!.name, v: k!.text, good: true }))) : '<span class="dim">None yet. Deeds on the road earn them.</span>'}</dd>
       <dt>Bond</dt><dd>${bondedWith(x.c, m).length ? chips(bondedWith(x.c, m).map((n) => ({ k: `With ${n}`, v: 'Fight +1 together', good: true }))) : '<span class="dim">—</span>'}</dd>
     </dl>
@@ -68,7 +78,7 @@ export function sheet(m: Member, i: number, x: SheetCtx): string {
 }
 
 /** The caravan's totals, under every layout. */
-const totals = (c: Caravan) => `<div class="sheet"><span class="lab">The caravan</span>${crewSheet(c).map(chip).join('')}</div>`;
+const totals = (c: Caravan) => `<div class="sheet"><span class="lab">The caravan</span>${crewSheet(c).map(chip).join('')}${(c.kit ?? []).map((k) => chip({ k: CARAVAN_GEAR[k].name, v: CARAVAN_GEAR[k].text, good: true })).join('')}</div>`;
 
 /** The crew tab, in a layout. `sel` is the roster's chosen row. */
 export function crewHtml(layout: Layout, x: SheetCtx, sel: number): string {

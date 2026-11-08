@@ -14,6 +14,7 @@ import { bestKnownSell } from '../../src/primundi/market.ts';
 import { AMBITION_GOAL, appetite, best, cargoUsed, living, thirst, type Origin, type Skill } from '../../src/primundi/caravan.ts';
 import { QUEST_ENCOUNTERS } from '../../src/primundi/encounters.ts';
 import { bandAt } from '../../src/primundi/depth.ts';
+import { bestHolder, buyItem, gainFor, shopAt } from '../../src/primundi/gear.ts';
 import { findReady } from '../../src/primundi/finds.ts';
 import { MAX_QUESTS, canHandIn, questTarget } from '../../src/primundi/quests.ts';
 import type { StartBias } from '../../src/primundi/start.ts';
@@ -103,6 +104,16 @@ function hireBest(g: Game, pid: number, k: Skill | null, max: number) {
     .sort((a, b) => (k ? b.m.skills[k] - a.m.skills[k] : 0) || a.cost - b.cost)[0];
   if (r) hire(g, pid, r.i);
 }
+/** Buy the gear that helps most for the orrels, keeping `keep` in hand; and a lantern for the deep. */
+function outfit(g: Game, pid: number, keep: number) {
+  const c = g.s.caravan, p = g.a.places[pid];
+  for (let n = 0; n < 2; n++) {
+    const it = shopAt(g.w, g.a, p).filter((x) => c.orrels - x.cost >= keep).map((x) => { const m = bestHolder(c, x); return { x, v: m ? gainFor(c, m, x) / x.cost : 0 }; })
+      .filter((o) => o.v > 0).sort((a, b) => b.v - a.v)[0];
+    if (!it) break;
+    buyItem(c, it.x.id);
+  }
+}
 function provision(g: Game, pid: number, days: number, keep = 0) {
   const c = g.s.caravan, have = c.rations / Math.max(1, appetite(c));
   if (have >= days) return;
@@ -170,6 +181,7 @@ function traderBot(g: Game, rng: () => number, bold: boolean): Bot {
       // Mend: rest when spirits are low or someone is hurt (free at home). The reckless never do.
       if (!bold && (c.morale < 35 || c.members.some((m) => m.alive && m.health !== 'well')) && (pid === s.home || c.orrels > 120)) rest(g, pid, 2);
       if (!bold && living(c).length < 5 && c.orrels > 200) hireBest(g, pid, 'fight', 80);
+      if (!bold) outfit(g, pid, 1000);
       // Keep enough for the road's food; carry the best basket the purse and the pack allow.
       const t = bestTrade(g, pid, c.capacity - cargoUsed(c), c.orrels - 40);
       dest = -1;
@@ -251,6 +263,7 @@ function deepBot(g: Game, rng: () => number): Bot {
       sellHere(g, pid, true);
       if ((c.morale < 35 || c.members.some((m) => m.alive && m.health !== 'well')) && (pid === g.s.home || c.orrels > 80)) rest(g, pid, 2);
       if (living(c).length < 6 && c.orrels > 160) hireBest(g, pid, 'fight', 100);
+      outfit(g, pid, 250);
       provision(g, pid, 35);
       out = g.s.day;
     },

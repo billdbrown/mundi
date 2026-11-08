@@ -50,7 +50,42 @@ export interface Member { name: string; skills: Skills; trait?: Trait; health: '
   deeds?: Partial<Record<string, number>>;
   marks?: string[];
   bonus?: Partial<Skills>;
-  lands?: string[] }
+  lands?: string[];
+  /** What they carry, by slot: item ids (ITEMS). */
+  gear?: Partial<Record<Slot, string>> }
+
+/** Gear (decision 2026-11-08): three slots a person, each item a skill pip or two on top. Towns
+ * make what their trade knows (gear.ts sells it); the best only on the frontier or deep out. */
+export type Slot = 'weapon' | 'kit' | 'tool';
+export const SLOT_NAMES: Record<Slot, string> = { weapon: 'Weapon', kit: 'Kit', tool: 'Tool' };
+export interface Item { id: string; name: string; slot: Slot; tier: 1 | 2 | 3; adds: Partial<Skills>; cost: number;
+  /** Town trades that make it (towns.ts Trade); none: anywhere with a market. */
+  trades?: string[] }
+export const ITEMS: Item[] = [
+  { id: 'spear', name: 'Spear', slot: 'weapon', tier: 1, adds: { fight: 1 }, cost: 30 },
+  { id: 'bow', name: 'Hunting bow', slot: 'weapon', tier: 1, adds: { hunt: 1 }, cost: 25, trades: ['trapping', 'herding', 'timber'] },
+  { id: 'sword', name: 'Sword', slot: 'weapon', tier: 2, adds: { fight: 2 }, cost: 110, trades: ['smithing', 'mining'] },
+  { id: 'longbow', name: 'Longbow', slot: 'weapon', tier: 2, adds: { hunt: 1, fight: 1 }, cost: 90, trades: ['timber', 'trapping'] },
+  { id: 'wildblade', name: 'Frontier blade', slot: 'weapon', tier: 3, adds: { fight: 2, hunt: 1 }, cost: 240 },
+  { id: 'hide', name: 'Hide coat', slot: 'kit', tier: 1, adds: { fight: 1 }, cost: 35 },
+  { id: 'mail', name: 'Mail shirt', slot: 'kit', tier: 2, adds: { fight: 2 }, cost: 150, trades: ['smithing'] },
+  { id: 'wildkit', name: 'Deep-country kit', slot: 'kit', tier: 3, adds: { fight: 1, scout: 1 }, cost: 220 },
+  { id: 'medkit', name: "Healer's roll", slot: 'tool', tier: 1, adds: { mend: 1 }, cost: 25, trades: ['shrine', 'farming'] },
+  { id: 'scales', name: 'Scales and ledger', slot: 'tool', tier: 1, adds: { barter: 1 }, cost: 35, trades: ['market', 'weaving', 'salt'] },
+  { id: 'compass', name: 'Compass', slot: 'tool', tier: 1, adds: { scout: 1 }, cost: 40, trades: ['mining', 'fishing'] },
+  { id: 'glass', name: 'Spyglass', slot: 'tool', tier: 2, adds: { scout: 2 }, cost: 130, trades: ['market', 'fishing'] },
+  { id: 'surgeon', name: "Surgeon's case", slot: 'tool', tier: 2, adds: { mend: 2 }, cost: 100, trades: ['shrine'] },
+];
+export const itemOf = (id?: string) => ITEMS.find((x) => x.id === id);
+/** What a person's gear adds to a skill. */
+export const gearAdds = (m: Member, k: Skill) => Object.values(m.gear ?? {}).reduce((a, id) => a + (itemOf(id)?.adds[k] ?? 0), 0);
+/** The caravan's own gear: a reinforced cart, a lantern for the dark country. */
+export type CaravanGear = 'cart' | 'lantern';
+export const CARAVAN_GEAR: Record<CaravanGear, { name: string; text: string; cost: number }> = {
+  cart: { name: 'Reinforced cart', text: 'Load +4 · Fight +1', cost: 120 },
+  lantern: { name: 'Storm lantern', text: 'Sight +1 in the Wild and Deep', cost: 60 },
+};
+export const CART_FIGHT = 1, CART_LOAD = 4;
 
 /** What kind of person a recruit is: one or two strong skills, the rest low. */
 export type Lean = 'fighter' | 'scout' | 'hunter' | 'trader' | 'mender' | 'hand';
@@ -129,6 +164,10 @@ export interface Caravan {
   pins?: Partial<Record<Skill, string>>;
   /** Pairs (names, sorted, joined by |): days together, fights shared, and bonded (learn.ts). */
   bonds?: Record<string, { days: number; fights: number; on?: boolean }>;
+  /** The caravan's own gear (CARAVAN_GEAR). */
+  kit?: CaravanGear[];
+  /** Gear carried and not in use (item ids). */
+  stores?: string[];
 }
 
 /** A caravan as it sets out from home. */
@@ -171,7 +210,7 @@ export const thirst = (c: Caravan) => living(c).length;
 /** What a Fight pip counts for in a fight (strength()): a guard of old was Fight 3. */
 export const FIGHT_PIP = [0, 1, 1.5, 3, 4, 5.5];
 /** A skill as the rules use it: the pips, and what marks add (learn.ts), up to the most there is. */
-export const eff = (m: Member, k: Skill) => Math.min(SKILL_MAX, m.skills[k] + (m.bonus?.[k] ?? 0));
+export const eff = (m: Member, k: Skill) => Math.min(SKILL_MAX, m.skills[k] + (m.bonus?.[k] ?? 0) + gearAdds(m, k));
 export const fightOf = (m: Member) => FIGHT_PIP[Math.max(0, eff(m, 'fight'))];
 /** A road-bonded pair, both standing, is worth this much more in a fight (learn.ts). */
 export const BOND_FIGHT = 1;
@@ -181,6 +220,7 @@ export function strength(c: Caravan): number {
   const well = new Set<string>();
   for (const m of living(c)) { s += fightOf(m) * (m.health !== 'well' ? 0.5 : 1); if (m.health === 'well') well.add(m.name); }
   for (const [k, b] of Object.entries(c.bonds ?? {})) if (b.on && k.split('|').every((n) => well.has(n))) s += BOND_FIGHT;
+  if (c.kit?.includes('cart')) s += CART_FIGHT;
   return s;
 }
 /** Who does a one-person task: whoever is pinned to it (training), if they can, or the best. */

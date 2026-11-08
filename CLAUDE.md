@@ -138,3 +138,10 @@ times `DEPTH_XP` by band; `XP_NEXT` is the cost of each pip. Deeds (`deed`) earn
 `bonus` pips (`eff(m, k)` is the skill the rules use) or `lands` to eat less in. `bonds` form after
 `BOND_DAYS` together and `BOND_FIGHTS` shared fights, worth `BOND_FIGHT` in `strength`. The roster
 pins a one-person task to someone by tapping its cell. The playtest prints pips a person a year.
+
+Gear: caravan.ts `ITEMS` (three `Slot`s, tiers 1–3, `adds` skill pips, counted in `eff` via `gearAdds`)
+and `CARAVAN_GEAR` (cart: `CART_LOAD`, `CART_FIGHT`; lantern: Sight +1 in Wild and Deep, sim.ts
+`lookAround`). `gear.ts`: `shopAt` (a town's trade; tier 2 towns only; tier 3 towns on the frontier
+and out), `take` puts a new item on `bestHolder` (fight valued as `fightOf` counts it), `equip` and
+`unequip` move items through the caravan's `stores`. Deep ruins hold tier-3 gear at
+`DEEP_GEAR_CHANCE`. The outfitter is on a town's Supplies card; gear shows on each person's papers.

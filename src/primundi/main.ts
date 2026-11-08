@@ -34,6 +34,8 @@ import { bandAt, BANDS, depthStats } from './depth.ts';
 import { DepthLayer } from './depthlayer.ts';
 import { pin } from './learn.ts';
 import type { Skill } from './caravan.ts';
+import { bestHolder, buyCaravanGear, buyItem, caravanShopAt, equip, shopAt, unequip } from './gear.ts';
+import { CARAVAN_GEAR, itemOf, SKILL_NAMES, SLOT_NAMES, type CaravanGear, type Item } from './caravan.ts';
 import { crewHtml, type Layout } from './sheet.ts';
 import { AMBITION_GOAL, BANDIT_FIGHT, BEASTS, crewDiff, crewSheet, memberStats, type Stat, ORIGIN_CAPACITY, ORIGINS, TRAITS, type Beasts, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
@@ -1039,6 +1041,17 @@ function showHexCard(c: number) {
     ${here ? `${place ? `<button class="go" data-act="town">Enter ${esc(place.name)}</button>` : ''}<button class="ghost" data-act="look">Look around</button>`
       : p ? `<button class="go" data-act="travel" data-cell="${c}">Travel here<span>${p.guess ? 'perhaps ' : ''}${daysText(p.days)}</span></button>` : '<p class="dim">No way there that you know of.</p>'}`);
 }
+/** The outfitter: gear this town makes (gear.ts), and who it would go to. */
+function outfitter(pid: number): string {
+  if (!world || !atlas || !save) return '';
+  const c = save.caravan, p = atlas.places[pid], items = shopAt(world, atlas, p), cg = caravanShopAt(world, atlas, p).filter((k) => !c.kit?.includes(k));
+  if (!items.length && !cg.length) return '';
+  const adds = (it: Item) => Object.entries(it.adds).map(([k, v]) => ({ k: SKILL_NAMES[k as Skill], v: `+${v}`, good: true }));
+  return `<h3>Outfitter</h3><div class="opts">${items.map((it) => {
+    const to = bestHolder(c, it);
+    return opt('gear', `${esc(it.name)}${it.tier > 1 ? ` <small class="tier t${it.tier}">${it.tier === 3 ? 'frontier' : 'fine'}</small>` : ''}`, `<span class="chips">${stats([{ k: SLOT_NAMES[it.slot], v: '', good: null }, ...adds(it)])}</span>${to ? `<span class="dim small">for ${esc(to.name)}</span>` : '<span class="dim small">nobody gains: to the stores</span>'}`, `${ORREL}${it.cost}`, `data-id="${it.id}"`, c.orrels < it.cost);
+  }).join('')}${cg.map((k) => opt('cgear', CARAVAN_GEAR[k].name, CARAVAN_GEAR[k].text, `${ORREL}${CARAVAN_GEAR[k].cost}`, `data-k="${k}"`, c.orrels < CARAVAN_GEAR[k].cost)).join('')}</div>`;
+}
 /** What can be made out of a hex's finds from a distance: reasons to walk into it. */
 function findHints(c: number): string {
   if (!world || !atlas || !save) return '';
@@ -1102,6 +1115,7 @@ function openTown(pid: number, tab = townTab) {
     body = `${purse}<h3>Provisions</h3>
       <p>Food for <b>${Math.floor(rd)} days</b>. The skins are filled at the well, free: ${Math.floor(waterCap(c) / Math.max(1, thirst(c)))} days of water.</p>
       <div class="opts">${[5, 10, 20].map((d) => { const cost = rationCost(g!, p.id, d); return opt('rations', `${d} days of food`, `for ${living(c).length} people`, `${ORREL}${cost}`, `data-n="${d}"`, c.orrels < cost); }).join('')}</div>
+      ${outfitter(p.id)}
       <h3>Charts</h3>
       ${c.unsoldCharts ? `<p>You have mapped ${fmt(c.unsoldCharts)} hexes nobody here has seen drawn.</p><div class="opts">${opt('charts', 'Sell your charts', `${p.town ? 'A town pays well' : 'A village pays half'}`, `${ORREL}${fmt(chart)}`)}</div>`
         : '<p class="dim">Nothing new to sell. Every hex you uncover on the road is worth something here.</p>'}`;
@@ -1373,6 +1387,10 @@ panel.addEventListener('click', (e) => {
       break;
     }
     case 'jtab': showJournal(b.dataset.tab); break;
+    case 'gear': { const who = buyItem(s.caravan, b.dataset.id!); if (who != null) { toast(`${itemOf(b.dataset.id)!.name}: ${who ? `to ${who}` : 'to the stores'}.`); store(); openTown(pid, 'supplies'); } break; }
+    case 'cgear': if (buyCaravanGear(s.caravan, b.dataset.k as CaravanGear)) { store(); openTown(pid, 'supplies'); } break;
+    case 'ungive': { const m = s.caravan.members[Number(b.dataset.i)]; if (m) { unequip(s.caravan, m, b.dataset.slot as Item['slot']); store(); showJournal('caravan'); } break; }
+    case 'give': { const m = s.caravan.members[Number(b.dataset.i)]; if (m) { equip(s.caravan, m, b.dataset.id!); store(); showJournal('caravan'); } break; }
     case 'layout': sheetLayout = b.dataset.l as Layout; localStorage.setItem('primundi.layout', sheetLayout); showJournal('caravan'); break;
     case 'round': {
       const r = standRound(g!);

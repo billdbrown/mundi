@@ -648,3 +648,40 @@ test('marks, bonds and the training pin', () => {
   pin(c, 'scout', hand.name);
   assert.equal(c.pins!.scout, undefined);
 });
+
+import { shopAt, buyItem, buyCaravanGear, bestHolder, equip, unequip } from '../src/primundi/gear.ts';
+import { itemOf } from '../src/primundi/caravan.ts';
+test('gear: towns sell their trade, villages no fine goods, the best only out on the frontier', () => {
+  for (const p of atlas.places) {
+    const s = shopAt(hw, atlas, p);
+    assert.ok(s.some((x) => x.id === 'spear'), `${p.name} sells spears`);
+    if (!p.town) assert.ok(s.every((x) => x.tier === 1));
+    if (s.some((x) => x.tier === 3)) assert.ok(bandAt(hw, atlas, p.cell) >= 1 && p.town);
+  }
+});
+test('gear adds to the skill the rules use, goes to who gains most, and moves between people', () => {
+  const c = newCaravan('T', 'traders', 3);
+  c.orrels = 1000;
+  const s0 = strength(c), who = buyItem(c, 'sword');
+  assert.ok(who);
+  assert.ok(strength(c) > s0);
+  const m = c.members.find((x) => x.name === who)!;
+  assert.equal(m.gear!.weapon, 'sword');
+  // Hand it on, through the stores.
+  const other = c.members.find((x) => x !== m && x.alive)!;
+  assert.ok(!equip(c, other, 'sword'), 'not in the stores yet');
+  unequip(c, m, 'weapon');
+  assert.ok(equip(c, other, 'sword'));
+  assert.equal(other.gear!.weapon, 'sword');
+  assert.equal(m.gear!.weapon, undefined);
+  assert.deepEqual(c.stores, []);
+  // Two of a thing: two people carry one each.
+  buyItem(c, 'spear'); buyItem(c, 'spear');
+  assert.equal(c.members.filter((x) => x.gear?.weapon === 'spear').length + (c.stores ?? []).filter((x) => x === 'spear').length, 2);
+  // A tool for a one-person task goes to whoever does it.
+  assert.equal(bestHolder(c, itemOf('scales')!)!.lead, true);
+  const cap = c.capacity;
+  assert.ok(buyCaravanGear(c, 'cart'));
+  assert.equal(c.capacity, cap + 4);
+  assert.ok(!buyCaravanGear(c, 'cart'), 'only one');
+});

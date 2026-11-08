@@ -27,7 +27,8 @@ import { Traffic, trafficId } from './traffic.ts';
 import { bornIn, landOf } from './crew.ts';
 import { bandAt, BANDS } from './depth.ts';
 import { checkMarks, dayTogether, deed, foughtTogether, practise, XP } from './learn.ts';
-import { doerOf } from './caravan.ts';
+import { doerOf, itemOf } from './caravan.ts';
+import { DEEP_GEAR, DEEP_GEAR_CHANCE, take } from './gear.ts';
 /** Level-ups, marks and bonds: told, and in the log. */
 function tell(g: Game, lines: string[]) { for (const t of lines) { g.ui.toast(t, 5000); log(g, t); } }
 
@@ -379,7 +380,8 @@ export function reveal(g: Game, cells: number[], byTravel = false): number {
 /** What the caravan sees from a cell: further from high ground, further with a scout. */
 export function lookAround(g: Game, c: number) {
   const high = g.w.elevation[c] > 0.32;
-  reveal(g, ringCells(g.w, c, sight(g.s.caravan) + (high ? 1 : 0)), true);
+  const lamp = g.s.caravan.kit?.includes('lantern') && bandAt(g.w, g.a, c) >= 2 ? 1 : 0;
+  reveal(g, ringCells(g.w, c, sight(g.s.caravan) + (high ? 1 : 0) + lamp), true);
 }
 /** A rumour: the nearest place you don't know of yet, roughly located. */
 export function rumour(g: Game): string {
@@ -691,6 +693,11 @@ export function resolve(g: Game, p: Pending, i: number): { out: Outcome; lines: 
   // Hunted (or let be): the game moves off for a while.
   if (p.hunt) s.finds[`${s.cell}:hunt`] = s.day;
   const lines = applyEffect(s.caravan, out.effect, p.ctx.name, s.day, g.dice);
+  // Deep ruins sometimes hold frontier gear (gear.ts).
+  if (p.find === 'ruin' && (p.ctx.band ?? 0) >= 2 && Object.keys(out.effect).length && g.dice() < DEEP_GEAR_CHANCE) {
+    const id = DEEP_GEAR[Math.floor(g.dice() * DEEP_GEAR.length)], who = take(s.caravan, id);
+    tell(g, [`In the ruins: a ${itemOf(id)!.name.toLowerCase()}, old and good. ${who ? `${who.name} takes it.` : 'Into the stores.'}`]);
+  }
   // Who learns from it (learn.ts).
   const uses = p.choices[i].uses, band = p.ctx.band ?? 0, c = s.caravan;
   if (uses === 'fight') {
