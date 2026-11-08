@@ -10,7 +10,7 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const med = (xs: number[]) => { if (!xs.length) return NaN; const v = [...xs].sort((a, b) => a - b); return v[Math.floor(v.length / 2)]; };
 const q = (xs: number[], p: number) => { if (!xs.length) return NaN; const v = [...xs].sort((a, b) => a - b); return v[Math.min(v.length - 1, Math.floor(v.length * p))]; };
 const fmt = (x: number, d = 0) => (Number.isFinite(x) ? x.toLocaleString('en', { maximumFractionDigits: d, minimumFractionDigits: d }) : '–');
-const BOT_LABEL: Record<BotName, string> = { trader: 'Trader', explorer: 'Explorer', jobber: 'Jobber', reckless: 'Reckless', idle: 'Idle' };
+const BOT_LABEL: Record<BotName, string> = { trader: 'Trader', explorer: 'Explorer', jobber: 'Jobber', reckless: 'Reckless', deep: 'Deep', idle: 'Idle' };
 const slot = (b: BotName) => `var(--series-${BOT_NAMES.indexOf(b) + 1})`;
 /** Hover text, carried on the mark. */
 const tip = (lines: string[]) => `data-tip="${esc(lines.join('\n'))}" tabindex="0"`;
@@ -188,9 +188,9 @@ export function report(rs: RunResult[], meta: { worlds: string[]; runs: number; 
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Primundi playtest</title><style>
 .viz-root{color-scheme:light;--surface-1:#fcfcfb;--surface-2:#f4f3f0;--text-primary:#0b0b0b;--text-secondary:#52514e;--text-muted:#77766f;--rule:#e4e2dc;
---series-1:#2a78d6;--series-2:#eb6834;--series-3:#1baf7a;--series-4:#eda100;--series-5:#e87ba4}
+--series-1:#2a78d6;--series-2:#eb6834;--series-3:#1baf7a;--series-4:#eda100;--series-5:#e87ba4;--series-6:#7a6fd0}
 @media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])) .viz-root{color-scheme:dark;--surface-1:#1a1a19;--surface-2:#242422;--text-primary:#f0efec;--text-secondary:#c3c2b7;--text-muted:#9a998f;--rule:#383835;
---series-1:#3987e5;--series-2:#d95926;--series-3:#199e70;--series-4:#c98500;--series-5:#d55181}}
+--series-1:#3987e5;--series-2:#d95926;--series-3:#199e70;--series-4:#c98500;--series-5:#d55181;--series-6:#8b80dd}}
 body{margin:0;font:14px/1.45 system-ui,sans-serif}
 .viz-root{background:var(--surface-1);color:var(--text-primary);padding:24px;min-height:100vh;box-sizing:border-box}
 h1{font-size:22px;margin:0 0 4px}h3{font-size:15px;margin:0 0 2px}.sub,.meta{color:var(--text-secondary);margin:0 0 10px;font-size:13px}

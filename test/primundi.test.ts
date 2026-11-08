@@ -574,3 +574,37 @@ test('a first load pays: sold where it says, it makes what it says', () => {
   // (A start whose home has nothing in stock to speak of has none.)
   assert.ok(offered >= starts * 0.9, `first loads offered in ${offered} of ${starts} starts; gains ${gains.map((x) => Math.round(x * 100)).join(',')}`);
 });
+
+import { BANDS, bandAt, bandOfHexes, depthMap, depthStats } from '../src/primundi/depth.ts';
+import { ENCOUNTERS as ENC, contextAt as ctxAt } from '../src/primundi/encounters.ts';
+test('depth: places and roads are Settled, it deepens away from them, and danger rises with it', () => {
+  const d = depthMap(hw, atlas);
+  for (const p of atlas.places) assert.equal(bandAt(hw, atlas, p.cell), 0);
+  // Neighbours differ by at most one hex of depth (it is a walk over land).
+  for (let c = 0; c < hw.grid.count; c++) {
+    if (hw.water[c] !== 0 || d[c] === 255) continue;
+    for (const n of hw.grid.neighbors[c]) if (hw.water[n] === 0 && d[n] !== 255) assert.ok(Math.abs(d[n] - d[c]) <= 1);
+  }
+  assert.deepEqual([0, 1, 2, 4, 5, 10, 11, 40].map(bandOfHexes), [0, 0, 1, 1, 2, 2, 3, 3]);
+  for (let b = 1; b < 4; b++) {
+    assert.ok(BANDS[b].lethal > BANDS[b - 1].lethal && BANDS[b].bandits[1] > BANDS[b - 1].bandits[1] && BANDS[b].finds > BANDS[b - 1].finds);
+  }
+  assert.equal(depthStats(2).find((x) => x.k === 'Lethal')!.v, `${Math.round(BANDS[2].lethal * 100)}%`);
+});
+
+test('a lost fight kills about as often as its band says', () => {
+  const bandits = ENC.find((e) => e.id === 'bandits')!;
+  for (const band of [0, 3] as const) {
+    let lost = 0, dead = 0;
+    for (let i = 0; i < 3000; i++) {
+      const c = newCaravan('T', 'cartographers', 1);
+      c.members = c.members.slice(0, 1);   // too few to win
+      const rng = makeRng(i + band * 99991);
+      const x = ctxAt(hw, atlas.places[0].cell, true, false, false, c, rng, () => 'N', band);
+      const out = bandits.choices(x)[0].resolve(x);
+      if (out.effect.loseCargo) { lost++; if (out.effect.dies) dead++; }
+    }
+    const rate = dead / lost;
+    assert.ok(Math.abs(rate - BANDS[band].lethal) < 0.04, `band ${band}: ${rate.toFixed(3)} of ${lost}`);
+  }
+});

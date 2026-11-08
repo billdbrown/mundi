@@ -19,9 +19,14 @@ import type { Atlas } from './atlas.ts';
 import { hasWater } from './atlas.ts';
 import { living, someone, waterCap } from './caravan.ts';
 import { ENCOUNTERS, type Encounter } from './encounters.ts';
+import { bandAt } from './depth.ts';
+import { landOf } from './crew.ts';
 
-export type FindKind = 'lookout' | 'spring' | 'forage' | 'ruin' | 'camp';
-export const FIND_NAMES: Record<FindKind, string> = { lookout: 'Lookout', spring: 'Spring', forage: 'Foraging', ruin: 'Ruins', camp: 'Old camp' };
+export type FindKind = 'lookout' | 'spring' | 'forage' | 'ruin' | 'camp' | 'wilds';
+export const FIND_NAMES: Record<FindKind, string> = { lookout: 'Lookout', spring: 'Spring', forage: 'Foraging', ruin: 'Ruins', camp: 'Old camp', wilds: 'Wild goods' };
+/** Wild goods (furs, ore, wool or salt, by the land) lie only in the Wild and the Deep, at this
+ * chance a hex by band (depth.ts): the loot that makes going out there pay. */
+export const WILDS_CHANCE = [0, 0, 0.35, 0.55];
 
 const pick = <T,>(rng: () => number, a: T[]) => a[Math.floor(rng() * a.length)];
 const FOREST = new Set<number>([B.FOREST, B.TEMPERATE_RAIN, B.RAINFOREST, B.TAIGA, B.DRY_FOREST]);
@@ -45,11 +50,14 @@ export function findsIn(w: World, atlas: Atlas, cell: number, seed: number): Fin
   // Food from the land: woods, wet grass, the shore.
   const fertile = FOREST.has(base) || w.moisture[cell] > 0.5 || nb.some((n) => w.water[n] !== WATER_LAND);
   if (rng() < (fertile ? 0.55 : DRY.has(base) ? 0.12 : 0.3)) out.push('forage');
+  const band = bandAt(w, atlas, cell);
   if (!town) {
-    const r = rng();
-    if (r < 0.14) out.push('ruin');
-    else if (r < 0.24) out.push('camp');
+    // Ruins and old camps: more of both further from anyone (depth.ts).
+    const r = rng(), k = 1 + band * 0.5;
+    if (r < 0.14 * k) out.push('ruin');
+    else if (r < 0.24 * k) out.push('camp');
   }
+  if (!town && rng() < WILDS_CHANCE[band]) out.push('wilds');
   return out;
 }
 
@@ -58,6 +66,7 @@ export function findReady(kind: FindKind, used: number | undefined, day: number)
   if (used === undefined) return true;
   if (kind === 'spring') return day - used >= 4;
   if (kind === 'forage') return day - used >= 25;
+  if (kind === 'wilds') return day - used >= 90;
   return false;
 }
 
@@ -110,6 +119,24 @@ export const FINDS: Record<FindKind, Encounter> = {
     ],
   },
   ruin: ENCOUNTERS.find((e) => e.id === 'ruins')!,
+  wilds: {
+    id: 'find-wilds',
+    title: 'Wild goods',
+    weight: () => 0,
+    text: (x) => {
+      const [, what] = wildGood(x.w, x.cell);
+      return `Nobody has worked this country in a long time, maybe ever. ${what}`;
+    },
+    choices: (x) => [
+      { label: 'Spend a day gathering', hint: 'Worth more the deeper you are', resolve: (c) => {
+        const [gi] = wildGood(c.w, c.cell), n = 3 + Math.floor(c.rng() * 4);
+        // The deep bites back now and then.
+        if (c.band >= 3 && c.rng() < 0.15) { const h = someone(c.caravan, c.rng, true); return { text: `A long day's work, and ${h?.name ?? 'someone'} is hurt getting it.`, effect: { cargo: [[gi, n]], hurt: h, days: 1 } }; }
+        return { text: 'A long day, and loads worth carrying home.', effect: { cargo: [[gi, n]], days: 1 } };
+      } },
+      { label: 'Leave it', resolve: () => ({ text: 'You mark it and go on.', effect: {} }) },
+    ],
+  },
   camp: {
     id: 'find-camp',
     title: 'An old camp',
@@ -130,3 +157,13 @@ export const FINDS: Record<FindKind, Encounter> = {
     ],
   },
 };
+
+/** What the wild has to give, by the land: furs in the cold and the woods, ore in the heights, wool
+ * on the grass, salt in the desert. */
+export function wildGood(w: World, cell: number): [number, string] {
+  const l = landOf(w, cell);
+  if (l === 'highland') return [G.ore, 'A seam of ore shows in a cut bank, rust-red, easy to break out.'];
+  if (l === 'grassland') return [G.wool, 'Wild sheep have shed on every thornbush for a mile: good wool, for the gathering.'];
+  if (l === 'desert') return [G.salt, 'A dry lake bed, white with salt a hand deep.'];
+  return [G.furs, 'Trap lines would fill fast here: the tracks are everywhere, and nobody hunts them.'];
+}

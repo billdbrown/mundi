@@ -56,3 +56,7 @@ for (const origin of origins) {
 }
 const supply = results.flatMap((r) => r.deaths.filter((d) => d.cause === 'supplies'));
 console.log(`\ndeaths from supplies (must be 0): ${supply.length}`);
+// Everything else that killed, by cause (fights can kill, more often deep out: depth.ts).
+const causes: Record<string, number> = {};
+for (const r of results) for (const d of r.deaths) causes[d.cause] = (causes[d.cause] ?? 0) + 1;
+console.log(`deaths by cause, all runs: ${Object.entries(causes).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', ') || 'none'}`);

@@ -30,6 +30,8 @@ import { Thunder } from './thunder.ts';
 import { BIASES, type StartBias } from './start.ts';
 import { buildAtlas, GOODS, ringCells, type Atlas, type Place } from './atlas.ts';
 import { bestKnownSell, quotes, remember } from './market.ts';
+import { bandAt, BANDS, depthStats } from './depth.ts';
+import { DepthLayer } from './depthlayer.ts';
 import { crewHtml, type Layout } from './sheet.ts';
 import { AMBITION_GOAL, BANDIT_FIGHT, BEASTS, crewDiff, crewSheet, memberStats, type Stat, ORIGIN_CAPACITY, ORIGINS, TRAITS, type Beasts, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
@@ -38,7 +40,7 @@ import { applyTradeWants, townLine, townsfolk, tradesOf } from './towns.ts';
 import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
 import {
   START_DOY, RATES, doyOf, worldParams, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
-  jobsOffered, shortHere, chartRate, localOffer, takeLocal, rationCost, restCost, folkHere, meetFolk, passFolk, gameHere, huntHere, makeCamp, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, townRecruits, buyBeast, appoint,
+  jobsOffered, shortHere, chartRate, localOffer, takeLocal, rationCost, restCost, folkHere, meetFolk, passFolk, gameHere, huntHere, makeCamp, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, townRecruits, haul, buyBeast, appoint,
   reveal as simReveal, advance as simAdvance, plan as simPlan,
   buy as simBuy, sell as simSell, rest as simRest,
   setupHire, setupBeasts, firstLoads, setupLoad, setupReady, finishSetup, quickSetup, trafficOf,
@@ -181,6 +183,11 @@ function maybeStart() {
   view.addToPlanet(fog.mesh);
   for (const c of s.revealed) revealed.add(c);
   fog.reveal(revealed, true);
+  if (depthLayer) depthLayer.mesh.removeFromParent();
+  depthLayer = new DepthLayer(w, atlas!, fog);
+  view.addToPlanet(depthLayer.mesh);
+  depthLayer.reveal(revealed);
+  depthLayer.visible = showDepth;
   view.setData(w, r.surface);
   marks.build();
   bounds.update(true);
@@ -322,7 +329,7 @@ function setupBody(tab: string, purse: string, body: string): string {
     const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
     return `${purse}<h3>Looking for a place</h3>
       <div class="sheet"><span class="lab">Your caravan</span>${stats(crewSheet(c))}</div>
-      <p class="dim small">Bandits fight at ${BANDIT_FIGHT.min}–${BANDIT_FIGHT.max}. Up to ${SETUP_MAX} hired, ${st.hired.length} so far; let go any time before setting out.</p>
+      <p class="dim small">Bandits fight at ${BANDIT_FIGHT.min}–${BANDIT_FIGHT.max} near home, up to ${BANDS[3].bandits[1]} in the Deep. Up to ${SETUP_MAX} hired, ${st.hired.length} so far; let go any time before setting out.</p>
       <div class="opts">${st.offered.map((x, i) => {
         const on = st.hired.includes(i);
         const d = on ? [] : crewDiff(c, x.m);
@@ -350,6 +357,7 @@ function reveal(cells: number[], byTravel = false) { return g ? simReveal(g, cel
 /** Hexes just revealed (sim.ts has added them): the fog, the camera's leash, labels, roads. */
 function revealedOnScreen(fresh: number[], byTravel: boolean) {
   fog?.reveal(fresh, false, byTravel ? 1 : 3.2);
+  depthLayer?.reveal(fresh);
   bounds.update(false);
   labels.rebuild();
   marks.roads();
@@ -1023,6 +1031,7 @@ function showHexCard(c: number) {
   showPanel('hex', `${close}${head(place ? `${place.town ? 'Town' : 'Village'}${place.realm ? ` · ${esc(place.realm)}` : ''}` : about.where || 'Hex',
       place ? esc(place.name) : about.title, place ? about.title + (place.id === save.home ? ' · <b>your home</b>' : '') : here ? 'You are here' : '')}
     <p>${about.text}</p>${chips(facts)}
+    ${world!.water[c] === 0 ? `<p class="chips">${stats(depthStats(bandAt(world!, atlas!, c)))}</p>` : ''}
     ${findHints(c)}
     ${save.jobs.filter((q) => questTarget(q, atlas!) === c).map((q) => `<p class="note">◆ ${esc(questTitle(q, atlas!))} · ${esc(questStatus(q, atlas!, save!.caravan.cargo))}</p>`).join('')}
     ${here ? `${place ? `<button class="go" data-act="town">Enter ${esc(place.name)}</button>` : ''}<button class="ghost" data-act="look">Look around</button>`
@@ -1037,6 +1046,7 @@ function findHints(c: number): string {
     forage: 'Game sign, and thickets in fruit.',
     ruin: 'Something old stands out there.',
     camp: 'Smoke stains on a rock: someone camped here once.',
+    wilds: 'Untouched country: there would be goods worth carrying out.',
   };
   const s = save;
   const open = findsIn(world, atlas, c, params.seed).filter((k) => findReady(k, s.finds[`${c}:${k}`], s.day));
@@ -1164,7 +1174,7 @@ function roadKicker() {
 }
 const SPOTTED: Record<FindKind, string> = {
   lookout: 'High ground: a cairn on the top.', spring: 'You spot a spring.', forage: 'Berries and a game trail nearby.',
-  ruin: 'Old stones, through the trees: ruins.', camp: 'Someone camped here once.',
+  ruin: 'Old stones, through the trees: ruins.', camp: 'Someone camped here once.', wilds: 'Wild goods for the taking, if you spend a day.',
 };
 function showFind(kind: FindKind) {
   if (!g) return;
@@ -1225,6 +1235,9 @@ function gameOver() {
 }
 
 let journalTab = 'work';
+// The depth layer on the planet (depthlayer.ts), on or off from the bar.
+let depthLayer: DepthLayer | null = null;
+let showDepth = localStorage.getItem('primundi.depth') === '1';
 // The crew's papers (sheet.ts): which layout, whether globes show, the roster's chosen row.
 let sheetLayout: Layout = (['papers', 'roster', 'ledger'] as const).find((l) => l === localStorage.getItem('primundi.layout')) ?? 'papers';
 let showGlobes = localStorage.getItem('primundi.globes') === '1';
@@ -1411,12 +1424,21 @@ function hud() {
   $('s-people').textContent = String(living(c).length);
   $('s-water').parentElement!.classList.toggle('low', wd <= 2);
   $('s-rations').parentElement!.classList.toggle('low', rd <= 3);
+  if (world && atlas) {
+    const b = bandAt(world, atlas, save.cell), h = haul(g!);
+    $('s-depth').textContent = BANDS[b].name;
+    $('s-depthw').className = `stat depth b${b}`;
+    $('s-depthw').title = depthStats(b).map((x) => `${x.k} ${x.v}`).join(' · ');
+    $('s-haulw').hidden = h.banked || h.value <= 0;
+    $('s-haul').textContent = fmt(h.value);
+  }
   $('s-people').parentElement!.title = `${living(c).length} people · morale ${c.morale > 70 ? 'high' : c.morale > 40 ? 'steady' : c.morale > 20 ? 'low' : 'very low'}`;
 }
 function syncBar() {
   $('b-hex').classList.toggle('on', hexOpen);
   $('b-planet').classList.toggle('on', !hexOpen);
   $('b-sound').classList.toggle('off', thunder.muted);
+  $('b-depth').classList.toggle('on', showDepth);
   $('b-sound').title = thunder.muted ? 'Sound off' : 'Sound on';
   $('civname').textContent = save?.caravan.name ?? '';
   for (let i = 0; i < 4; i++) $(`b-s${i}`).classList.toggle('on', (paused() ? 0 : speed) === i);
@@ -1442,6 +1464,12 @@ $('b-journal').onclick = () => (panelKind === 'journal' ? closePanel() : !modal 
 $('b-town').onclick = () => { if (save && atlas && atlas.placeAt[save.cell] >= 0 && !modal) openTown(atlas.placeAt[save.cell], 'market'); };
 $('b-stop').onclick = () => { stopTravel(); setSpeed(0); };
 $('civname').parentElement!.onclick = () => { if (!hexOpen) follow = marks.dirOfCaravan(); };
+$('b-depth').onclick = () => {
+  showDepth = !showDepth; localStorage.setItem('primundi.depth', showDepth ? '1' : '0');
+  if (depthLayer) depthLayer.visible = showDepth;
+  syncBar();
+  if (showDepth && save && !save.hints?.includes('depth')) { (save.hints ??= []).push('depth'); toast('Depth: green is settled country, gold the frontier, orange the wild, red the deep. Further out, bandits fight harder and a lost fight more often kills, but what you find is worth more.', 9000); }
+};
 $('b-sound').onclick = () => { thunder.unlock(); thunder.setMuted(!thunder.muted); syncBar(); };
 $('b-menu').onclick = () => {
   if (!confirm('Leave this game? It stays saved, and you can continue it from the menu.')) return;
@@ -1494,6 +1522,9 @@ function toast(text: string, ms = 3500) {
   reveal: (cells: number[]) => reveal(cells),
   revealRing: () => reveal(frontier()),
   travelTo, setSpeed, advance, openTown, openHex, closeHex, plan, showJournal,
+  /** The band of a hex (depth.ts): 0 Settled to 3 Deep. */
+  band: (c: number) => (world && atlas ? bandAt(world, atlas, c) : -1),
+  get depthLayer() { return depthLayer; },
   /** What there is to find in a hex (finds.ts). */
   findsIn: (c: number) => (world && atlas ? findsIn(world, atlas, c, params.seed) : []),
   /** Others on the road in a hex this week, not yet met (life.ts). */

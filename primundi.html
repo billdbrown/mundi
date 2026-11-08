@@ -22,6 +22,8 @@
     <span class="stat" title="Rations: days left"><svg viewBox="0 0 24 24"><path d="M5 11h14l-1.5 8h-11zM8 11V8a4 4 0 0 1 8 0v3"/></svg><b id="s-rations"></b></span>
     <span class="stat" title="Cargo: loads carried, of what the beasts can take"><svg viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/></svg><b id="s-cargo"></b></span>
     <span class="stat" title="People"><svg viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19c.6-3.4 2.7-5.2 5.5-5.2s4.9 1.8 5.5 5.2"/><circle cx="16.5" cy="9.5" r="2.4"/><path d="M15.5 14c2.6 0 4.3 1.6 4.9 4.6"/></svg><b id="s-people"></b></span>
+    <span class="stat depth" id="s-depthw" title="How deep in the wild: bandits, the chance a lost fight kills, what finds are worth"><svg viewBox="0 0 24 24"><path d="M3 18l5-9 4 6 3-4 6 7z"/></svg><b id="s-depth"></b></span>
+    <span class="stat haul" id="s-haulw" hidden title="The haul: what you carry, at what it's worth. Not safe until you reach a town."><svg viewBox="0 0 24 24"><path d="M6 8h12l-1 12H7zM9 8a3 3 0 0 1 6 0"/></svg><b id="s-haul"></b></span>
   </header>
   <div id="me" hidden><i></i></div>
   <aside id="card" hidden></aside>
@@ -45,6 +47,8 @@
     </span>
     <button id="b-camp" class="camp" hidden title="Make camp here for the night"><svg viewBox="0 0 24 24"><path d="M3 19l9-14 9 14zM12 5v14M9 19l3-5 3 5"/></svg><span>Camp</span></button>
     <span class="tools">
+      <button id="b-depth" title="Depth: how far from roads and towns, Settled to Deep">
+        <svg viewBox="0 0 24 24"><path d="M12 4l9 5-9 5-9-5zM3 13.5l9 5 9-5"/></svg></button>
       <button id="b-journal" title="Journal: the caravan, your ambition, what has happened">
         <svg viewBox="0 0 24 24"><path d="M6 4h11a1 1 0 0 1 1 1v15H7a1 1 0 0 1-1-1zM6 17h12M9.5 8h5M9.5 11h5"/></svg></button>
       <button id="b-sound" title="Sound">

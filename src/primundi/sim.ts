@@ -25,6 +25,7 @@ import { tradesOf, townsfolk, TRADES, type Trade } from './towns.ts';
 import { CAMP_NIGHTS, CAMP_P, folkEncounter, folkIn, gameIn, gameReady, huntEncounter, type AnimalKind, type Folk } from './life.ts';
 import { Traffic, trafficId } from './traffic.ts';
 import { bornIn, landOf } from './crew.ts';
+import { bandAt, BANDS } from './depth.ts';
 
 /** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
 export const RATES = [0, 0.22, 0.6, 1.6];
@@ -445,8 +446,16 @@ export function draw(g: Game): () => number {
 /** The context an encounter reads, here and now. */
 export function ctxHere(g: Game, rng: () => number, snow: boolean, nearTown = false): Ctx {
   const s = g.s;
-  return contextAt(g.w, s.cell, !!g.a.road[s.cell], snow, nearTown, s.caravan, rng, nameMaker(g.seed * 31 + s.draws));
+  return contextAt(g.w, s.cell, !!g.a.road[s.cell], snow, nearTown, s.caravan, rng, nameMaker(g.seed * 31 + s.draws), bandAt(g.w, g.a, s.cell));
 }
+/** What the caravan carries out here, at what the goods are worth (atlas GOODS base): not safe
+ * until it's in a town (decision 2026-11-08: the haul is banked only in towns). */
+export function haul(g: Game): { value: number; banked: boolean } {
+  const c = g.s.caravan;
+  return { value: Math.round(c.cargo.reduce((a, n, gi) => a + n * GOODS[gi].base, 0)), banked: g.a.placeAt[g.s.cell] >= 0 };
+}
+/** Out of food out in the country: hungry hands eat into the cargo, each load at this chance a day. */
+export const HUNGER_SPOIL = 0.03;
 export const snowAt = (g: Game, cell: number) => seasonalTemp(g.w, cell, doyOf(g.s.day)) < SNOW_TEMP;
 
 /** The caravan steps into a hex. */
@@ -498,7 +507,7 @@ export function enter(g: Game, cell: number) {
     const f = folkHere(g, cell)[0];
     if (f) { g.ui.folk(cell, f); return; }
     const rng = draw(g);
-    if (rng() < ENCOUNTER_P * (a.road[cell] ? 0.7 : 1)) {
+    if (rng() < ENCOUNTER_P * (a.road[cell] ? 0.7 : 1) * BANDS[bandAt(w, a, cell)].events) {
       const nearTown = ringCells(w, cell, 3).some((x) => a.placeAt[x] >= 0);
       const ctx = ctxHere(g, rng, snowAt(g, cell), nearTown);
       const e = drawEncounter(ctx);
@@ -544,6 +553,11 @@ export function newDay(g: Game, resting: boolean) {
   // In a town you eat what you buy; on the road the land helps.
   const forage = g.a.placeAt[s.cell] >= 0 ? 1 : forageAt(g, s.cell);
   for (const n of passDay(c, atWater, resting, forage, g.dice, landOf(g.w, s.cell))) { g.ui.toast(n); log(g, n); }
+  if (c.rations <= 0 && g.a.placeAt[s.cell] < 0) {
+    let lost = 0;
+    c.cargo = c.cargo.map((n, gi) => { let l = 0; for (let k = 0; k < n; k++) if (g.dice() < HUNGER_SPOIL) l++; if (l) { c.basis[gi] *= (n - l) / n; lost += l; } return n - l; });
+    if (lost) { const t = `Hungry hands: ${lost} load${lost === 1 ? '' : 's'} of the haul eaten or spoiled.`; g.ui.toast(t); log(g, t); }
+  }
   const wd = c.water / Math.max(1, thirst(c)), rd = c.rations / Math.max(1, appetite(c));
   const warned = g.warned;
   if (wd <= 2 && !atWater && !warned.water && c.water > 0) { warned.water = true; g.ui.halt(); g.ui.toast(`Water for ${Math.floor(wd)} more days.`, 5000); }
@@ -642,6 +656,12 @@ export function resolve(g: Game, p: Pending, i: number): { out: Outcome; lines: 
   // A locked choice can't be taken (the screen greys it): the first open one instead.
   if (p.choices[i]?.locked) i = Math.max(0, p.choices.findIndex((c) => !c.locked));
   const out = p.choices[i].resolve(p.ctx);
+  // What's found out in the wild is worth more the deeper it lies (depth.ts finds).
+  const fm = BANDS[p.ctx.band ?? 0].finds;
+  if (p.find && fm > 1) {
+    if ((out.effect.orrels ?? 0) > 0) out.effect.orrels = Math.round(out.effect.orrels! * fm);
+    if (out.effect.cargo) out.effect.cargo = out.effect.cargo.map(([gi, n]) => [gi, Math.round(n * fm)]);
+  }
   // A find is used once something comes of it (walking away leaves it for later).
   if (p.find && Object.keys(out.effect).length) {
     s.finds[`${s.cell}:${p.find}`] = s.day;

@@ -582,6 +582,14 @@ export function findModel(kind: string, K: number, seed: number): THREE.Group {
     const col = add(new THREE.CylinderGeometry(0.35, 0.4, 3.4, 8), stone, 0.6, 0.35, -1.6);
     col.rotation.z = Math.PI / 2; col.rotation.y = 0.5;
     add(new THREE.CylinderGeometry(0.42, 0.45, 1.6, 8), stone, -0.6, 0.8, 1.0);
+  } else if (kind === 'wilds') {
+    // Bundles and hides on a drying rack: goods for the gathering.
+    const hide = mat(0x8a6a48, { roughness: 0.9 });
+    add(new THREE.CylinderGeometry(0.06, 0.06, 2.2, 5), wood, -1, 1.1, 0);
+    add(new THREE.CylinderGeometry(0.06, 0.06, 2.2, 5), wood, 1, 1.1, 0);
+    add(new THREE.CylinderGeometry(0.05, 0.05, 2.2, 5).rotateZ(Math.PI / 2), wood, 0, 2.1, 0);
+    for (let k = 0; k < 3; k++) add(new THREE.BoxGeometry(0.5, 1.1, 0.04), hide, -0.6 + k * 0.6, 1.45, 0, (rnd() - 0.5) * 0.2);
+    for (let k = 0; k < 4; k++) add(new THREE.BoxGeometry(0.6, 0.4, 0.5), hide, (rnd() - 0.5) * 3, 0.2, 1 + rnd(), rnd() * 3);
   } else {
     // A cold hearth, a fallen lean-to, a crate.
     for (let k = 0; k < 7; k++) { const a = (k / 7) * Math.PI * 2; add(new THREE.DodecahedronGeometry(0.22, 0), stoneD, Math.cos(a) * 0.7, 0.12, Math.sin(a) * 0.7, rnd() * 6); }

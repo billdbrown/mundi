@@ -14,6 +14,8 @@ import type { World } from '../world.ts';
 import { SEA, type SurfaceQueries } from '../surface.ts';
 
 const W = 1536, H = 768;
+/** The fog texture's size: other layers on the planet share its texel-to-cell lookup. */
+export const FOG_W = W, FOG_H = H;
 /** The shell, planet radii: under the sea floor's top to above every peak and the cloud deck. */
 export const FOG_R0 = SEA - 0.004, FOG_R1 = SEA + 0.026;
 /** How deep the bank stands over the ground, radii (~5 km). Less than a hex is wide, so a clearing
@@ -192,6 +194,8 @@ export class PlanetFog {
   }
 
   fogged(cell: number) { return this.next[cell] > 0.5; }
+  /** The cell each texel of the equirectangular texture falls in. */
+  get texelCells(): Int32Array { return this.pixCell; }
 
   /** Clear these cells: animated unless `instant` (loading a save). */
   /** Cells waiting for the reveal in progress to finish (travel reveals a little at a time). */

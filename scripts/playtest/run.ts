@@ -13,12 +13,13 @@ import { quotes, trade } from '../../src/primundi/market.ts';
 import { bestKnownSell } from '../../src/primundi/market.ts';
 import { AMBITION_GOAL, appetite, best, cargoUsed, living, thirst, type Origin, type Skill } from '../../src/primundi/caravan.ts';
 import { QUEST_ENCOUNTERS } from '../../src/primundi/encounters.ts';
+import { bandAt } from '../../src/primundi/depth.ts';
 import { findReady } from '../../src/primundi/finds.ts';
 import { MAX_QUESTS, canHandIn, questTarget } from '../../src/primundi/quests.ts';
 import type { StartBias } from '../../src/primundi/start.ts';
 import {
   RATES, worldParams, newGame, quickSetup, meetFolk, makeGame, doyOf, setRoute, plan, advance, resolve, jobHere, findHere, findsAt,
-  buy, sell, shortHere, buyRations, sellCharts, takeJob, handIn, jobsOffered, rest, hire, townRecruits, appoint, angle, cellAngleOf,
+  buy, sell, shortHere, buyRations, sellCharts, takeJob, handIn, jobsOffered, rest, hire, townRecruits, haul, appoint, angle, cellAngleOf,
   type Game, type Pending, type Ui,
 } from '../../src/primundi/sim.ts';
 import type { World } from '../../src/world.ts';
@@ -78,8 +79,8 @@ function booked<T>(g: Game, kind: string, f: () => T): T {
 }
 
 // --- Bots -------------------------------------------------------------------------------------
-export type BotName = 'trader' | 'explorer' | 'jobber' | 'reckless' | 'idle';
-export const BOT_NAMES: BotName[] = ['trader', 'explorer', 'jobber', 'reckless', 'idle'];
+export type BotName = 'trader' | 'explorer' | 'jobber' | 'reckless' | 'deep' | 'idle';
+export const BOT_NAMES: BotName[] = ['trader', 'explorer', 'jobber', 'reckless', 'deep', 'idle'];
 interface Bot {
   style: 'careful' | 'bold';
   /** In a town with no route: trade, rest, take work. */
@@ -236,6 +237,47 @@ function explorerBot(g: Game, rng: () => number): Bot {
   };
 }
 
+/** Out into the wild for what's worth more there (decision 2026-11-08: the planet as a dungeon):
+ * heads for Wild and Deep hexes, fights what it meets, turns back for a town when food runs low,
+ * after `TURN_DAYS` out, or once the haul is worth `TURN_HAUL`. Sells everything in town. */
+const TURN_DAYS = 30, TURN_HAUL = 700;
+function deepBot(g: Game, rng: () => number): Bot {
+  let out = 0;
+  return {
+    style: 'bold',
+    town(pid) {
+      const c = g.s.caravan;
+      if (c.unsoldCharts) booked(g, 'charts', () => sellCharts(g, pid));
+      sellHere(g, pid, true);
+      if ((c.morale < 35 || c.members.some((m) => m.alive && m.health !== 'well')) && (pid === g.s.home || c.orrels > 80)) rest(g, pid, 2);
+      if (living(c).length < 6 && c.orrels > 160) hireBest(g, pid, 'fight', 100);
+      provision(g, pid, 35);
+      out = g.s.day;
+    },
+    next() {
+      const s = g.s, c = s.caravan, w = g.w;
+      const food = c.rations / Math.max(1, appetite(c)), water = c.water / Math.max(1, thirst(c));
+      if (food < 12 || water < 4 || s.day - out > TURN_DAYS || haul(g).value > TURN_HAUL) {
+        const ks = knownPlaces(g);
+        if (ks.length) return ks[0].p.cell;
+      }
+      // The deepest land in reach: revealed or at the fog's edge, 3 to 10 hexes off.
+      const cellA = cellAngleOf(w);
+      let pick = -1, bs = -Infinity;
+      for (const c0 of g.revealed) for (const n of [c0, ...w.grid.neighbors[c0]]) {
+        if (!walkable(w, n)) continue;
+        const d = angle(w, s.cell, n) / cellA;
+        if (d < 2 || d > 6) continue;
+        const score = bandAt(w, g.a, n) * 3 - d * 0.4 + (findsAt(g, n).includes('wilds') ? 3 : 0) + rng() * 2;
+        if (score > bs) { bs = score; pick = n; }
+      }
+      if (pick >= 0) return pick;
+      const ks = knownPlaces(g);
+      return ks.length ? ks[0].p.cell : null;
+    },
+  };
+}
+
 /** Where the jobs in hand lead: their targets, or for a supply job still short of its goods, the
  * nearest known market selling them cheaply. */
 function jobTargets(g: Game): number[] {
@@ -301,6 +343,7 @@ function makeBot(name: BotName, g: Game, rng: () => number): Bot {
   if (name === 'reckless') return traderBot(g, rng, true);
   if (name === 'explorer') return explorerBot(g, rng);
   if (name === 'jobber') return jobberBot(g, rng);
+  if (name === 'deep') return deepBot(g, rng);
   return idleBot();
 }
 

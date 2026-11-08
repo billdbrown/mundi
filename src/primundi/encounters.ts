@@ -10,7 +10,8 @@ import { B } from '../biomes.ts';
 import { baseOf } from '../ecology.ts';
 import type { World } from '../world.ts';
 import { G, GOODS } from './atlas.ts';
-import { BANDIT_FIGHT, best, cargoUsed, living, makeMember, someone, strength, waterCap, type Caravan, type Lean, type Member } from './caravan.ts';
+import { BANDS, type Band } from './depth.ts';
+import { best, cargoUsed, living, makeMember, someone, strength, waterCap, type Caravan, type Lean, type Member } from './caravan.ts';
 
 export interface Ctx {
   w: World;
@@ -33,6 +34,8 @@ export interface Ctx {
   name: () => string;
   /** Someone in the caravan the encounter is about, chosen once, so its text and outcome agree. */
   subject: Member | null;
+  /** How deep in the wild (depth.ts): bandits fight harder and a lost fight kills more often. */
+  band: Band;
 }
 
 export interface Effect {
@@ -98,13 +101,13 @@ export const ENCOUNTERS: Encounter[] = [
     text: (x) => `Riders come down off the ${x.high ? 'ridge' : x.forest ? 'tree line' : 'rise'} and spread across the way. Their leader wants a toll, and names it: a tenth of what you carry, or ${Math.max(15, Math.round(x.caravan.orrels * 0.15))} orrels.`,
     choices: (x) => {
       const toll = Math.max(15, Math.round(x.caravan.orrels * 0.15));
-      const enemy = BANDIT_FIGHT.min + x.rng() * (BANDIT_FIGHT.max - BANDIT_FIGHT.min);
+      const [lo, hi] = BANDS[x.band].bandits, enemy = lo + x.rng() * (hi - lo);
       return [
         { label: 'Fight', hint: strength(x.caravan) > enemy ? 'They look thinner than you' : 'They look many', resolve: (c) => {
           const m = fight(c, enemy);
           if (m > 0.25) return { text: 'Your guards hold the line and the riders break. One drops a purse as he goes.', effect: { orrels: Math.round(10 + c.rng() * 30), morale: 8 } };
           if (m > -0.1) { const h = someone(c.caravan, c.rng); return { text: `A short, ugly scrap. They ride off, but ${h?.name ?? 'someone'} takes a blade.`, effect: { hurt: h, morale: -4 } }; }
-          const d = c.rng() < 0.4 ? someone(c.caravan, c.rng) : null, h = d ? null : someone(c.caravan, c.rng);
+          const d = c.rng() < BANDS[c.band].lethal ? someone(c.caravan, c.rng) : null, h = d ? null : someone(c.caravan, c.rng);
           return { text: d ? `They overrun you. ${d.name} falls, and they take what they like.` : `They overrun you and take what they like. ${h?.name ?? 'Someone'} is hurt.`, effect: { loseCargo: 0.3, orrels: -Math.round(c.caravan.orrels * 0.2), dies: d, hurt: h, morale: -15 } };
         } },
         { label: 'Slip past', hint: 'Off the road before they see you', locked: best(x.caravan, 'scout') >= SLIP_SCOUT ? undefined : `Scout ${SLIP_SCOUT}`, resolve: (c) => c.rng() < 0.8
@@ -119,6 +122,28 @@ export const ENCOUNTERS: Encounter[] = [
         { label: 'Turn and run', resolve: (c) => c.rng() < 0.55
           ? { text: 'You whip the beasts round and lose them in rough ground, a day out of your way.', effect: { days: 1, morale: -2 } }
           : { text: 'Laden beasts do not outrun horses. They catch you, and take more for the trouble.', effect: { loseCargo: 0.2, morale: -8 } } },
+      ];
+    },
+  },
+  {
+    // The deep's own danger (depth.ts): never in settled country, more often and harder further out.
+    id: 'predators',
+    title: 'Something hunting you',
+    weight: (x) => [0, 0.5, 1.4, 2.4][x.band],
+    text: (x) => `${x.cold ? 'Long grey shapes' : x.forest ? 'Eyes in the trees' : x.dry ? 'Big cats' : 'A pack'} ${x.forest ? 'keep pace with you through the trunks' : 'have been following since morning'}. Tonight they mean to try the beasts, or you.`,
+    choices: (x) => {
+      const [lo, hi] = BANDS[x.band].bandits, enemy = (lo + x.rng() * (hi - lo)) * 0.8;
+      return [
+        { label: 'Stand and fight', hint: strength(x.caravan) > enemy ? 'You have the numbers' : 'They are many, and hungry', resolve: (c) => {
+          const m = fight(c, enemy);
+          if (m > 0.2) return { text: 'They come at the fire and get the worst of it. By morning there are hides to scrape.', effect: { morale: 6, cargo: [[G.furs, 1 + Math.floor(c.rng() * 2)]] } };
+          if (m > -0.1) { const h = someone(c.caravan, c.rng); return { text: `A bad night. They break off, but ${h?.name ?? 'someone'} is mauled.`, effect: { hurt: h, morale: -5 } }; }
+          const d = c.rng() < BANDS[c.band].lethal ? someone(c.caravan, c.rng) : null, h = d ? null : someone(c.caravan, c.rng);
+          return { text: d ? `They get in among you in the dark. ${d.name} does not see morning.` : `They get in among the beasts. One is lost with its load, and ${h?.name ?? 'someone'} is hurt.`, effect: { dies: d, hurt: h, loseCargo: 0.15, morale: -12 } };
+        } },
+        { label: 'Keep the fires high and stand watch', resolve: (c) => c.rng() < 0.6
+          ? { text: 'A long night, nobody sleeps, and they slink off at dawn.', effect: { morale: -3, days: 0.5 } }
+          : { text: 'They try the far side of the picket. A beast goes, and what it carried.', effect: { loseCargo: 0.1, morale: -6 } } },
       ];
     },
   },
@@ -319,13 +344,13 @@ export const QUEST_ENCOUNTERS: Record<'bounty' | 'relic', Encounter> = {
     weight: () => 0,
     text: (x) => `Smoke from a camp ${x.forest ? 'in the trees' : 'below the rise'}, horses on a line, a lookout who has seen you. These are the ones taking carts on the road.`,
     choices: (x) => {
-      const enemy = 6 + x.rng() * 5;
+      const enemy = (6 + x.rng() * 5) * (BANDS[x.band].bandits[1] / BANDS[0].bandits[1]);
       return [
         { label: 'Go in hard', hint: strength(x.caravan) > enemy ? 'You think you have the numbers' : 'They may have the numbers', resolve: (c) => {
           const m = fight(c, enemy);
           if (m > 0.15) return { text: 'They scatter into the hills, leaving the camp and what they took.', effect: { questDone: true, orrels: Math.round(15 + c.rng() * 40), morale: 10 } };
           if (m > -0.15) { const h = someone(c.caravan, c.rng); return { text: `A hard fight. They break in the end, but ${h?.name ?? 'someone'} is cut badly.`, effect: { questDone: true, hurt: h, morale: 2 } }; }
-          const d = c.rng() < 0.35 ? someone(c.caravan, c.rng) : null;
+          const d = c.rng() < BANDS[c.band].lethal ? someone(c.caravan, c.rng) : null;
           return { text: d ? `They were ready for you. ${d.name} does not come back, and you pull away.` : 'They were ready for you. You pull away with the wounded and nothing to show.', effect: { dies: d, hurt: d ? null : someone(c.caravan, c.rng), morale: -12 } };
         } },
         { label: 'Wait for dark and take them sleeping', resolve: (c) => {
@@ -357,10 +382,10 @@ export const QUEST_ENCOUNTERS: Record<'bounty' | 'relic', Encounter> = {
 };
 
 /** The context for an encounter at a cell. */
-export function contextAt(w: World, cell: number, road: boolean, snow: boolean, nearTown: boolean, caravan: Caravan, rng: () => number, name: () => string): Ctx {
+export function contextAt(w: World, cell: number, road: boolean, snow: boolean, nearTown: boolean, caravan: Caravan, rng: () => number, name: () => string, band: Band = 0): Ctx {
   const b = w.biome[cell], base = baseOf(b);
   return {
-    w, cell, base, biome: b, road, snow, nearTown, caravan, rng, name, subject: someone(caravan, rng),
+    w, cell, base, biome: b, road, snow, nearTown, caravan, rng, name, subject: someone(caravan, rng), band,
     river: !!w.river[cell],
     cold: w.temperature[cell] < 0.35 || snow,
     dry: DRY.has(base) || w.moisture[cell] < 0.25,

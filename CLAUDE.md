@@ -117,3 +117,16 @@ in sim.ts buy/sell); Fight is everyone's, summed through `FIGHT_PIP`. Recruits c
 Encounter choices can be `locked: 'Scout 4'` (greyed on screen, skipped by the bot). The sheets
 (`memberStats`, `crewSheet`, `crewDiff`) read the same constants the rules use; keep it that way, so
 the sheet can't drift.
+
+The crew's papers: `crew.ts` (born in a town: `bornIn` gives the trade's `KNACK` pip, never Fight, and
+`born.land` means eating `BORN_EATS` there) and `sheet.ts` (`crewHtml`: three layouts, papers / roster
+/ ledger, switched in the journal; each person's `walked` hexes drawn as a globe behind a toggle).
+
+Depth (`depth.ts`, decision 2026-11-08, the planet as a dungeon): `depthMap` is hexes over land from
+the nearest road or place, cut into `BANDS` Settled / Frontier / Wild / Deep. A band sets bandits'
+strength, `lethal` (the chance a lost fight kills), `finds` (find rewards, in sim.ts `resolve`) and
+`events` (the encounter rate). `Ctx.band` carries it into encounters. `depthlayer.ts` tints revealed
+land by band on the planet (bar button, a texture sharing the fog's texel-to-cell lookup, offset a
+quarter turn to match a sphere's UVs). sim.ts `haul(g)` is the cargo's worth, banked only in a town;
+out of food in the country, `HUNGER_SPOIL` eats into it. The playtest's `deep` bot pushes into Wild
+and Deep and turns back on food, days out (`TURN_DAYS`) or haul (`TURN_HAUL`).

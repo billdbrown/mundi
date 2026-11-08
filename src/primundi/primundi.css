@@ -400,3 +400,11 @@ canvas.globe { width: 84px; height: 84px; flex: none; }
 #card .ledger .lg-sk { margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
 #card .ledger .lg-sk b.best { color: var(--gold); }
 #card .ledger .lg-more { font-size: 12px; color: var(--quiet); }
+
+/* Depth (depth.ts): the HUD readout coloured by band, the haul not yet banked, the bar's layer switch. */
+#hud .stat.depth.b0 b { color: #9fc79f; }
+#hud .stat.depth.b1 b { color: #e0c460; }
+#hud .stat.depth.b2 b { color: #e8904c; }
+#hud .stat.depth.b3 b { color: #ff6b5e; }
+#hud .stat.haul b { color: var(--gold); }
+#hud .stat[hidden] { display: none; }

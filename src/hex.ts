@@ -1739,7 +1739,7 @@ function setupCaravan(m: LocalMap) {
     };
   }
 }
-const FIND_LABELS: Record<string, string> = { lookout: 'Lookout', spring: 'Spring', forage: 'Foraging', ruin: 'Ruins', camp: 'Old camp' };
+const FIND_LABELS: Record<string, string> = { lookout: 'Lookout', spring: 'Spring', forage: 'Foraging', ruin: 'Ruins', camp: 'Old camp', wilds: 'Wild goods' };
 /** The hex's finds (finds.ts) on the ground: a lookout on the high point, a spring in a hollow,
  * foraging where it's wooded, ruins and old camps out in the country. Where is the same every visit. */
 /** Primundi: others on the road, walking it back and forth through the middle of the hex. */
