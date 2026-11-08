@@ -336,3 +336,18 @@ body.setting-up #toast { bottom: calc(200px + env(safe-area-inset-bottom)); }
 #card .sheet { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0 2px; }
 #card .sheet .lab { font-size: 12px; color: var(--quiet); margin-right: 4px; }
 #card .sheet .st { font-size: 12.5px; padding: 4px 7px; }
+
+/* Other traders on the map (traffic.ts): fainter, smaller dots than your own caravan. The button is
+   a 32 px tap target round a 9 px dot. */
+#traffic { position: fixed; inset: 0; pointer-events: none; z-index: 21; }
+#traffic[hidden] { display: none; }
+#traffic .tr { position: absolute; left: -16px; top: -16px; width: 32px; height: 32px; padding: 0; border: 0; background: none; pointer-events: auto; cursor: pointer; }
+#traffic .tr[hidden] { display: none; }
+#traffic .tr i { position: absolute; left: 11.5px; top: 11.5px; width: 9px; height: 9px; box-sizing: border-box; border-radius: 50%;
+  background: #cfe3f0; border: 1.5px solid #14202a; opacity: .7; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); }
+#traffic .tr:hover i { opacity: 1; }
+
+/* The market: on what you carry, what it cost and what a sale here makes (+) or loses (-). */
+#card .mrow .g small.pl { font-variant-numeric: tabular-nums; }
+#card .mrow .g small.pl.gain { color: var(--good); }
+#card .mrow .g small.pl.loss { color: var(--bad); }

@@ -26,6 +26,8 @@ export interface Folk {
   name: string;
   /** The place they come from. */
   from: number;
+  /** Where they're bound, if known (the traffic's traders). */
+  to?: number;
 }
 export const FOLK_LABEL: Record<FolkKind, string> = { traders: 'A caravan', pilgrims: 'Pilgrims', broken: 'A broken cart' };
 /** The chance someone is in a hex this week: on a road, beside one, out in the country. */

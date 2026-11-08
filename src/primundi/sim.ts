@@ -23,6 +23,7 @@ import { ENCOUNTERS, applyEffect, contextAt, drawEncounter, type Choice, type Ct
 import { MAX_QUESTS, canHandIn, offersAt, questTarget, questTitle, type Quest } from './quests.ts';
 import { tradesOf, townsfolk, TRADES, type Trade } from './towns.ts';
 import { CAMP_NIGHTS, CAMP_P, folkEncounter, folkIn, gameIn, gameReady, huntEncounter, type AnimalKind, type Folk } from './life.ts';
+import { Traffic, trafficId } from './traffic.ts';
 
 /** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
 export const RATES = [0, 0.22, 0.6, 1.6];
@@ -138,7 +139,11 @@ export interface Game {
   /** The hex the caravan last came from. */
   from: number;
   warned: { water: boolean; rations: boolean };
+  /** Other traders on the roads (traffic.ts), made when first asked for. */
+  traffic?: Traffic;
 }
+/** The game's traffic: the same traders and journeys for the same seed. */
+export function trafficOf(g: Game): Traffic { return (g.traffic ??= new Traffic(g.w, g.a, g.seed)); }
 
 export function makeGame(w: World, a: Atlas, game: GameData, seed: number, s: Save, ui: Ui, dice: () => number = () => Math.random()): Game {
   return { w, a, game, seed, s, revealed: new Set(s.revealed), dice, ui, from: -1, warned: { water: false, rations: false } };
@@ -525,7 +530,11 @@ export function folkHere(g: Game, cell: number): Folk[] {
     const q = s.jobs.find((x) => x.id === s.errand);
     return [{ id: 'first', kind: 'traders', name: nameMaker((g.seed * 7 + 5) >>> 0)(), from: q?.to ?? s.home }];
   }
-  return folkIn(g.w, g.a, cell, s.day, g.seed).filter((f) => s.finds[`folk:${f.id}`] === undefined);
+  // Traders on the road are the traffic's (traffic.ts): whoever is really in the hex today. The
+  // seeded draw still brings pilgrims and broken carts, and traders out in the country.
+  const real: Folk[] = trafficOf(g).inCell(cell, s.day).map((r) => ({ id: trafficId(r), kind: 'traders', name: r.trader.name, from: r.leg.from, to: r.leg.to }));
+  const drawn = folkIn(g.w, g.a, cell, s.day, g.seed).filter((f) => !(f.kind === 'traders' && g.a.road[cell]));
+  return [...real, ...drawn].filter((f) => s.finds[`folk:${f.id}`] === undefined);
 }
 /** Meeting someone on the road: its card. */
 export function meetFolk(g: Game, f: Folk): Pending {

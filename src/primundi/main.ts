@@ -40,7 +40,7 @@ import {
   jobsOffered, shortHere, chartRate, localOffer, takeLocal, rationCost, restCost, folkHere, meetFolk, passFolk, gameHere, huntHere, makeCamp, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, buyBeast, appoint,
   reveal as simReveal, advance as simAdvance, plan as simPlan,
   buy as simBuy, sell as simSell, rest as simRest,
-  setupHire, setupBeasts, firstLoads, setupLoad, setupReady, finishSetup, quickSetup,
+  setupHire, setupBeasts, firstLoads, setupLoad, setupReady, finishSetup, quickSetup, trafficOf,
   type Game, type Pending, type Save, type Ui,
 } from './sim.ts';
 import { SETUP_MAX } from './opening.ts';
@@ -698,9 +698,43 @@ view.onFrame.push((dt, _d, sun, time) => {
     if (storm.t > 0.7) { storm.t = -1; fog.setFlash(storm.dir, 0); }
   }
   marks.place();
+  placeTraffic();
   labels.place();
   farMark();
 });
+
+/** Other traders on the roads (traffic.ts): faint dots on the map, only where you've seen, moving
+ * as the days pass. Tap one for who and where they're bound. */
+const trafficLayer = document.createElement('div');
+trafficLayer.id = 'traffic';
+document.body.appendChild(trafficLayer);
+trafficLayer.addEventListener('pointerdown', (e) => e.stopPropagation());
+trafficLayer.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest('button');
+  if (b?.dataset.who) { e.stopPropagation(); toast(b.dataset.who, 3000); }
+});
+const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3();
+function placeTraffic() {
+  const show = !!g && !!save && !!world && !hexOpen && !intro;
+  trafficLayer.hidden = !show;
+  if (!show) return;
+  const on = trafficOf(g!).onRoad(save!.day).filter((r) => revealed.has(r.cell) && revealed.has(r.next));
+  while (trafficLayer.children.length < on.length) { const b = document.createElement('button'); b.className = 'tr'; b.append(document.createElement('i')); trafficLayer.appendChild(b); }
+  const rect = view.renderer.domElement.getBoundingClientRect(), cam = view.camera.position;
+  for (let k = 0; k < trafficLayer.children.length; k++) {
+    const b = trafficLayer.children[k] as HTMLButtonElement, r = on[k];
+    if (!r) { b.hidden = true; continue; }
+    marks.at(r.cell, tmpA, 0.002).lerp(marks.at(r.next, tmpB, 0.002), r.frac);
+    marks.group.localToWorld(tmpA);
+    const facing = tmpA.clone().normalize().dot(tmpB.copy(cam).sub(tmpA)) > 0;
+    const s = tmpA.project(view.camera);
+    b.hidden = !facing || s.z > 1 || Math.abs(s.x) > 1.05 || Math.abs(s.y) > 1.05;
+    if (b.hidden) continue;
+    b.style.transform = `translate(${Math.round(rect.left + (s.x + 1) / 2 * rect.width)}px, ${Math.round(rect.top + (1 - s.y) / 2 * rect.height)}px)`;
+    const who = `${r.trader.name}'s caravan, out of ${atlas!.places[r.leg.from].name}, bound for ${atlas!.places[r.leg.to].name}`;
+    if (b.dataset.who !== who) { b.dataset.who = who; b.title = who; b.setAttribute('aria-label', who); }
+  }
+}
 
 /** Where the rumour puts the far place: a mark on the map if it's in view, else an arrow at the
  * edge of the screen pointing the way. It never reveals anything. */
@@ -1031,8 +1065,11 @@ function openTown(pid: number, tab = townTab) {
         const k = q[i].buy ? q[i].buy / g.base : 1;
         const hint = k < 0.7 ? '<em class="cheap">cheap here</em>' : k > 1.4 ? '<em class="dear">dear here</em>' : '';
         const buyable = !short.has(i) && q[i].buy && q[i].stock >= 1 && c.orrels >= q[i].buy && cargoUsed(c) < c.capacity;
+        // What you carry: what it cost you, and what selling one here makes or loses.
+        const paid = c.cargo[i] && c.basis[i] > 0 ? c.basis[i] / c.cargo[i] : 0, gain = paid ? q[i].sell - paid : 0;
+        const pl = paid ? `<small class="pl ${gain >= 0 ? 'gain' : 'loss'}">paid ${fmt(Math.round(paid))} · ${gain >= 0 ? '+' : '−'}${fmt(Math.abs(Math.round(gain)))} each</small>` : '';
         return `<div class="mrow${c.cargo[i] ? ' held' : ''}">
-          <div class="g"><b>${g.name}</b>${hint}${better ? `<small class="up">fetches ${best!.price} in ${esc(best!.place.name)}, ${agoText(day - best!.day)}</small>` : ''}</div>
+          <div class="g"><b>${g.name}</b>${hint}${pl}${better ? `<small class="up">fetches ${best!.price} in ${esc(best!.place.name)}, ${agoText(day - best!.day)}</small>` : ''}</div>
           <button class="sell" data-act="sell" data-g="${i}" ${c.cargo[i] < 1 ? 'disabled' : ''} title="Sell one (shift: five)"><span>sell</span>${q[i].sell}</button>
           <span class="have" title="You carry">${c.cargo[i] || '·'}</span>
           ${short.has(i) ? '<span class="nobuy" title="Wanted on the notice board: there is none to be had here">none to be had</span>' : q[i].buy ? `<button class="buy" data-act="buy" data-g="${i}" ${buyable ? '' : 'disabled'} title="Buy one (shift: five)"><span>buy</span>${q[i].buy}</button>` : '<span class="nobuy">not sold</span>'}
@@ -1402,6 +1439,8 @@ function toast(text: string, ms = 3500) {
   findsIn: (c: number) => (world && atlas ? findsIn(world, atlas, c, params.seed) : []),
   /** Others on the road in a hex this week, not yet met (life.ts). */
   folkHere: (c: number) => (g ? folkHere(g, c) : []),
+  /** Traders on the road today (traffic.ts). */
+  trafficOnRoad: () => (g && save ? trafficOf(g).onRoad(save.day) : []),
   gameHere: (c: number) => (g ? gameHere(g, c) : null),
   trades: (pid: number) => (world && atlas ? tradesOf(world, atlas, atlas.places[pid]) : []),
   encounter: (id?: string) => {

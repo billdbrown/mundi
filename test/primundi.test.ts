@@ -453,3 +453,29 @@ test("the tavern's stat sheet says what the rules do", () => {
   assert.ok(memberStats({ ...living(c)[0], role: 'scout' }).some((x) => x.k === 'Sight'));
   assert.equal(memberStats({ ...living(c)[0], trait: 'frugal' }).find((x) => x.k === 'Eats')!.v, '0.7/day');
 });
+
+import { Traffic } from '../src/primundi/traffic.ts';
+test('traders keep to the roads, go town to town, and are the same on a reload', () => {
+  const t1 = new Traffic(hw, atlas, 5), t2 = new Traffic(hw, atlas, 5);
+  assert.ok(t1.traders.length >= 6, `${t1.traders.length} traders`);
+  // Asked in a different order (as a reload would), the same answers.
+  const late = t2.onRoad(120).map((r) => `${r.trader.i}:${r.cell}`).join(',');
+  const visited = t1.traders.map(() => new Set<number>());
+  let onRoad = 0;
+  for (let d = 0; d <= 120; d += 0.5) {
+    for (const r of t1.onRoad(d)) {
+      onRoad++;
+      assert.equal(atlas.road[r.cell], 1, 'off the road');
+      assert.ok(r.frac >= 0 && r.frac < 1);
+      visited[r.trader.i].add(r.leg.to);
+      assert.ok(atlas.places[r.leg.to].town && atlas.places[r.leg.from].town);
+    }
+  }
+  assert.equal(t1.onRoad(120).map((r) => `${r.trader.i}:${r.cell}`).join(','), late);
+  // Most are moving about: on the road a fair share of the time, and to more than one town.
+  assert.ok(onRoad > t1.traders.length * 241 * 0.2, `on the road ${onRoad}`);
+  assert.ok(visited.filter((v) => v.size >= 2).length > t1.traders.length / 2);
+  // Someone in a hex is someone on the road there.
+  const r = t1.onRoad(30)[0];
+  assert.ok(t1.inCell(r.cell, 30).some((x) => x.trader.i === r.trader.i));
+});
