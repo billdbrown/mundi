@@ -332,14 +332,14 @@ export function noticeBoard(K: number): THREE.Group {
 }
 
 /** A gold dot with a dark rim, for the marker over the leader. */
-function dotTexture() {
+function dotTexture(fill = '#f2c14e') {
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const g = c.getContext('2d')!;
   g.beginPath(); g.moveTo(32, 60); g.lineTo(14, 30); g.arc(32, 24, 19, Math.PI * 0.84, Math.PI * 0.16); g.closePath();
   g.fillStyle = 'rgba(20,16,10,0.85)'; g.fill();
   g.beginPath(); g.moveTo(32, 54); g.lineTo(18, 30); g.arc(32, 24, 15, Math.PI * 0.84, Math.PI * 0.16); g.closePath();
-  g.fillStyle = '#f2c14e'; g.fill();
+  g.fillStyle = fill; g.fill();
   g.beginPath(); g.arc(32, 24, 6, 0, Math.PI * 2); g.fillStyle = 'rgba(20,16,10,0.75)'; g.fill();
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -412,6 +412,14 @@ export class Caravan {
     this.group.add(L, this.cart);
     if (opts.guide !== false) this.group.add(this.marker, this.ring, this.steps);
   }
+  /** Someone else's caravan you've come to meet: a pin of their own colour over them, so they can
+   * be found under trees and from far out. */
+  showPin(fill: string) {
+    (this.marker.material as THREE.SpriteMaterial).map = dotTexture(fill);
+    this.group.add(this.marker);
+  }
+  /** Walk faster (or back to the steady pace, given null). */
+  setPace(p: number | null) { this.pace = p; }
 
   /** The cart's model (the town pack's), once it is in. */
   setCart(geo: THREE.BufferGeometry) {

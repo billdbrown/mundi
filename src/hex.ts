@@ -1733,6 +1733,7 @@ function setupCaravan(m: LocalMap) {
     // With someone here to meet, between you and them, so both are in view (on a phone too).
     arrival = () => {
       const o = walkers[0]?.c;
+      folkApproach?.(); folkApproach = null;
       if (o) { const d = Math.hypot(o.x - x, o.y - y); controls.glideTo((x + o.x) / 2, -(y + o.y) / 2, Math.max(70 * K, d * 1.6 / Math.min(1, innerWidth / innerHeight))); }
       else controls.glideTo(x, -y, 70 * K);
     };
@@ -1751,8 +1752,10 @@ function folkWalk(f: Folk) {
   f.fwd = !f.fwd;
   f.c.walk(p, () => folkWalk(f));
 }
+/** The caravan you came to meet sets off towards you (from the arrival). */
+let folkApproach: (() => void) | null = null;
 function placeFolk(m: LocalMap, n: Nav, K: number, cartGeo: THREE.BufferGeometry | null) {
-  walkers = [];
+  walkers = []; folkApproach = null;
   if (!gameFolk.length || !caravan) return;
   const rng = makeRng((m.cell * 374761393 + 668265263) >>> 0);
   const R = Math.min(1500, m.localWidth * 0.25);
@@ -1767,13 +1770,65 @@ function placeFolk(m: LocalMap, n: Nav, K: number, cartGeo: THREE.BufferGeometry
     if (!path || path.length < 2) continue;
     const c = new Caravan((x, y) => groundAtMap(m, x, y), K, cartGeo ? cartGeo.clone() : null, { cloak: FOLK_CLOAK[kind] ?? 0x2f5d7c, guide: false, pace: 1.6 * K });
     caravan.group.add(c.group);
-    // Somewhere along it, not on top of the player.
-    const start = Math.floor(path.length * (0.2 + rng() * 0.25));
-    const [x, y] = path[start];
-    c.place(x, y, rng() * Math.PI * 2);
+    // Out in the country, the first you stopped for is a short way off along the road, coming up
+    // to you (you start in the middle), and stops beside you: the meeting. Others, and any in a
+    // town, are somewhere along it, back and forth.
+    const town = spots.some((s) => s.tab);
+    let start = Math.floor(path.length * (0.2 + rng() * 0.25));
+    const first = !town && walkers.length === 0 && kind !== 'broken';
+    // Their road to you: along it from about 20 m (town scale) out to its nearest point to you.
+    let route: [number, number][] | null = null;
+    if (first) {
+      const v0 = n.nearest(0, 0, 200), [qx, qy] = v0 >= 0 ? n.xy(v0) : [0, 0];
+      // The point on it nearest you, put into it (its corners can be far apart).
+      let mid = 0, bd = Infinity, bp: [number, number] = path[0];
+      for (let i = 0; i + 1 < path.length; i++) {
+        const [ax, ay] = path[i], [bx, by] = path[i + 1], vx = bx - ax, vy = by - ay;
+        const t = Math.max(0, Math.min(1, ((qx - ax) * vx + (qy - ay) * vy) / (vx * vx + vy * vy || 1)));
+        const px = ax + vx * t, py = ay + vy * t, d = Math.hypot(px - qx, py - qy);
+        if (d < bd) { bd = d; mid = i + 1; bp = [px, py]; }
+      }
+      const road: [number, number][] = [...path.slice(0, mid), bp, ...path.slice(mid)];
+      path = road;
+      const back = (dir: number) => { let k = mid, acc = 0; while (k + dir >= 0 && k + dir < road.length && acc < 20 * K) { acc += Math.hypot(road[k + dir][0] - road[k][0], road[k + dir][1] - road[k][1]); k += dir; } return [k, acc] as const; };
+      const [k1, a1] = back(-1), [k2, a2] = back(1);
+      start = a1 >= a2 ? k1 : k2;
+      route = start < mid ? road.slice(start, mid + 1) : road.slice(mid, start + 1).reverse();
+      // Its last 20 m only (a road's stretches can be long), and a step off it to your side.
+      let need = 20 * K;
+      for (let i = route.length - 1; i > 0; i--) {
+        const [ax, ay] = route[i - 1], [bx, by] = route[i], d = Math.hypot(bx - ax, by - ay);
+        if (d >= need) { const t = need / d; route = [[bx + (ax - bx) * t, by + (ay - by) * t], ...route.slice(i)]; break; }
+        need -= d;
+      }
+      const [ex, ey] = route[route.length - 1], gap = Math.hypot(ex - qx, ey - qy);
+      if (gap > 8 * K) {
+        const off = n.find(ex, ey, qx + (ex - qx) / gap * 5 * K, qy + (ey - qy) / gap * 5 * K);
+        // Unless the way over is the long way round (a gully, a stream): then they stop on the road.
+        let len = 0;
+        if (off) for (let i = 1; i < off.length; i++) len += Math.hypot(off[i][0] - off[i - 1][0], off[i][1] - off[i - 1][1]);
+        if (off && off.length > 1 && len < gap * 2) route = [...route, ...off.slice(1)];
+      }
+    }
+    const [x, y] = route ? route[0] : path[start];
+    c.place(x, y, route && route.length > 1 ? Math.atan2(route[1][0] - x, -(route[1][1] - y)) : rng() * Math.PI * 2);
     const f: Folk = { id, c, path: path.slice(start), fwd: true, waiting: false, still: kind === 'broken' };
     walkers.push(f);
-    folkWalk(f);
+    if (first && route && route.length > 1) {
+      c.showPin('#8fc8f0'); c.markerScale(0.85 / world.matrixWorld.getMaxScaleOnAxis());
+      // They set off once you're looking (the arrival), so you see them come.
+      const go = route;
+      folkApproach = () => {
+        c.setPace(4 * K);
+        c.walk(go, () => {
+          if (f.waiting) return;
+          f.waiting = true; c.setPace(1.6 * K);
+          // They've come as near as the road goes, and you're standing: meet. If you've walked off,
+          // they wait for you to come over (their label).
+          if (caravan && !caravan.moving && Math.hypot(caravan.x - c.x, caravan.y - c.y) < 40 * K) parent.postMessage({ type: 'primundi-meet', id }, location.origin);
+        });
+      };
+    } else folkWalk(f);
     spots.push({ tab: '', label: FOLK_LABEL[kind as FolkKind] ?? 'Someone', door: [x, y], top: [x, y, groundAtMap(m, x, y) + 3 * K], centre: [x, y], radius: 2 * K,
       find: 'folk', folk: id, seen: true, used: false, obj: c.group });
   }
@@ -2424,7 +2479,7 @@ void LAYERS; void L_DEPTH;
   get spots() { return spots; },
   get tradePlaced() { return tradePlaced; },
   get strollers() { return strollers; },
-  get herd() { return herd; }, controls, get K() { return style.town.scale; },
+  get herd() { return herd; }, get walkers() { return walkers; }, controls, get K() { return style.town.scale; },
   tap, goTo, goSpot, onScreen, camera, get worldGroup() { return world; },
   resetView, scene, setTilt, setTime, setAround, walker, wind, clouds, csm, waterUniforms, groundTex, canopy, shoreUniforms,
   /** The camera: position, the point looked at, distance (scripts/camtest.mjs). */
