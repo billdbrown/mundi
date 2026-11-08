@@ -74,6 +74,10 @@ const WALLS: Record<Family, number[]> = {
   stone: [0xe8e6dc, 0xd8d2c0, 0xe2d8c4],
 };
 
+/** A landmark drawn at its own size, not the hall's: a small village's well is a well (about 3 m
+ * across), not a 12 m building. Sized against the town props' well (hextown.ts, 2.4 m). */
+const HALL_SIZE: Record<string, number> = { 'village/Well': 3.2 };
+
 /** One building to draw: map position, ground height, heading, footprint (m), kind and people. */
 export interface Building { x: number; y: number; gy: number; rot: number; wd: number; dp: number; ch: number; kind: number; culture: number }
 
@@ -93,7 +97,7 @@ export function buildHouses(pack: HousePack, mode: HouseMode, bs: Building[], K:
     let name: string, s: number;
     if (b.kind > 0) {
       name = F.hall[Math.min(2, b.kind - 1)];
-      s = [12, 18, 26][Math.min(2, b.kind - 1)] * K;
+      s = (HALL_SIZE[name] ?? [12, 18, 26][Math.min(2, b.kind - 1)]) * K;
     } else if (h < (fam === 'village' ? 0.18 : 0.06) && F.extra.length) {
       name = F.extra[Math.floor(b.ch * 7919) % F.extra.length];
       s = Math.max(b.wd, b.dp) * 1.3 * K;
