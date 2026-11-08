@@ -8,6 +8,7 @@
  */
 import { best, crewSheet, SKILLS, SKILL_MAX, SKILL_NAMES, TRAITS, type Caravan, type Member, type Stat } from './caravan.ts';
 import { bornStats } from './crew.ts';
+import { bondedWith, markOf, XP_NEXT } from './learn.ts';
 
 export type Layout = 'papers' | 'roster' | 'ledger';
 export const LAYOUTS: [Layout, string][] = [['papers', 'Papers'], ['roster', 'Roster'], ['ledger', 'Ledger']];
@@ -16,7 +17,14 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const chip = (x: Stat) => `<span class="st${x.good === true ? ' up' : x.good === false ? ' dn' : ''}">${esc(x.k)} <b>${esc(x.v)}</b></span>`;
 const chips = (xs: Stat[]) => `<span class="chips">${xs.map(chip).join('')}</span>`;
 /** ●●●○○ */
-export const pips = (n: number, top = false) => `<span class="pips${top ? ' top' : ''}" title="${n} of ${SKILL_MAX}">${'<i class="on"></i>'.repeat(n)}${'<i></i>'.repeat(SKILL_MAX - n)}</span>`;
+export const pips = (n: number, bonus = 0, title = '') => { const b = Math.max(0, Math.min(bonus, SKILL_MAX - n));
+  return `<span class="pips" title="${title || `${n + b} of ${SKILL_MAX}`}">${'<i class="on"></i>'.repeat(n)}${'<i class="on bn"></i>'.repeat(b)}${'<i></i>'.repeat(SKILL_MAX - n - b)}</span>`; };
+/** A skill's pips for `m`, with what marks add and how far to the next. */
+const skillPips = (m: Member, k: (typeof SKILLS)[number]) => {
+  const n = m.skills[k], x = Math.floor(m.xp?.[k] ?? 0);
+  return pips(n, m.bonus?.[k] ?? 0, `${SKILL_NAMES[k]} ${n}${m.bonus?.[k] ? ` +${m.bonus[k]} from marks` : ''}${n < SKILL_MAX ? ` · ${x} of ${XP_NEXT[n]} to ${n + 1}` : ''}`);
+};
+const eff = (m: Member, k: (typeof SKILLS)[number]) => Math.min(SKILL_MAX, m.skills[k] + (m.bonus?.[k] ?? 0));
 
 export interface SheetCtx {
   c: Caravan;
@@ -30,6 +38,12 @@ const days = (m: Member, x: SheetCtx) => { const d = Math.max(0, Math.floor(x.da
 const tags = (m: Member) => `${m.lead ? '<span class="tag lead">Leader</span>' : ''}${m.health !== 'well' ? `<span class="tag hp">${m.health}</span>` : ''}`;
 /** Who's the caravan's best at each skill (the one who does the task). */
 const tops = (c: Caravan) => Object.fromEntries(SKILLS.map((k) => [k, best(c, k)])) as Record<string, number>;
+/** Whether `m` is who does `k` (pinned, or the best). */
+const isTop = (c: Caravan, m: Member, k: (typeof SKILLS)[number], t: Record<string, number>) => {
+  const p = c.pins?.[k];
+  if (p && k !== 'fight') return p === m.name;
+  return eff(m, k) === t[k] && eff(m, k) > 1 && m.health === 'well';
+};
 const traitStats = (m: Member): Stat[] => [
   ...(m.trait === 'cheerful' ? [{ k: 'Spirits', v: '+0.5/day', good: true }] : []),
   ...(m.trait === 'steady' ? [{ k: 'Mends', v: '×1.5', good: true }] : []),
@@ -43,12 +57,12 @@ export function sheet(m: Member, i: number, x: SheetCtx): string {
   const t = tops(x.c);
   return `<div class="pc" data-m="${i}">
     <div class="pc-head"><div><b>${esc(m.name)}</b>${tags(m)}<small>${from(m, x)} · ${days(m, x)}</small></div>${globe(m, i, x)}</div>
-    <div class="pc-skills">${SKILLS.map((k) => `<span class="sk${m.skills[k] === t[k] && m.skills[k] > 1 && m.health === 'well' ? ' best' : ''}"><em>${SKILL_NAMES[k]}</em>${pips(m.skills[k])}</span>`).join('')}</div>
+    <div class="pc-skills">${SKILLS.map((k) => `<span class="sk${isTop(x.c, m, k, t) ? ' best' : ''}"><em>${SKILL_NAMES[k]}${x.c.pins?.[k] === m.name ? ' ·pinned' : ''}</em>${skillPips(m, k)}</span>`).join('')}</div>
     <dl>
       <dt>Born</dt><dd>${m.born ? chips(bornStats(m)) : '<span class="dim">—</span>'}</dd>
       ${m.trait ? `<dt>${esc(traitName(m))}</dt><dd>${chips(traitStats(m))}</dd>` : ''}
-      <dt>Marks</dt><dd class="dim">None yet. Deeds on the road earn them.</dd>
-      <dt>Bond</dt><dd class="dim">—</dd>
+      <dt>Marks</dt><dd>${m.marks?.length ? chips(m.marks.map((id) => markOf(id)).filter((k) => k).map((k) => ({ k: k!.name, v: k!.text, good: true }))) : '<span class="dim">None yet. Deeds on the road earn them.</span>'}</dd>
+      <dt>Bond</dt><dd>${bondedWith(x.c, m).length ? chips(bondedWith(x.c, m).map((n) => ({ k: `With ${n}`, v: 'Fight +1 together', good: true }))) : '<span class="dim">—</span>'}</dd>
     </dl>
   </div>`;
 }
@@ -69,15 +83,17 @@ export function crewHtml(layout: Layout, x: SheetCtx, sel: number): string {
     const s = people.find((p) => p.i === sel) ?? people[0];
     body = `<table class="roster"><thead><tr><th></th>${SKILLS.map((k) => `<th>${SKILL_NAMES[k]}</th>`).join('')}</tr></thead><tbody>
       ${people.map((p) => `<tr data-act="pick" data-i="${p.i}" class="${p === s ? 'on' : ''}"><td><b>${esc(p.m.name)}</b>${tags(p.m)}</td>
-        ${SKILLS.map((k) => `<td class="${p.m.skills[k] === t[k] && p.m.skills[k] > 1 && p.m.health === 'well' ? 'best' : ''}">${pips(p.m.skills[k])}</td>`).join('')}</tr>`).join('')}
-      </tbody></table>${s ? sheet(s.m, s.i, x) : ''}`;
+        ${SKILLS.map((k) => `<td class="${isTop(c, p.m, k, t) ? 'best' : ''}${c.pins?.[k] === p.m.name ? ' pinned' : ''}"${k === 'fight' ? '' : ` data-pin="${k}" data-name="${esc(p.m.name)}"`}>${skillPips(p.m, k)}</td>`).join('')}</tr>`).join('')}
+      </tbody></table><p class="dim small">Tap a skill to have that person do it (training: they learn faster, at their own skill). Tap again for the best.</p>${s ? sheet(s.m, s.i, x) : ''}`;
   } else {
     body = `<ol class="ledger">${people.map((p) => {
-      const sk = SKILLS.map((k) => `${SKILL_NAMES[k]} <b class="${p.m.skills[k] === t[k] && p.m.skills[k] > 1 ? 'best' : ''}">${p.m.skills[k]}</b>`).join(' · ');
+      const sk = SKILLS.map((k) => `${SKILL_NAMES[k]} <b class="${isTop(c, p.m, k, t) ? 'best' : ''}">${eff(p.m, k)}</b>`).join(' · ');
+      const mk = (p.m.marks ?? []).map((id) => markOf(id)).filter((k) => k).map((k) => `${k!.name} (${k!.text})`).join(', ');
+      const bd = bondedWith(c, p.m);
       const born = bornStats(p.m).map((b) => `${b.k} ${b.v}`).join(', ');
       return `<li data-m="${p.i}"><div class="lg-head"><b>${esc(p.m.name)}</b>${tags(p.m)}<small>${from(p.m, x)} · ${days(p.m, x)}</small></div>
         <div class="lg-sk">${sk}</div>
-        <div class="lg-more">${born ? `Born: ${esc(born)}.` : ''}${p.m.trait ? ` ${esc(TRAITS[p.m.trait])}.` : ''} Marks: none yet.</div>${globe(p.m, p.i, x)}</li>`;
+        <div class="lg-more">${born ? `Born: ${esc(born)}.` : ''}${p.m.trait ? ` ${esc(TRAITS[p.m.trait])}.` : ''} Marks: ${mk ? esc(mk) : 'none yet'}.${bd.length ? ` Road-bonded with ${esc(bd.join(', '))}.` : ''}</div>${globe(p.m, p.i, x)}</li>`;
     }).join('')}</ol>`;
   }
   return `${lay}${totals(c)}${body}`;

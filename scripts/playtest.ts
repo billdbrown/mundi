@@ -56,6 +56,8 @@ for (const origin of origins) {
 }
 const supply = results.flatMap((r) => r.deaths.filter((d) => d.cause === 'supplies'));
 console.log(`\ndeaths from supplies (must be 0): ${supply.length}`);
+// How fast people learn (learn.ts): skill pips gained a person a year, by bot.
+console.log(`pips a person a year: ${bots.map((b) => `${b} ${r1(med(results.filter((r) => r.opts.bot === b).map((r) => r.pipsPerYear)))}`).join(', ')}`);
 // Everything else that killed, by cause (fights can kill, more often deep out: depth.ts).
 const causes: Record<string, number> = {};
 for (const r of results) for (const d of r.deaths) causes[d.cause] = (causes[d.cause] ?? 0) + 1;

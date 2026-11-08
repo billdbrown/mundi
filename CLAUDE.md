@@ -130,3 +130,11 @@ land by band on the planet (bar button, a texture sharing the fog's texel-to-cel
 quarter turn to match a sphere's UVs). sim.ts `haul(g)` is the cargo's worth, banked only in a town;
 out of food in the country, `HUNGER_SPOIL` eats into it. The playtest's `deep` bot pushes into Wild
 and Deep and turns back on food, days out (`TURN_DAYS`) or haul (`TURN_HAUL`).
+
+Learning (`learn.ts`): a choice's `uses` skill teaches (sim.ts `resolve`); so do revealing hexes by
+travel (Scout), deals (Barter) and the hurt mending (Mend). `practise` gives everyone standing Fight
+experience, or the doer (`doerOf`: whoever `pins` names, else the best) full and the next best half,
+times `DEPTH_XP` by band; `XP_NEXT` is the cost of each pip. Deeds (`deed`) earn `MARKS`, which add
+`bonus` pips (`eff(m, k)` is the skill the rules use) or `lands` to eat less in. `bonds` form after
+`BOND_DAYS` together and `BOND_FIGHTS` shared fights, worth `BOND_FIGHT` in `strength`. The roster
+pins a one-person task to someone by tapping its cell. The playtest prints pips a person a year.

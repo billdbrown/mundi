@@ -26,6 +26,10 @@ import { CAMP_NIGHTS, CAMP_P, folkEncounter, folkIn, gameIn, gameReady, huntEnco
 import { Traffic, trafficId } from './traffic.ts';
 import { bornIn, landOf } from './crew.ts';
 import { bandAt, BANDS } from './depth.ts';
+import { checkMarks, dayTogether, deed, foughtTogether, practise, XP } from './learn.ts';
+import { doerOf } from './caravan.ts';
+/** Level-ups, marks and bonds: told, and in the log. */
+function tell(g: Game, lines: string[]) { for (const t of lines) { g.ui.toast(t, 5000); log(g, t); } }
 
 /** Days of game time per second of real time, at each speed. Bill will tune these by playing. */
 export const RATES = [0, 0.22, 0.6, 1.6];
@@ -365,7 +369,10 @@ export function reveal(g: Game, cells: number[], byTravel = false): number {
   if (!fresh.length) return 0;
   for (const c of fresh) g.revealed.add(c);
   g.s.revealed = [...g.revealed];
-  if (byTravel) { g.s.charted += fresh.length; g.s.caravan.unsoldCharts += fresh.length; }
+  if (byTravel) {
+    g.s.charted += fresh.length; g.s.caravan.unsoldCharts += fresh.length;
+    tell(g, practise(g.s.caravan, 'scout', XP.hex * fresh.length, bandAt(g.w, g.a, g.s.cell)));
+  }
   g.ui.revealed(fresh, byTravel);
   return fresh.length;
 }
@@ -552,7 +559,20 @@ export function newDay(g: Game, resting: boolean) {
   const atWater = hasWater(g.w, g.a, s.cell);
   // In a town you eat what you buy; on the road the land helps.
   const forage = g.a.placeAt[s.cell] >= 0 ? 1 : forageAt(g, s.cell);
+  const hurtBefore = living(c).filter((m) => m.health !== 'well').length;
   for (const n of passDay(c, atWater, resting, forage, g.dice, landOf(g.w, s.cell))) { g.ui.toast(n); log(g, n); }
+  // Learning by living (learn.ts): mending the hurt, days deep out or in the cold, days together.
+  const healed = hurtBefore - living(c).filter((m) => m.health !== 'well').length;
+  const lines: string[] = [];
+  if (healed > 0) { const d = doerOf(c, 'mend'); lines.push(...practise(c, 'mend', XP.mend * healed, bandAt(g.w, g.a, s.cell))); if (d) lines.push(...deed(d, 'heals', healed)); }
+  const band = bandAt(g.w, g.a, s.cell), land = landOf(g.w, s.cell);
+  for (const m of living(c)) {
+    if (band >= 3) lines.push(...deed(m, 'deepDays'));
+    if (land === 'tundra' || land === 'taiga') lines.push(...deed(m, 'coldDays'));
+    lines.push(...checkMarks(m));
+  }
+  lines.push(...dayTogether(c));
+  tell(g, lines);
   if (c.rations <= 0 && g.a.placeAt[s.cell] < 0) {
     let lost = 0;
     c.cargo = c.cargo.map((n, gi) => { let l = 0; for (let k = 0; k < n; k++) if (g.dice() < HUNGER_SPOIL) l++; if (l) { c.basis[gi] *= (n - l) / n; lost += l; } return n - l; });
@@ -671,6 +691,15 @@ export function resolve(g: Game, p: Pending, i: number): { out: Outcome; lines: 
   // Hunted (or let be): the game moves off for a while.
   if (p.hunt) s.finds[`${s.cell}:hunt`] = s.day;
   const lines = applyEffect(s.caravan, out.effect, p.ctx.name, s.day, g.dice);
+  // Who learns from it (learn.ts).
+  const uses = p.choices[i].uses, band = p.ctx.band ?? 0, c = s.caravan;
+  if (uses === 'fight') {
+    foughtTogether(c);
+    tell(g, [...practise(c, 'fight', XP.fight, band), ...living(c).filter((m) => m.health === 'well').flatMap((m) => deed(m, 'fights'))]);
+  } else if (uses === 'hunt') {
+    const doer = doerOf(c, 'hunt'), kill = (out.effect.rations ?? 0) > 0 || !!out.effect.cargo;
+    tell(g, [...practise(c, 'hunt', XP.hunt, band), ...(doer && kill ? deed(doer, 'kills') : [])]);
+  } else if (uses) tell(g, practise(c, uses, uses === 'scout' ? XP.slip : XP.parley, band));
   if (out.effect.learn != null) {
     const pl = g.a.places[out.effect.learn];
     remember(s.known, pl, quotes(g.w, pl, s.stocks, s.day, doyOf(s.day)), Math.floor(s.day));
@@ -718,6 +747,7 @@ export function buy(g: Game, pid: number, gi: number, many: number): number {
   const cost = Math.max(n, Math.round(trade(g.w, p, s.stocks, s.day, doyOf(s.day), gi, n) * (1 - barterEdge(c))));
   c.orrels -= cost;
   c.basis[gi] += cost; c.cargo[gi] += n;
+  haggled(g);
   return n;
 }
 /** Sell up to `many` of a good. The orrels it fetched. */
@@ -731,7 +761,13 @@ export function sell(g: Game, pid: number, gi: number, many: number): number {
   const paid = c.cargo[gi] ? (c.basis[gi] / c.cargo[gi]) * n : 0;
   c.basis[gi] -= paid; c.cargo[gi] -= n;
   c.earned += -cost - paid;
+  haggled(g);
   return -cost;
+}
+/** A deal done: the haggler learns (learn.ts). */
+function haggled(g: Game) {
+  const c = g.s.caravan, d = doerOf(c, 'barter');
+  tell(g, [...practise(c, 'barter', XP.trade), ...(d ? deed(d, 'trades') : [])]);
 }
 /** What a town remembers of you. */
 export function metAt(g: Game, pid: number) {

@@ -32,6 +32,8 @@ import { buildAtlas, GOODS, ringCells, type Atlas, type Place } from './atlas.ts
 import { bestKnownSell, quotes, remember } from './market.ts';
 import { bandAt, BANDS, depthStats } from './depth.ts';
 import { DepthLayer } from './depthlayer.ts';
+import { pin } from './learn.ts';
+import type { Skill } from './caravan.ts';
 import { crewHtml, type Layout } from './sheet.ts';
 import { AMBITION_GOAL, BANDIT_FIGHT, BEASTS, crewDiff, crewSheet, memberStats, type Stat, ORIGIN_CAPACITY, ORIGINS, TRAITS, type Beasts, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
@@ -1320,6 +1322,8 @@ function showJournal(tab = journalTab) {
 
 // The roster's rows and the globes' switch (not buttons).
 panel.addEventListener('click', (e) => {
+  const td = (e.target as HTMLElement).closest<HTMLElement>('td[data-pin]');
+  if (td && save) { pin(save.caravan, td.dataset.pin as Skill, td.dataset.name!); store(); showJournal('caravan'); return; }
   const tr = (e.target as HTMLElement).closest<HTMLElement>('tr[data-act="pick"]');
   if (tr) { rosterSel = Number(tr.dataset.i); showJournal('caravan'); }
 });

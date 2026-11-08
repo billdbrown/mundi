@@ -11,7 +11,7 @@ import { baseOf } from '../ecology.ts';
 import type { World } from '../world.ts';
 import { G, GOODS } from './atlas.ts';
 import { BANDS, type Band } from './depth.ts';
-import { best, cargoUsed, living, makeMember, someone, strength, waterCap, type Caravan, type Lean, type Member } from './caravan.ts';
+import { type Skill, best, cargoUsed, living, makeMember, someone, strength, waterCap, type Caravan, type Lean, type Member } from './caravan.ts';
 
 export interface Ctx {
   w: World;
@@ -67,6 +67,8 @@ export interface Effect {
 }
 export interface Outcome { text: string; effect: Effect }
 export interface Choice { label: string; hint?: string;
+  /** The skill this choice exercises: who learns from it (learn.ts). */
+  uses?: Skill;
   /** Not open to this caravan: what it would take ("Scout 4"). Shown greyed, can't be chosen. */
   locked?: string;
   resolve(ctx: Ctx): Outcome }
@@ -103,17 +105,17 @@ export const ENCOUNTERS: Encounter[] = [
       const toll = Math.max(15, Math.round(x.caravan.orrels * 0.15));
       const [lo, hi] = BANDS[x.band].bandits, enemy = lo + x.rng() * (hi - lo);
       return [
-        { label: 'Fight', hint: strength(x.caravan) > enemy ? 'They look thinner than you' : 'They look many', resolve: (c) => {
+        { label: 'Fight', uses: 'fight', hint: strength(x.caravan) > enemy ? 'They look thinner than you' : 'They look many', resolve: (c) => {
           const m = fight(c, enemy);
           if (m > 0.25) return { text: 'Your guards hold the line and the riders break. One drops a purse as he goes.', effect: { orrels: Math.round(10 + c.rng() * 30), morale: 8 } };
           if (m > -0.1) { const h = someone(c.caravan, c.rng); return { text: `A short, ugly scrap. They ride off, but ${h?.name ?? 'someone'} takes a blade.`, effect: { hurt: h, morale: -4 } }; }
           const d = c.rng() < BANDS[c.band].lethal ? someone(c.caravan, c.rng) : null, h = d ? null : someone(c.caravan, c.rng);
           return { text: d ? `They overrun you. ${d.name} falls, and they take what they like.` : `They overrun you and take what they like. ${h?.name ?? 'Someone'} is hurt.`, effect: { loseCargo: 0.3, orrels: -Math.round(c.caravan.orrels * 0.2), dies: d, hurt: h, morale: -15 } };
         } },
-        { label: 'Slip past', hint: 'Off the road before they see you', locked: best(x.caravan, 'scout') >= SLIP_SCOUT ? undefined : `Scout ${SLIP_SCOUT}`, resolve: (c) => c.rng() < 0.8
+        { label: 'Slip past', uses: 'scout', hint: 'Off the road before they see you', locked: best(x.caravan, 'scout') >= SLIP_SCOUT ? undefined : `Scout ${SLIP_SCOUT}`, resolve: (c) => c.rng() < 0.8
           ? { text: 'Your scout saw them first. You lead the beasts off the road and round, and they never know you were there.', effect: { days: 0.5 } }
           : { text: 'A beast brays at the wrong moment. They come for you, and take more for the trouble.', effect: { loseCargo: 0.15, morale: -6 } } },
-        { label: `Talk it down to ${Math.round(toll / 2)}`, hint: 'Someone here knows how to haggle', locked: best(x.caravan, 'barter') >= PARLEY_BARTER ? undefined : `Barter ${PARLEY_BARTER}`, resolve: (c) => c.caravan.orrels >= Math.round(toll / 2)
+        { label: `Talk it down to ${Math.round(toll / 2)}`, uses: 'barter', hint: 'Someone here knows how to haggle', locked: best(x.caravan, 'barter') >= PARLEY_BARTER ? undefined : `Barter ${PARLEY_BARTER}`, resolve: (c) => c.caravan.orrels >= Math.round(toll / 2)
           ? { text: 'A long talk, some laughing, a cup shared. They settle for half and call it a favour.', effect: { orrels: -Math.round(toll / 2) } }
           : { text: 'They like the talk, not the empty purse, and take a tenth of the cargo.', effect: { orrels: -c.caravan.orrels, loseCargo: 0.1, morale: -4 } } },
         { label: `Pay ${toll} orrels`, resolve: (c) => c.caravan.orrels >= toll
@@ -134,7 +136,7 @@ export const ENCOUNTERS: Encounter[] = [
     choices: (x) => {
       const [lo, hi] = BANDS[x.band].bandits, enemy = (lo + x.rng() * (hi - lo)) * 0.8;
       return [
-        { label: 'Stand and fight', hint: strength(x.caravan) > enemy ? 'You have the numbers' : 'They are many, and hungry', resolve: (c) => {
+        { label: 'Stand and fight', uses: 'fight', hint: strength(x.caravan) > enemy ? 'You have the numbers' : 'They are many, and hungry', resolve: (c) => {
           const m = fight(c, enemy);
           if (m > 0.2) return { text: 'They come at the fire and get the worst of it. By morning there are hides to scrape.', effect: { morale: 6, cargo: [[G.furs, 1 + Math.floor(c.rng() * 2)]] } };
           if (m > -0.1) { const h = someone(c.caravan, c.rng); return { text: `A bad night. They break off, but ${h?.name ?? 'someone'} is mauled.`, effect: { hurt: h, morale: -5 } }; }
@@ -153,7 +155,7 @@ export const ENCOUNTERS: Encounter[] = [
     weight: (x) => (x.road ? 0.4 : 1) * (x.dry && !x.river ? 0.5 : 1),
     text: (x) => `${x.cold ? 'A herd of shaggy deer' : x.forest ? 'Wild pigs' : 'A herd of grazers'} ${x.cold ? 'paws at the snow' : 'feeds'} downwind of you, not far off.`,
     choices: (x) => [
-      { label: 'Hunt them', hint: `Hunt ${best(x.caravan, 'hunt')}`, resolve: (c) => {
+      { label: 'Hunt them', uses: 'hunt', hint: `Hunt ${best(x.caravan, 'hunt')}`, resolve: (c) => {
         const r = c.rng() + (best(c.caravan, 'hunt') - 1) * 0.08;
         if (r > 0.55) { const meat = Math.round(living(c.caravan).length * (3 + c.rng() * 4)); return { text: `A clean kill. You eat well tonight and smoke the rest: ${meat} days of rations.${c.cold ? ' The hides are worth something too.' : ''}`, effect: { rations: meat, morale: 5, cargo: c.cold ? [[G.furs, 1 + Math.floor(c.rng() * 2)]] : undefined, days: 0.5 } }; }
         if (r > 0.2) return { text: 'They scatter at the first shot. Half a day gone, nothing to show.', effect: { days: 0.5 } };
@@ -346,7 +348,7 @@ export const QUEST_ENCOUNTERS: Record<'bounty' | 'relic', Encounter> = {
     choices: (x) => {
       const enemy = (6 + x.rng() * 5) * (BANDS[x.band].bandits[1] / BANDS[0].bandits[1]);
       return [
-        { label: 'Go in hard', hint: strength(x.caravan) > enemy ? 'You think you have the numbers' : 'They may have the numbers', resolve: (c) => {
+        { label: 'Go in hard', uses: 'fight', hint: strength(x.caravan) > enemy ? 'You think you have the numbers' : 'They may have the numbers', resolve: (c) => {
           const m = fight(c, enemy);
           if (m > 0.15) return { text: 'They scatter into the hills, leaving the camp and what they took.', effect: { questDone: true, orrels: Math.round(15 + c.rng() * 40), morale: 10 } };
           if (m > -0.15) { const h = someone(c.caravan, c.rng); return { text: `A hard fight. They break in the end, but ${h?.name ?? 'someone'} is cut badly.`, effect: { questDone: true, hurt: h, morale: 2 } }; }

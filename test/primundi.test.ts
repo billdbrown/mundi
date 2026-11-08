@@ -608,3 +608,43 @@ test('a lost fight kills about as often as its band says', () => {
     assert.ok(Math.abs(rate - BANDS[band].lethal) < 0.04, `band ${band}: ${rate.toFixed(3)} of ${lost}`);
   }
 });
+
+import { gain, practise, deed, dayTogether, foughtTogether, pin, XP_NEXT, BOND_DAYS, BOND_FIGHTS, DEPTH_XP } from '../src/primundi/learn.ts';
+import { doerOf, eff } from '../src/primundi/caravan.ts';
+test('learning: use raises pips, the watcher learns half, depth teaches faster', () => {
+  const c = newCaravan('T', 'cartographers', 4);
+  const scout = living(c).find((m) => m.skills.scout === 3)!;
+  const lines = gain(scout, 'scout', XP_NEXT[3]);
+  assert.equal(scout.skills.scout, 4);
+  assert.match(lines[0], /Scout 3 → 4/);
+  // The best does it; the next best gets half.
+  const c2 = newCaravan('T', 'cartographers', 4), d = doerOf(c2, 'hunt')!;
+  const others = living(c2).filter((m) => m !== d).sort((a, b) => b.skills.hunt - a.skills.hunt);
+  practise(c2, 'hunt', 4, 3);
+  assert.equal(d.xp!.hunt, 4 * DEPTH_XP[3]);
+  assert.equal(others[0].xp!.hunt, 2 * DEPTH_XP[3]);
+  // A fight teaches everyone standing.
+  practise(c2, 'fight', 2);
+  assert.ok(living(c2).every((m) => m.xp?.fight === 2));
+});
+
+test('marks, bonds and the training pin', () => {
+  const c = newCaravan('T', 'traders', 6), m = living(c)[1], f = eff(m, 'fight');
+  for (let i = 0; i < 11; i++) assert.deepEqual(deed(m, 'fights'), []);
+  assert.match(deed(m, 'fights')[0], /Twelve fights/);
+  assert.equal(eff(m, 'fight'), Math.min(5, f + 1));
+  const s0 = strength(c);
+  for (let i = 0; i < BOND_FIGHTS; i++) foughtTogether(c);
+  let formed: string[] = [];
+  for (let i = 0; i < BOND_DAYS; i++) formed = formed.concat(dayTogether(c));
+  assert.ok(formed.length > 0);
+  assert.equal(strength(c), s0 + formed.length);
+  // Pin a hand to scouting: they do it, at their own skill, and learn it.
+  const hand = living(c).find((x) => x.skills.scout === 1)!;
+  pin(c, 'scout', hand.name);
+  assert.equal(doerOf(c, 'scout'), hand);
+  practise(c, 'scout', 3);
+  assert.equal(hand.xp!.scout, 3);
+  pin(c, 'scout', hand.name);
+  assert.equal(c.pins!.scout, undefined);
+});

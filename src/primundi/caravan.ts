@@ -42,7 +42,15 @@ export interface Member { name: string; skills: Skills; trait?: Trait; health: '
   /** Where they're from (crew.ts bornIn): a place, its land, its trade. */
   born?: { pid: number; land: string; trade?: string };
   /** Every hex they've walked with you, in order of first visit (sim.ts enter): their own globe. */
-  walked?: number[] }
+  walked?: number[];
+  /** Experience towards the next pip, by skill (learn.ts). */
+  xp?: Partial<Record<Skill, number>>;
+  /** Deeds counted towards marks, the marks earned (learn.ts MARKS), and what they give: pips on top
+   * of the skills, and kinds of country they eat less in. */
+  deeds?: Partial<Record<string, number>>;
+  marks?: string[];
+  bonus?: Partial<Skills>;
+  lands?: string[] }
 
 /** What kind of person a recruit is: one or two strong skills, the rest low. */
 export type Lean = 'fighter' | 'scout' | 'hunter' | 'trader' | 'mender' | 'hand';
@@ -117,6 +125,10 @@ export interface Caravan {
   unsoldCharts: number;
   /** What pulls it (older saves: mules). */
   beasts?: Beasts;
+  /** One-person tasks pinned to someone (by name) instead of the best: training (learn.ts). */
+  pins?: Partial<Record<Skill, string>>;
+  /** Pairs (names, sorted, joined by |): days together, fights shared, and bonded (learn.ts). */
+  bonds?: Record<string, { days: number; fights: number; on?: boolean }>;
 }
 
 /** A caravan as it sets out from home. */
@@ -153,28 +165,39 @@ export const waterCap = (c: Caravan) => living(c).length * WATER_DAYS;
 export const BORN_EATS = 0.9;
 /** Rations eaten a day (a ration is a person's food for a day; the frugal eat less, and so do those
  * born to the country the caravan is in: crew.ts BORN_EATS). */
-export const appetite = (c: Caravan, land?: string) => living(c).reduce((a, m) => a + (m.trait === 'frugal' ? 0.7 : 1) * (land && m.born?.land === land ? BORN_EATS : 1), 0);
+export const appetite = (c: Caravan, land?: string) => living(c).reduce((a, m) => a + (m.trait === 'frugal' ? 0.7 : 1) * (land && (m.born?.land === land || m.lands?.includes(land)) ? BORN_EATS : 1), 0);
 export const thirst = (c: Caravan) => living(c).length;
 
 /** What a Fight pip counts for in a fight (strength()): a guard of old was Fight 3. */
 export const FIGHT_PIP = [0, 1, 1.5, 3, 4, 5.5];
-export const fightOf = (m: Member) => FIGHT_PIP[Math.max(0, Math.min(SKILL_MAX, m.skills.fight))];
-/** Fighting strength, for encounters: everyone's, summed; the hurt and sick at half. */
+/** A skill as the rules use it: the pips, and what marks add (learn.ts), up to the most there is. */
+export const eff = (m: Member, k: Skill) => Math.min(SKILL_MAX, m.skills[k] + (m.bonus?.[k] ?? 0));
+export const fightOf = (m: Member) => FIGHT_PIP[Math.max(0, eff(m, 'fight'))];
+/** A road-bonded pair, both standing, is worth this much more in a fight (learn.ts). */
+export const BOND_FIGHT = 1;
+/** Fighting strength, for encounters: everyone's, summed; the hurt and sick at half; bonded pairs. */
 export function strength(c: Caravan): number {
   let s = 0;
-  for (const m of living(c)) s += fightOf(m) * (m.health !== 'well' ? 0.5 : 1);
+  const well = new Set<string>();
+  for (const m of living(c)) { s += fightOf(m) * (m.health !== 'well' ? 0.5 : 1); if (m.health === 'well') well.add(m.name); }
+  for (const [k, b] of Object.entries(c.bonds ?? {})) if (b.on && k.split('|').every((n) => well.has(n))) s += BOND_FIGHT;
   return s;
 }
-/** The caravan's best at a one-person task, among the well (1 if nobody is). */
-export function best(c: Caravan, k: Skill): number {
-  let b = 1;
-  for (const m of living(c)) if (m.health === 'well' && m.skills[k] > b) b = m.skills[k];
-  return b;
+/** Who does a one-person task: whoever is pinned to it (training), if they can, or the best. */
+export function doerOf(c: Caravan, k: Skill): Member | null {
+  const p = c.pins?.[k];
+  if (p) { const m = living(c).find((x) => x.name === p && x.health === 'well'); if (m) return m; }
+  return bestAt(c, k);
 }
-/** Who that is. */
+/** The skill a one-person task is done at (1 if nobody can). */
+export function best(c: Caravan, k: Skill): number {
+  const m = doerOf(c, k);
+  return m ? eff(m, k) : 1;
+}
+/** The caravan's best at it, among the well. */
 export function bestAt(c: Caravan, k: Skill): Member | null {
   let w: Member | null = null;
-  for (const m of living(c)) if (m.health === 'well' && (!w || m.skills[k] > w.skills[k])) w = m;
+  for (const m of living(c)) if (m.health === 'well' && (!w || eff(m, k) > eff(w, k))) w = m;
   return w;
 }
 /** One line of a stat sheet: what it's of, the figure, and whether it helps (true), costs (false),
@@ -194,7 +217,7 @@ export const SCOUT_SIGHT = [3, 5];
 /** What one person is, as the rules apply it: the tavern's and the journal's sheet. */
 export function memberStats(m: Member): Stat[] {
   // Only what they're good at: a 1 is everyone's floor, and reads as noise.
-  const out: Stat[] = SKILLS.filter((s) => m.skills[s] > 1).map((s) => ({ k: SKILL_NAMES[s], v: String(m.skills[s]), good: m.skills[s] >= 3 ? true : null }));
+  const out: Stat[] = SKILLS.filter((s) => eff(m, s) > 1).map((s) => ({ k: SKILL_NAMES[s], v: String(eff(m, s)), good: eff(m, s) >= 3 ? true : null }));
   if (m.trait === 'cheerful') out.push({ k: 'Spirits', v: '+0.5/day', good: true });
   if (m.trait === 'steady') out.push({ k: 'Mends', v: '×1.5', good: true });
   out.push({ k: 'Eats', v: m.trait === 'frugal' ? '0.7/day' : '1/day', good: false });

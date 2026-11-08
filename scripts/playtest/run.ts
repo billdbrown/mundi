@@ -367,6 +367,8 @@ export interface RunResult {
   /** Days with no route and nowhere to go. */
   stuck: number;
   ms: number;
+  /** Skill pips gained a person a year (learn.ts), over everyone who travelled. */
+  pipsPerYear: number;
 }
 
 export function playRun(opts: RunOpts): RunResult {
@@ -391,7 +393,9 @@ export function playRun(opts: RunOpts): RunResult {
   const g = makeGame(w, a, gd, seed, s, ui, makeRng((seed * 13 + opts.run * 1009) >>> 0));
   quickSetup(g);
   const bot = makeBot(opts.bot, g, rng);
-  const out: RunResult = { opts, home: a.places[s.home].name, days: [], encounters: [], deaths: [], events: [0], ambitionDay: null, wiped: null, trips: 0, ledger: {}, stuck: 0, ms: 0 };
+  const out: RunResult = { opts, home: a.places[s.home].name, days: [], encounters: [], deaths: [], events: [0], ambitionDay: null, wiped: null, trips: 0, ledger: {}, stuck: 0, ms: 0, pipsPerYear: 0 };
+  const firstSeen = new Map<string, { sum: number; day: number }>(), lastSeen = new Map<string, { sum: number; day: number }>();
+  const sumOf = (m: { skills: Record<string, number> }) => Object.values(m.skills).reduce((x, y) => x + y, 0);
   ledger = out.ledger;
   const end = opts.years * 365;
   const answer = () => {
@@ -409,6 +413,7 @@ export function playRun(opts: RunOpts): RunResult {
   };
   const record = () => {
     const c = s.caravan;
+    for (const m of s.caravan.members) { const e = { sum: sumOf(m), day: s.day }; if (m.alive) { if (!firstSeen.has(m.name)) firstSeen.set(m.name, e); lastSeen.set(m.name, e); } }
     out.days.push({
       day: Math.floor(s.day), orrels: c.orrels, earned: c.earned, alive: living(c).length, hurt: living(c).filter((m) => m.health !== 'well').length,
       food: c.rations / Math.max(1, appetite(c)), water: c.water / Math.max(1, thirst(c)), revealed: g.revealed.size, charted: s.charted, jobsDone: s.jobsDone, morale: c.morale, cargo: cargoUsed(c),
@@ -453,6 +458,9 @@ export function playRun(opts: RunOpts): RunResult {
   }
   if (!living(s.caravan).length) out.wiped = s.day;
   record();
+  let pips = 0, yrs = 0;
+  for (const [n, f] of firstSeen) { const l = lastSeen.get(n)!; pips += l.sum - f.sum; yrs += (l.day - f.day) / 365; }
+  out.pipsPerYear = yrs > 0 ? pips / yrs : 0;
   out.ms = performance.now() - t0;
   return out;
 }

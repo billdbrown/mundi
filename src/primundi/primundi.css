@@ -408,3 +408,8 @@ canvas.globe { width: 84px; height: 84px; flex: none; }
 #hud .stat.depth.b3 b { color: #ff6b5e; }
 #hud .stat.haul b { color: var(--gold); }
 #hud .stat[hidden] { display: none; }
+
+/* Learning (learn.ts): pips a mark adds, a skill pinned to someone for training. */
+.pips i.on.bn { background: #9fd38a; }
+#card .roster td[data-pin] { cursor: pointer; }
+#card .roster td.pinned { box-shadow: inset 0 0 0 1px rgba(242, 193, 78, .55); border-radius: 4px; }

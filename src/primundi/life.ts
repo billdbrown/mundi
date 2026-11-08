@@ -151,7 +151,7 @@ export function huntEncounter(kind: AnimalKind): Encounter {
       `The ${name} graze on, a stone's throw off. Nobody breathes.`,
     ]),
     choices: (x) => [
-      { label: 'Take the shot', hint: `Hunt ${best(x.caravan, 'hunt')}: ${Math.round(huntOdds(x.caravan) * 100)}%`, resolve: (c) => {
+      { label: 'Take the shot', uses: 'hunt', hint: `Hunt ${best(x.caravan, 'hunt')}: ${Math.round(huntOdds(x.caravan) * 100)}%`, resolve: (c) => {
         const n = living(c.caravan).length;
         if (c.rng() < huntOdds(c.caravan)) {
           const fur = big && c.rng() < 0.5;
