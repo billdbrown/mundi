@@ -324,3 +324,15 @@ body.setting-up #toast { bottom: calc(200px + env(safe-area-inset-bottom)); }
 .pin { position: absolute; left: 0; top: 0; white-space: nowrap; font-size: 11.5px; font-weight: 600; color: #1a1406; background: var(--gold);
   padding: 2px 8px 2px 7px; border-radius: 999px; box-shadow: 0 2px 8px rgba(0, 0, 0, .5); }
 .pin::after { content: ''; position: absolute; left: 50%; top: 100%; margin-left: -4px; border: 4px solid transparent; border-top-color: var(--gold); }
+
+/* Stat sheets (caravan.ts memberStats, crewSheet): figures as chips, what helps and what costs. */
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+#card .opt small .chips { margin-top: 4px; }
+.st { font-size: 11.5px; line-height: 1; padding: 3px 6px; border-radius: 4px; background: rgba(255,255,255,0.06); color: var(--quiet); white-space: nowrap; }
+.st b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.st.up b { color: #9fd38a; }
+.st.dn b { color: #e0a08a; }
+.wish { display: block; margin-top: 4px; font-size: 11.5px; color: var(--quiet); font-style: italic; }
+#card .sheet { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0 2px; }
+#card .sheet .lab { font-size: 12px; color: var(--quiet); margin-right: 4px; }
+#card .sheet .st { font-size: 12.5px; padding: 4px 7px; }

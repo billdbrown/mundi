@@ -106,13 +106,47 @@ export const thirst = (c: Caravan) => living(c).length;
 export function strength(c: Caravan): number {
   let s = 0;
   for (const m of living(c)) {
-    let x = m.role === 'guard' ? 3 : m.role === 'leader' ? 1.5 : 1;
+    let x = ROLE_FIGHT[m.role];
     if (m.trait === 'stout') x += 1;
     if (m.health !== 'well') x *= 0.5;
     s += x;
   }
   return s;
 }
+/** One line of a stat sheet: what it's of, the figure, and whether it helps (true), costs (false),
+ * or just is (null). */
+export interface Stat { k: string; v: string; good: boolean | null }
+/** Hunting: the chance a shot brings something down, without and with a keen eye (life.ts). */
+export const HUNT_ODDS = { plain: 0.65, keen: 0.85 };
+/** Fighting strength by role (strength()), before traits. */
+export const ROLE_FIGHT: Record<Role, number> = { leader: 1.5, guard: 3, scout: 1, hand: 1 };
+/** What one person adds and costs, as the rules apply it: the tavern's and the journal's sheet. */
+export function memberStats(m: Member): Stat[] {
+  const out: Stat[] = [{ k: 'Fight', v: `+${ROLE_FIGHT[m.role] + (m.trait === 'stout' ? 1 : 0)}`, good: true }];
+  if (m.role === 'scout') out.push({ k: 'Sight', v: '+1 hex', good: true });
+  if (m.trait === 'keen') out.push({ k: 'Hunt', v: `${Math.round(HUNT_ODDS.keen * 100)}%`, good: true });
+  if (m.trait === 'cheerful') out.push({ k: 'Spirits', v: '+0.5/day', good: true });
+  if (m.trait === 'steady') out.push({ k: 'Mends', v: '×1.5', good: true });
+  out.push({ k: 'Eats', v: m.trait === 'frugal' ? '0.7/day' : '1/day', good: false });
+  return out;
+}
+/** What someone hired in a town adds, by role alone (their trait is a surprise). */
+export function roleStats(role: Role): Stat[] {
+  return [{ k: 'Fight', v: `+${ROLE_FIGHT[role]}`, good: true }, ...(role === 'scout' ? [{ k: 'Sight', v: '+1 hex', good: true }] : []), { k: 'Eats', v: '1/day', good: false }];
+}
+/** The whole caravan's sheet (the living): what the tavern shows as you build it. */
+export function crewSheet(c: Caravan): Stat[] {
+  const fight = strength(c), eats = appetite(c);
+  return [
+    { k: 'Fight', v: String(+fight.toFixed(1)), good: null },
+    { k: 'Sight', v: `${sight(c)} hex${sight(c) === 1 ? '' : 'es'}`, good: null },
+    { k: 'Hunt', v: `${Math.round((hasKeen(c) ? HUNT_ODDS.keen : HUNT_ODDS.plain) * 100)}%`, good: null },
+    { k: 'Eats', v: `${+eats.toFixed(1)}/day`, good: null },
+  ];
+}
+/** Bandits on the road fight at this (encounters.ts): the yardstick for how many guards. */
+export const BANDIT_FIGHT = { min: 4, max: 10 };
+
 /** Sight radius in hexes before high ground. */
 export function sight(c: Caravan): number {
   const eyes = living(c).some((m) => m.role === 'scout' && m.health === 'well');

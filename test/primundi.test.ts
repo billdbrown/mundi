@@ -438,3 +438,18 @@ test('the opening: every quick start can set out, and the first road has someone
     assert.ok(s.far && s.far.pid !== s.home, `${origin} ${seed}: no far place`);
   }
 });
+
+import { memberStats, crewSheet, ROLE_FIGHT } from '../src/primundi/caravan.ts';
+test("the tavern's stat sheet says what the rules do", () => {
+  const c = newCaravan('Test', 'traders', 5);
+  // Each person's Fight is what strength() counts for them.
+  for (const m of living(c)) {
+    const f = +memberStats(m).find((x) => x.k === 'Fight')!.v;
+    assert.equal(f, ROLE_FIGHT[m.role] + (m.trait === 'stout' ? 1 : 0));
+  }
+  const sheet = Object.fromEntries(crewSheet(c).map((x) => [x.k, x.v]));
+  assert.equal(+sheet.Fight, +strength(c).toFixed(1));
+  // A scout shows; frugal eats less.
+  assert.ok(memberStats({ ...living(c)[0], role: 'scout' }).some((x) => x.k === 'Sight'));
+  assert.equal(memberStats({ ...living(c)[0], trait: 'frugal' }).find((x) => x.k === 'Eats')!.v, '0.7/day');
+});

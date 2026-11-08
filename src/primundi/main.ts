@@ -30,7 +30,7 @@ import { Thunder } from './thunder.ts';
 import { BIASES, type StartBias } from './start.ts';
 import { buildAtlas, GOODS, ringCells, type Atlas, type Place } from './atlas.ts';
 import { bestKnownSell, quotes, remember } from './market.ts';
-import { AMBITION_GOAL, BEASTS, ORIGIN_CAPACITY, ORIGINS, ROLE_NAMES, TRAITS, type Beasts, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
+import { AMBITION_GOAL, BANDIT_FIGHT, BEASTS, crewSheet, memberStats, roleStats, type Stat, ORIGIN_CAPACITY, ORIGINS, ROLE_NAMES, TRAITS, type Beasts, appetite, hasKeen, cargoUsed, leader, living, waterCap, thirst, type Origin, type Role } from './caravan.ts';
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
 import { FOLK_LABEL, type FolkKind } from './life.ts';
 import { applyTradeWants, townLine, townsfolk, tradesOf } from './towns.ts';
@@ -319,10 +319,12 @@ function setupBody(tab: string, purse: string, body: string): string {
   const st = save.setup, c = save.caravan;
   if (tab === 'tavern') {
     const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
-    return `${purse}<h3>Looking for a place</h3><p class="dim small">Take on up to ${SETUP_MAX}. You can let someone go again until you set out.</p>
+    return `${purse}<h3>Looking for a place</h3>
+      <div class="sheet"><span class="lab">Your caravan</span>${stats(crewSheet(c))}</div>
+      <p class="dim small">Bandits fight at ${BANDIT_FIGHT.min}–${BANDIT_FIGHT.max}. Up to ${SETUP_MAX} hired, ${st.hired.length} so far; let go any time before setting out.</p>
       <div class="opts">${st.offered.map((x, i) => {
         const on = st.hired.includes(i);
-        return opt('crew', `${on ? '✓ ' : ''}${esc(x.m.name)} · ${ROLE_NAMES[x.m.role]}`, `${TRAITS[x.m.trait]}. ${esc(cap(x.m.wish ?? ''))}.`, on ? 'let go' : `${ORREL}${x.cost}`, `data-i="${i}"`, !on && (c.orrels < x.cost || st.hired.length >= SETUP_MAX));
+        return opt('crew', `${on ? '✓ ' : ''}${esc(x.m.name)} · ${ROLE_NAMES[x.m.role]}`, `<span class="chips">${stats(memberStats(x.m))}</span>${x.m.wish ? `<span class="wish">${esc(cap(x.m.wish))}</span>` : ''}`, on ? 'let go' : `${ORREL}${x.cost}`, `data-i="${i}"`, !on && (c.orrels < x.cost || st.hired.length >= SETUP_MAX));
       }).join('')}</div>`;
   }
   if (tab === 'rest') {
@@ -957,6 +959,8 @@ const chips = (xs: string[]) => (xs.length ? `<div class="facts">${xs.map((x) =>
 const opt = (act: string, title: string, note = '', right = '', attrs = '', disabled = false) =>
   `<button class="opt" data-act="${act}" ${attrs} ${disabled ? 'disabled' : ''}><span class="ot"><b>${title}</b>${note ? `<small>${note}</small>` : ''}</span>${right ? `<span class="or">${right}</span>` : ''}</button>`;
 const ORREL = '<i class="orrel"></i>';
+/** A stat sheet's lines as chips: what helps, what costs (caravan.ts memberStats, crewSheet). */
+const stats = (st: Stat[]) => st.map((x) => `<span class="st${x.good === true ? ' up' : x.good === false ? ' dn' : ''}">${x.k} <b>${x.v}</b></span>`).join('');
 
 function showHexCard(c: number) {
   if (!world || !atlas || !save) return;
@@ -1067,12 +1071,12 @@ function openTown(pid: number, tab = townTab) {
       ${p.story.length ? `<ul class="log">${p.story.slice(-4).reverse().map((x) => { const i = x.indexOf(': '); return `<li><span>Year ${x.slice(0, i)}</span>${esc(x.slice(i + 2))}</li>`; }).join('')}</ul>` : '<p class="dim">Nothing anyone tells twice.</p>'}`;
   } else {
     const cost = restCost(g!, p.id, 1), cost3 = restCost(g!, p.id, 3);
-    const hires: [Role, number, string][] = [['hand', 30, 'Carries, cooks, keeps watch'], ['guard', 55, 'Fights when it comes to it'], ...(p.town ? [['scout', 70, 'Sees a hex further'] as [Role, number, string]] : [])];
+    const hires: [Role, number][] = [['hand', 30], ['guard', 55], ...(p.town ? [['scout', 70] as [Role, number]] : [])];
     body = `${purse}${hexOpen ? '' : `<h3>${home ? 'Home' : 'The inn'}</h3>`}
       <p>${home ? 'Your own people put you up. Resting here costs nothing.' : `A yard for the beasts and a roof for the people, ${cost} orrels a night.`} Rest mends the hurt and lifts spirits.</p>
       <div class="opts">${opt('rest', 'Rest a day', '', home ? 'free' : `${ORREL}${cost}`, 'data-n="1"', c.orrels < cost)}${opt('rest', 'Rest three days', '', home ? 'free' : `${ORREL}${cost3}`, 'data-n="3"', c.orrels < cost3)}</div>
       <h3>Hire</h3>
-      ${living(c).length >= 9 ? '<p class="dim">The caravan is as big as it can feed.</p>' : `<div class="opts">${hires.map(([r, o, note]) => opt('hire', `A ${ROLE_NAMES[r].toLowerCase()}`, note, `${ORREL}${o}`, `data-role="${r}" data-n="${o}"`, c.orrels < o)).join('')}</div>`}
+      ${living(c).length >= 9 ? '<p class="dim">The caravan is as big as it can feed.</p>' : `<div class="opts">${hires.map(([r, o]) => opt('hire', `A ${ROLE_NAMES[r].toLowerCase()}`, `<span class="chips">${stats(roleStats(r))}</span>`, `${ORREL}${o}`, `data-role="${r}" data-n="${o}"`, c.orrels < o)).join('')}</div>`}
       <h3>Beasts</h3>
       <div class="opts">${opt('beast', 'A pack beast', 'Carries four more loads', `${ORREL}45`, '', c.orrels < 45)}</div>`;
   }
@@ -1165,7 +1169,7 @@ function showAppoint() {
   const dead = c.members.find((m) => !m.alive && m.role === 'leader');
   showPanel('appoint', `${head('The caravan', 'Who leads now?', dead ? `${esc(dead.name)} is dead` : '')}
     <p class="tale">The caravan stands about in the road. Someone has to say which way.</p>
-    <div class="opts">${c.members.map((m, i) => m.alive ? opt('appoint', esc(m.name), `${ROLE_NAMES[m.role]} · ${TRAITS[m.trait]}`, '', `data-i="${i}"`) : '').join('')}</div>`, true);
+    <div class="opts">${c.members.map((m, i) => m.alive ? opt('appoint', esc(m.name), `${ROLE_NAMES[m.role]}<span class="chips">${stats(memberStats(m))}</span>`, '', `data-i="${i}"`) : '').join('')}</div>`, true);
 }
 function gameOver() {
   if (!save) return;
@@ -1204,7 +1208,7 @@ function showJournal(tab = journalTab) {
       }).join('') : '<p class="dim">No jobs in hand. Town notice boards have work.</p>'}`;
   } else if (tab === 'caravan') {
     body = `<p class="dim small">${living(c).length} people, ${mood}. ${cargoUsed(c)} of ${c.capacity} loads carried.</p>
-      <ul class="people">${c.members.filter((m) => m.alive).map((m) => `<li><span class="who"><b>${esc(m.name)}</b><small>${TRAITS[m.trait]}${m.wish ? `. ${esc(m.wish.charAt(0).toUpperCase() + m.wish.slice(1))}.` : ''}</small></span><span class="role${m.role === 'leader' ? ' lead' : ''}">${ROLE_NAMES[m.role]}</span>${m.health !== 'well' ? `<span class="hp">${m.health}</span>` : ''}</li>`).join('')}</ul>
+      <ul class="people">${c.members.filter((m) => m.alive).map((m) => `<li><span class="who"><b>${esc(m.name)}</b><small><span class="chips">${stats(memberStats(m))}</span>${m.wish ? `<span class="wish">${esc(m.wish.charAt(0).toUpperCase() + m.wish.slice(1))}</span>` : ''}</small></span><span class="role${m.role === 'leader' ? ' lead' : ''}">${ROLE_NAMES[m.role]}</span>${m.health !== 'well' ? `<span class="hp">${m.health}</span>` : ''}</li>`).join('')}</ul>
       ${c.members.some((m) => !m.alive) ? `<p class="dim small">Lost on the road: ${c.members.filter((m) => !m.alive).map((m) => esc(m.name)).join(', ')}.</p>` : ''}
       ${c.cargo.some((x) => x) ? `<h3>Cargo</h3>${chips(c.cargo.map((n, g) => (n ? `${n} ${GOODS[g].name.toLowerCase()}` : '')).filter(Boolean))}` : ''}`;
   } else {

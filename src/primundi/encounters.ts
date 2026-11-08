@@ -10,7 +10,7 @@ import { B } from '../biomes.ts';
 import { baseOf } from '../ecology.ts';
 import type { World } from '../world.ts';
 import { G, GOODS } from './atlas.ts';
-import { cargoUsed, hasKeen, living, someone, strength, waterCap, type Caravan, type Member } from './caravan.ts';
+import { BANDIT_FIGHT, cargoUsed, hasKeen, living, someone, strength, waterCap, type Caravan, type Member } from './caravan.ts';
 
 export interface Ctx {
   w: World;
@@ -93,7 +93,7 @@ export const ENCOUNTERS: Encounter[] = [
     text: (x) => `Riders come down off the ${x.high ? 'ridge' : x.forest ? 'tree line' : 'rise'} and spread across the way. Their leader wants a toll, and names it: a tenth of what you carry, or ${Math.max(15, Math.round(x.caravan.orrels * 0.15))} orrels.`,
     choices: (x) => {
       const toll = Math.max(15, Math.round(x.caravan.orrels * 0.15));
-      const enemy = 4 + x.rng() * 6;
+      const enemy = BANDIT_FIGHT.min + x.rng() * (BANDIT_FIGHT.max - BANDIT_FIGHT.min);
       return [
         { label: 'Fight', hint: strength(x.caravan) > enemy ? 'They look thinner than you' : 'They look many', resolve: (c) => {
           const m = fight(c, enemy);
