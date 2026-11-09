@@ -167,7 +167,7 @@ export function makeGame(w: World, a: Atlas, game: GameData, seed: number, s: Sa
 
 /** A new game: a caravan at home, knowing home's market and its two nearest neighbours'. */
 export function newGame(w: World, a: Atlas, seed: number, n: { name: string; origin: Origin; bias: StartBias; world: string; setup?: boolean }): Save {
-  const home = a.places[pickHome(w, a.places, n.bias, seed)];
+  const home = a.places[pickHome(w, a, n.bias, seed)];
   const caravan = newCaravan(n.name, n.origin, seed);
   for (const m of caravan.members) bornIn(m, w, a, home);
   const s: Save = {
@@ -691,7 +691,7 @@ export function resolve(g: Game, p: Pending, i: number): { out: Outcome; lines: 
   }
   if (p.folk) { s.finds[`folk:${p.folk}`] = s.day; g.ui.folkMet(p.folk); }
   // Hunted (or let be): the game moves off for a while.
-  if (p.hunt) s.finds[`${s.cell}:hunt`] = s.day;
+  if (p.hunt && out.effect.days) s.finds[`${s.cell}:hunt`] = s.day;
   const lines = applyEffect(s.caravan, out.effect, p.ctx.name, s.day, g.dice);
   // Deep ruins sometimes hold frontier gear (gear.ts).
   if (p.find === 'ruin' && (p.ctx.band ?? 0) >= 2 && Object.keys(out.effect).length && g.dice() < DEEP_GEAR_CHANCE) {

@@ -45,26 +45,40 @@ export interface Loader {
   gone: Promise<void>;
 }
 
-export function mountLoader(name: string, kind: string): Loader {
-  const layout = new URLSearchParams(location.search).get('loader') === 'bar' ? 'bar' : 'list';
+/** A page's own loading screen: its word and look (a class on the loader), and tips that take
+ * turns under the bar (Primundi, 2026-11-09). With tips it shows one line, not the list. */
+export interface LoaderLook { word?: string; cls?: string; tips?: string[] }
+export function mountLoader(name: string, kind: string, look: LoaderLook = {}): Loader {
+  const layout = look.tips?.length || new URLSearchParams(location.search).get('loader') === 'bar' ? 'bar' : 'list';
   const el = document.createElement('div');
-  el.className = `loader loader-${layout}`;
+  el.className = `loader loader-${layout}${look.cls ? ` ${look.cls}` : ''}`;
   el.setAttribute('role', 'status');
   el.innerHTML = `
     <div class="ld">
       <div class="ld-orb"><i></i></div>
-      <div class="ld-word">MUNDI</div>
+      <div class="ld-word">${look.word ?? 'MUNDI'}</div>
       <div class="ld-name"></div>
       <div class="ld-kind"></div>
       <div class="ld-bar"><i></i></div>
       ${layout === 'bar'
         ? '<div class="ld-line" aria-live="polite"></div>'
         : `<ol class="ld-list">${STEPS.map((s) => `<li data-step="${s.id}">${s.label}</li>`).join('')}</ol>`}
+      ${look.tips?.length ? '<p class="ld-tip"></p>' : ''}
     </div>`;
   el.querySelector('.ld-name')!.textContent = name;
   el.querySelector('.ld-kind')!.textContent = kind;
   document.body.appendChild(el);
   const bar = el.querySelector<HTMLElement>('.ld-bar i')!;
+  // Tips: one at a time, from a random one, every few seconds.
+  const tipEl = el.querySelector<HTMLElement>('.ld-tip');
+  let tipTimer = 0;
+  if (tipEl && look.tips?.length) {
+    const tips = look.tips;
+    let k = Math.floor(Math.random() * tips.length);
+    const show = () => { tipEl.classList.remove('on'); window.setTimeout(() => { tipEl.textContent = tips[k++ % tips.length]; tipEl.classList.add('on'); }, 250); };
+    show();
+    tipTimer = window.setInterval(show, 5200);
+  }
 
   // Jump to where this step starts, then glide to where it ends over its usual length.
   // Only ever forward, and stop short of the end until finish().
@@ -120,7 +134,7 @@ export function mountLoader(name: string, kind: string): Loader {
       bar.style.transform = 'scaleX(1)';
       window.setTimeout(() => {
         el.classList.add('gone');
-        window.setTimeout(() => { el.remove(); resolve(); markGone(); }, 600);
+        window.setTimeout(() => { clearInterval(tipTimer); el.remove(); resolve(); markGone(); }, 600);
       }, 260);
     }, hold);
   });

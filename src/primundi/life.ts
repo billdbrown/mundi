@@ -16,6 +16,7 @@ import { best, cargoUsed, hasKeen, huntOdds, living, someone } from './caravan.t
 import { B } from '../biomes.ts';
 import { baseOf } from '../ecology.ts';
 import type { Encounter } from './encounters.ts';
+import { BANDS } from './depth.ts';
 
 export type FolkKind = 'traders' | 'pilgrims' | 'broken';
 export interface Folk {
@@ -62,7 +63,7 @@ export function folkEncounter(f: Folk, home: Place, prices: { buy: number; sell:
       id: 'folk-traders', title: 'A caravan on the road', weight: () => 0,
       text: (x) => pick(x.rng, [
         `${f.name}'s caravan, out of ${homeName}: four carts, and a dog that decides you are all right. They stop to talk.`,
-        `Dust, then wheels: traders from ${homeName}, ${f.name} at their head. They pull over and wave you in.`,
+        `Traders from ${homeName} coming the other way, ${f.name} at their head. They pull over and wave you in.`,
       ]),
       choices: (x) => {
         const c = x.caravan;
@@ -150,16 +151,23 @@ export function huntEncounter(kind: AnimalKind): Encounter {
       `Downwind, on your bellies in the grass: the ${name} haven't seen you. ${hasKeen(x.caravan) ? 'Your keenest eye has the bow.' : 'Someone nocks an arrow.'}`,
       `The ${name} graze on, a stone's throw off. Nobody breathes.`,
     ]),
+    // Half a day with your best hunter (2026-11-09, Bill: click the herd to hunt). Deeper out the
+    // game is bigger and fatter and the hides better, and a miss with big game can turn on you.
     choices: (x) => [
-      { label: 'Take the shot', uses: 'hunt', hint: `Hunt ${best(x.caravan, 'hunt')}: ${Math.round(huntOdds(x.caravan) * 100)}%`, resolve: (c) => {
-        const n = living(c.caravan).length;
+      { label: 'Hunt', uses: 'hunt', hint: `${best(x.caravan, 'hunt') ? `Hunt ${best(x.caravan, 'hunt')}` : 'Nobody can hunt'}, half a day`, resolve: (c) => {
+        const n = living(c.caravan).length, b = c.band, deep = 1 + 0.3 * b;
         if (c.rng() < huntOdds(c.caravan)) {
-          const fur = big && c.rng() < 0.5;
-          return { text: kind === 'fowl' ? 'A brace, and another, before the rest take wing. Feathers everywhere, and supper.' : `A clean kill. You eat well tonight and smoke the rest${fur ? ', and the hide is worth keeping' : ''}.`,
-            effect: { rations: Math.round(n * (kind === 'fowl' ? 3 : big ? 6 : 5) * (0.8 + c.rng() * 0.4)), morale: 5, ...(fur ? { cargo: [[G.furs, 1]] as [number, number][] } : {}) } };
+          const furs = kind === 'fowl' ? 0 : (big || kind === 'goats') && c.rng() < 0.3 + 0.2 * b ? 1 + (b >= 2 && c.rng() < 0.5 ? 1 : 0) : 0;
+          return { text: kind === 'fowl' ? 'A brace, and another, before the rest take wing. Feathers everywhere, and supper.' : `A clean kill. You eat well tonight and smoke the rest${furs ? ', and the hide is worth keeping' : ''}.`,
+            effect: { days: 0.5, rations: Math.round(n * (kind === 'fowl' ? 3 : big ? 6 : 5) * deep * (0.8 + c.rng() * 0.4)), morale: 5, ...(furs ? { cargo: [[G.furs, furs]] as [number, number][] } : {}) } };
         }
-        if (kind === 'goats' && c.rng() < 0.3) { const h = someone(c.caravan, c.rng, true); return { text: `A miss, and ${h?.name ?? 'someone'} slips on the scree going after them.`, effect: { hurt: h } }; }
-        return { text: 'The shot goes wide. They are gone in a heartbeat.', effect: { morale: -2 } };
+        // A miss. Out in the wild, big game wounded or cornered turns on you.
+        if (kind !== 'fowl' && b >= 2 && c.rng() < (big ? 0.45 : 0.25)) {
+          const d = c.rng() < BANDS[b].lethal * 0.5 ? someone(c.caravan, c.rng) : null, h = d ? null : someone(c.caravan, c.rng, true);
+          return { text: d ? `It turns on you. ${d.name} goes down under it and does not get up.` : `It turns on you, and ${h?.name ?? 'someone'} is thrown and trampled before it crashes off.`, effect: { days: 0.5, ...(d ? { dies: d } : { hurt: h }), morale: d ? -15 : -4 } };
+        }
+        if (kind === 'goats' && c.rng() < 0.3) { const h = someone(c.caravan, c.rng, true); return { text: `A miss, and ${h?.name ?? 'someone'} slips on the scree going after them.`, effect: { days: 0.5, hurt: h } }; }
+        return { text: 'The shot goes wide. They are gone in a heartbeat.', effect: { days: 0.5, morale: -2 } };
       } },
       { label: 'Let them be', resolve: () => ({ text: 'You watch them a while, and leave them to it.', effect: { morale: 2 } }) },
     ],

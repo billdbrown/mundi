@@ -82,10 +82,11 @@ export function townLine(w: World, a: Atlas, p: Place): string {
   const t = tradesOf(w, a, p), first = TRADES[t[0]];
   const size = p.capital ? 'the seat of its realm' : p.pop > 6000 ? 'city' : p.town ? 'town' : p.pop < 300 ? 'hamlet' : 'village';
   const kind = p.capital ? size : t[0] === 'market' ? `a market ${size}` : t[0] === 'shrine' ? `a ${size} round an old shrine` : `a ${first.name} ${size}`;
-  const where = coast ? (river ? 'where a river meets the sea' : 'on the coast') : lake ? 'on a lakeshore' : river ? 'on a river' : high ? 'up in the hills' : `in the ${BIOMES[w.biome[c]].name.toLowerCase()}`;
-  const also = t[1] ? (t[1] === 'market' ? ', and a market for the roads round it' : TRADES[t[1]].good != null ? `, with ${GOODS[TRADES[t[1]].good!].name.toLowerCase()} besides` : '') : '';
-  const origin = p.parent ? ` Settled from ${p.parent} in year ${p.founded}.` : p.founded <= 200 ? ' One of the first places people settled.' : ` Founded in year ${p.founded}.`;
-  return `${kind[0].toUpperCase() + kind.slice(1)} ${where}${also}.${origin}`;
+  const where = coast ? (river ? 'where a river meets the sea' : 'on the coast') : lake ? 'on a lake' : river ? 'on a river' : high ? 'in the hills' : `in the ${BIOMES[w.biome[c]].name.toLowerCase()}`;
+  // Plain sentences (Bill, 2026-11-09: no "with tools besides").
+  const also = t[1] ? (t[1] === 'market' ? ' Roads meet here for market.' : TRADES[t[1]].good != null ? ` Also sells ${GOODS[TRADES[t[1]].good!].name.toLowerCase()}.` : '') : '';
+  const origin = p.parent ? ` Settled from ${p.parent} in year ${p.founded}.` : p.founded <= 200 ? ' One of the oldest places anyone knows.' : ` Founded in year ${p.founded}.`;
+  return `${kind[0].toUpperCase() + kind.slice(1)} ${where}.${also}${origin}`;
 }
 
 // --- Townspeople ----------------------------------------------------------------------------------

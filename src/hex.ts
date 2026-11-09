@@ -93,7 +93,9 @@ const hexFog = game ? new HexFog(noiseTexture()) : null;
 if (game) {
   document.body.classList.add('primundi');
   const css = document.createElement('style');
-  css.textContent = '.primundi .hud-back, .primundi #back, .primundi #inset, .primundi .hud-time { display: none !important; }';
+  // The game has its own bar and cards: none of the hex viewer's furniture but the compass (Bill,
+  // 2026-11-09: no name, walk figure, reset, layers, settings or help).
+  css.textContent = '.primundi .hud-back, .primundi #back, .primundi #inset, .primundi .hud-time, .primundi .hud-top, .primundi .hud-about, .primundi .hud-rail, .primundi .hud-help, .primundi #pegman { display: none !important; }';
   document.head.appendChild(css);
   hexFog!.onStrike = (near) => parent.postMessage({ type: 'primundi-thunder', near }, location.origin);
 }
@@ -152,6 +154,7 @@ scene.fog = new THREE.FogExp2(0xffffff, 0);
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.3, 50000);
 // A city-builder camera (hexcamera.ts): right-drag pans, middle-drag turns, the wheel zooms.
 const controls = new HexCamera(camera, renderer.domElement);
+if (game) controls.rightTurns = true;
 controls.ground = (x, z) => waterAt(x, -z);
 { const f = h.get('feel'); if (f && FEEL[f]) controls.feel = FEEL[f]; }
 // Walking (hexwalk.ts): drag the little figure onto the map.
@@ -934,7 +937,7 @@ function build(m: LocalMap) {
   // A person (1.8 m) beside the centre, for scale.
   const person = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 1.3, 4, 8), new THREE.MeshStandardMaterial({ color: 0xc0392b }));
   person.position.set(6, groundAtMap(m, 6, 0) + 0.9, 0); person.castShadow = true;
-  world.add(person);
+  if (!game) world.add(person);
 
   // The hex outline, draped over the ground (on the cut tile, its edge is the outline already).
   const ol: number[] = [], H = m.hex, nc = H.length / 2;
@@ -1732,7 +1735,7 @@ function setupCaravan(m: LocalMap) {
     // someone to meet or something to find is why you came in.
     // With someone here to meet, between you and them, so both are in view (on a phone too).
     arrival = () => {
-      const o = walkers[0]?.c;
+      const o = walkers[0]?.c ?? (herd ? { x: herd.x, y: herd.y } : null);
       folkApproach?.(); folkApproach = null;
       if (o) { const d = Math.hypot(o.x - x, o.y - y); controls.glideTo((x + o.x) / 2, -(y + o.y) / 2, Math.max(70 * K, d * 1.6 / Math.min(1, innerWidth / innerHeight))); }
       else controls.glideTo(x, -y, 70 * K);
@@ -2039,7 +2042,7 @@ function updateHerd(dt: number) {
     if (Math.hypot(mx, my) > 1e-3) a.h = Math.atan2(mx, -my);
     const x = hd.x + a.dx, y = hd.y + a.dy;
     a.o.position.set(x, groundAtMap(map, x, y), -y);
-    a.o.rotation.y = a.h + Math.PI;
+    a.o.rotation.y = a.h;
   }
   const s = spots.find((x) => x.game);
   if (s) { s.centre = [hd.x, hd.y]; s.door = [hd.x, hd.y]; s.top = [hd.x, hd.y, groundAtMap(map, hd.x, hd.y) + 3 * K]; }
@@ -2052,15 +2055,8 @@ function updateHerd(dt: number) {
     hd.stalking = false; hd.offered = true; caravan.stop();
     for (const b of spotLayer.children) b.classList.remove('going');
     parent.postMessage({ type: 'primundi-hunt' }, location.origin);
-  } else if (caravan.moving && Math.random() < dt * (gameKeen ? 0.12 : 0.25)) {
-    // Seen: they bolt, away from you, and settle again further off.
-    hd.stalking = false; caravan.stop();
-    const ax = hd.x - caravan.x, ay = hd.y - caravan.y, l = Math.hypot(ax, ay) || 1;
-    const v = hd.nav.nearest(hd.x + ax / l * 160 * K, hd.y + ay / l * 160 * K, 120);
-    hd.flee = v >= 0 ? hd.nav.xy(v) : [hd.x + ax / l * 120, hd.y + ay / l * 120];
-    for (const b of spotLayer.children) b.classList.remove('going');
-    parent.postMessage({ type: 'primundi-fled' }, location.origin);
   }
+  void gameKeen;
 }
 function placeFinds(m: LocalMap, n: Nav, K: number) {
   if (!gameFinds.length && !gameJobs.length) return;
@@ -2151,11 +2147,10 @@ function goTo(x: number, y: number, then: (() => void) | null = null) {
 }
 function goSpot(s: TownSpot) {
   const b = spotLayer.children[spots.indexOf(s)];
-  // Game: stalk it; on the way it may see you (updateHerd).
-  if (s.game && herd && !herd.done) {
-    herd.stalking = true;
-    const ok = goTo(herd.x, herd.y, () => { b?.classList.remove('going'); if (herd) herd.stalking = false; });
-    if (ok) b?.classList.add('going');
+  // Game: the hunt, straight away (2026-11-09: stalking it and having it bolt wasn't a game).
+  if (s.game && herd && !herd.done && !herd.flee) {
+    herd.offered = true; caravan?.stop();
+    parent.postMessage({ type: 'primundi-hunt' }, location.origin);
     return;
   }
   // Someone on the road: they wait for you; walk up beside them.
@@ -2178,6 +2173,19 @@ function goSpot(s: TownSpot) {
     else parent.postMessage({ type: 'primundi-spot', tab: s.tab }, location.origin);
   });
   if (ok) b?.classList.add('going');
+}
+/** Primundi: the building whose card is open (its tab), and where on screen it was last said to be. */
+let anchorTab: string | null = null, anchorSent = '';
+function sendAnchor() {
+  if (!anchorTab || !map) return;
+  const s = spots.find((x) => x.tab === anchorTab);
+  const c = s ? onScreen(s.top[0], s.top[1], s.top[2]) : null, base = s ? onScreen(s.centre[0], s.centre[1], groundAt(s.centre[0], s.centre[1])) : null;
+  // The top of its label (40 px over the point it stands on) and the foot of the building.
+  const at = c && base ? { x: Math.round(c[0]), top: Math.round(c[1] - 48), bottom: Math.round(Math.max(base[1], c[1] + 10)) } : null;
+  const key = JSON.stringify(at);
+  if (key === anchorSent) return;
+  anchorSent = key;
+  parent.postMessage({ type: 'primundi-anchor-at', at }, location.origin);
 }
 const tmpV = new THREE.Vector3();
 /** Where a map point is on screen (CSS pixels), or null behind the camera. (The map camera works in
@@ -2256,6 +2264,7 @@ function updateCaravan(dt: number) {
     b.classList.toggle('far', !show);
     if (c) b.style.transform = `translate(${c[0].toFixed(1)}px, ${c[1].toFixed(1)}px) translate(-50%, calc(-100% - 8px))`;
   });
+  sendAnchor();
 }
 
 // --- Walking ---
@@ -2298,6 +2307,11 @@ pegman($('pegman'), renderer.domElement, dropRing, (x, y) => {
 }
 addEventListener('keydown', (e) => {
   if (walker.active || (e.target as HTMLElement)?.tagName === 'INPUT') return;
+  // Primundi: the game's keys (choices, speed, Esc) are the page's; it has the focus here.
+  if (game) {
+    if (/^[1-9]$/.test(e.key) || e.code === 'Space' || e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); parent.postMessage({ type: 'primundi-key', key: e.key, code: e.code }, location.origin); }
+    return;
+  }
   const n = Number(e.key);
   if (e.code === 'BracketLeft') { playing = false; setTime(hourNow() - 0.5); }
   if (e.code === 'BracketRight') { playing = false; setTime(hourNow() + 0.5); }
@@ -2432,6 +2446,7 @@ if (embedded) {
     // Primundi: a job's camp or site dealt with; its label goes.
     if (e.data.type === 'primundi-job-done') for (const s of spots) if (s.job === e.data.id) s.used = true;
     // Primundi: the game's been hunted (or let be): it moves off out of reach.
+    if (e.data.type === 'primundi-anchor') { anchorTab = e.data.tab ?? null; anchorSent = ''; sendAnchor(); }
     if (e.data.type === 'primundi-hunted' && herd) {
       herd.done = true;
       for (const s of spots) if (s.game) s.used = true;

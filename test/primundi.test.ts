@@ -83,8 +83,8 @@ test('a path between two places walks land, and roads make it quicker', () => {
 
 test('a hometown is a real place, and the same for the same seed', () => {
   for (const bias of ['gentle', 'harsh', 'inhospitable', 'any'] as const) {
-    const id = pickHome(hw, atlas.places, bias, 99);
-    assert.equal(id, pickHome(hw, atlas.places, bias, 99));
+    const id = pickHome(hw, atlas, bias, 99);
+    assert.equal(id, pickHome(hw, atlas, bias, 99));
     assert.ok(atlas.places[id]);
   }
 });
@@ -158,11 +158,12 @@ test('a job is handed in where it should be, and only when it is done', () => {
   assert.ok(canHandIn({ id: 'c', kind: 'bounty', giver: 'X', from: 0, cell: 5, reward: 1, taken: 0, done: true }, 0, cargo));
 });
 
-import { harshness as hardness } from '../src/primundi/start.ts';
-test('hometowns get harder from gentle to harsh to inhospitable', () => {
-  const avg = (b: 'gentle' | 'harsh' | 'inhospitable') => { let t = 0; for (let k = 0; k < 20; k++) t += hardness(hw, atlas.places[pickHome(hw, atlas.places, b, k)].cell); return t / 20; };
+import { hexesToBand } from '../src/primundi/start.ts';
+test('hometowns sit nearer the wild from gentle to harsh to inhospitable', () => {
+  const toWild = hexesToBand(hw, atlas, 2);
+  const avg = (b: 'gentle' | 'harsh' | 'inhospitable') => { let t = 0; for (let k = 0; k < 20; k++) t += toWild[atlas.places[pickHome(hw, atlas, b, k)].cell]; return t / 20; };
   const g = avg('gentle'), h = avg('harsh'), i = avg('inhospitable');
-  assert.ok(g < h && h < i, `gentle ${g.toFixed(2)}, harsh ${h.toFixed(2)}, inhospitable ${i.toFixed(2)}`);
+  assert.ok(g > h && h >= i, `hexes to the Wild: gentle ${g.toFixed(1)}, harsh ${h.toFixed(1)}, inhospitable ${i.toFixed(1)}`);
 });
 
 import { Nav } from '../src/primundi/hexcaravan.ts';
@@ -234,6 +235,7 @@ function playHeadless(seed: number) {
   const dice = makeRng(seed * 3 + 1);
   const g = makeGame(hw, atlas, hgd, seed, s, ui, dice);
   const home = atlas.places[s.home];
+  let sold = 0;
   // Buy the cheapest good at home, take it to the nearest other place, sell, come back; four times.
   const others = atlas.places.filter((p) => p.id !== home.id && findPath(hw, home.cell, p.cell, (a, b) => stepDays(hw, atlas, a, b, 100), () => true))
     .sort((p, q) => Math.hypot(...[0, 1, 2].map((k) => hw.grid.centers[p.cell * 3 + k] - hw.grid.centers[home.cell * 3 + k])) - Math.hypot(...[0, 1, 2].map((k) => hw.grid.centers[q.cell * 3 + k] - hw.grid.centers[home.cell * 3 + k])));
@@ -242,7 +244,9 @@ function playHeadless(seed: number) {
     for (const [from, to] of [[home, away], [away, home]]) {
       if (s.cell !== from.cell) break;
       const q = quotes(hw, from, s.stocks, s.day, 100);
-      const gi = q.map((x, i) => [x.buy || Infinity, i]).sort((a, b) => a[0] - b[0])[0][1];
+      // The cheapest good it will sell (not one its notice board wants: none of that to be had).
+      const short = shortHere(g, from.id);
+      const gi = q.map((x, i) => [short.has(i) ? Infinity : x.buy || Infinity, i]).sort((a, b) => a[0] - b[0])[0][1];
       simBuy(g, from.id, gi, 5);
       buyRations(g, from.id, 10);
       setRoute(g, to.cell);
@@ -250,19 +254,20 @@ function playHeadless(seed: number) {
         simAdvance(g, 0.25);
         while (ui.queue.length) resolve(g, ui.queue.shift()!, 0);
       }
-      for (let k = 0; k < s.caravan.cargo.length; k++) simSell(g, to.id, k, 99);
+      for (let k = 0; k < s.caravan.cargo.length; k++) sold += simSell(g, to.id, k, 99);
     }
   }
   // (advance takes at most 64 steps a call: a day at a time.)
   while (s.day < 120 - 1e-6) { simAdvance(g, Math.min(1, 120 - s.day)); while (ui.queue.length) resolve(g, ui.queue.shift()!, 0); }
-  return { s, ui };
+  return { s, ui, sold };
 }
 test('the rules run headless: the same seed plays the same, and a trader gets there and back', () => {
   const a = playHeadless(11), b = playHeadless(11);
   assert.equal(JSON.stringify(a.s), JSON.stringify(b.s));
   assert.ok(a.ui.arrivals >= 2, `arrived ${a.ui.arrivals} times`);
   assert.ok(a.s.day >= 120 - 1e-6);
-  assert.ok(a.s.caravan.earned !== 0, 'traded');
+  // (Cheap goods can break even, bought and sold at the same price: what matters is it sold.)
+  assert.ok(a.sold > 0, 'traded');
 });
 
 import { shortHere, buy as simBuy2 } from '../src/primundi/sim.ts';

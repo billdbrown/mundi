@@ -120,7 +120,7 @@ export const ENCOUNTERS: Encounter[] = [
           : { text: 'They like the talk, not the empty purse, and take a tenth of the cargo.', effect: { orrels: -c.caravan.orrels, loseCargo: 0.1, morale: -4 } } },
         { label: `Pay ${toll} orrels`, resolve: (c) => c.caravan.orrels >= toll
           ? { text: 'They count it twice and wave you through.', effect: { orrels: -toll, morale: -3 } }
-          : { text: 'You turn out your purse. They take it, and a tenth of the cargo besides.', effect: { orrels: -c.caravan.orrels, loseCargo: 0.1, morale: -6 } } },
+          : { text: 'You turn out your purse. They take it, and a tenth of the cargo too.', effect: { orrels: -c.caravan.orrels, loseCargo: 0.1, morale: -6 } } },
         { label: 'Turn and run', resolve: (c) => c.rng() < 0.55
           ? { text: 'You whip the beasts round and lose them in rough ground, a day out of your way.', effect: { days: 1, morale: -2 } }
           : { text: 'Laden beasts do not outrun horses. They catch you, and take more for the trouble.', effect: { loseCargo: 0.2, morale: -8 } } },
@@ -372,7 +372,7 @@ export const QUEST_ENCOUNTERS: Record<'bounty' | 'relic', Encounter> = {
     text: () => 'Where you were told: a mound, too regular to be a hill, with a cut stone doorway half buried in its side.',
     choices: () => [
       { label: 'Dig it out carefully', resolve: (c) => c.rng() < 0.8
-        ? { text: 'Two days with spades and lamps. At the back of a narrow room, wrapped in rotten cloth: the thing you were sent for, and a second piece besides.', effect: { questDone: true, cargo: [[G.relics, 2]], days: 2, morale: 8 } }
+        ? { text: 'Two days with spades and lamps. At the back of a narrow room, wrapped in rotten cloth: the thing you were sent for, and a second piece with it.', effect: { questDone: true, cargo: [[G.relics, 2]], days: 2, morale: 8 } }
         : { text: 'Two days of digging and the roof comes in. Everyone gets out. Whatever was there is under tons of earth now.', effect: { days: 2, morale: -6 } } },
       { label: 'Break straight in', resolve: (c) => {
         if (c.rng() < 0.6) return { text: 'You are in by noon. It is there, as she said.', effect: { questDone: true, cargo: [[G.relics, 1]], days: 0.5 } };

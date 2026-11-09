@@ -41,7 +41,7 @@ import { AMBITION_GOAL, BANDIT_FIGHT, BEASTS, crewDiff, crewSheet, memberStats, 
 import { FIND_NAMES, findReady, findsIn, type FindKind } from './finds.ts';
 import { FOLK_LABEL, type Folk, type FolkKind } from './life.ts';
 import { applyTradeWants, townLine, townsfolk, tradesOf } from './towns.ts';
-import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Ctx, type Encounter } from './encounters.ts';
+import { ENCOUNTERS, QUEST_ENCOUNTERS, contextAt, drawEncounter, type Choice, type Ctx, type Effect, type Encounter } from './encounters.ts';
 import {
   START_DOY, RATES, doyOf, worldParams, migrateSave, makeGame, newGame, cellAngleOf, bearing, setRoute, findHere, jobHere, pending, resolve,
   jobsOffered, shortHere, chartRate, localOffer, takeLocal, rationCost, restCost, folkHere, meetFolk, passFolk, gameHere, huntHere, makeCamp, buyRations, sellCharts, takeJob, handIn, giveUp, standRound, buyMap, hire, townRecruits, haul, buyBeast, appoint,
@@ -89,14 +89,10 @@ function showLaunch() {
   el.innerHTML = `
     <form class="launch-card" autocomplete="off">
       <div class="wordmark">PRIMUNDI</div>
-      <h1>A world under storm</h1>
-      <p class="tag">Take a caravan out into it. Trade, take work, and learn its shape.</p>
       ${prev ? `<button type="button" class="resume" id="continue"><span class="ot"><b>Continue ${esc(prev.caravan.name)}</b><small>${esc(prev.world)} · ${dateText(prev.day, true)}</small></span><span class="arrow">→</span></button>
       <div class="or">or set out anew</div>` : ''}
       <label class="field"><span class="lab">Your caravan</span>
         <input id="civ" type="text" maxlength="28" spellcheck="false" value="${esc(nameDefault)}" /></label>
-      <div class="field"><span class="lab">Who you are</span>
-        <div class="tiles">${ORIGINS.map((o, i) => `<label class="tile"><input type="radio" name="origin" value="${o.id}" ${i === 0 ? 'checked' : ''} /><b>${o.label}</b><small>${o.note}</small><em>${o.ambition}</em></label>`).join('')}</div></div>
       <div class="field"><span class="lab">Home</span>
         <div class="seg">${BIASES.map((b) => `<label><input type="radio" name="bias" value="${b.id}" ${b.id === (prev && prev.bias !== 'any' ? prev.bias : 'gentle') ? 'checked' : ''} /><span>${b.label}</span></label>`).join('')}</div>
         <small class="bias-note" id="bias-note"></small></div>
@@ -114,7 +110,8 @@ function showLaunch() {
     thunder.unlock();
     const typed = $<HTMLInputElement>('seed').value.trim();
     const bias = (el.querySelector<HTMLInputElement>('input[name=bias]:checked')?.value ?? 'gentle') as StartBias;
-    const origin = (el.querySelector<HTMLInputElement>('input[name=origin]:checked')?.value ?? 'traders') as Origin;
+    // (Who you are, an origin with its own ambition, was dropped from the launch on 2026-11-09: traders.)
+    const origin: Origin = 'traders';
     const world = typed || randomName();
     pendingNew = { name: $<HTMLInputElement>('civ').value.trim() || nameDefault, origin, bias, world, setup: true };
     save = null;
@@ -123,6 +120,22 @@ function showLaunch() {
   if (prev) $('continue').onclick = () => { thunder.unlock(); save = prev; begin(prev.world); };
 }
 let pendingNew: { name: string; origin: Origin; bias: StartBias; world: string; setup?: boolean } | null = null;
+
+/** Under the loading bar, one at a time: how the game works, in a line. */
+const LOAD_TIPS = [
+  'The further from roads and towns, the deeper the wild: richer finds, harder fights.',
+  'A lost fight near home rarely kills. Out in the Deep, it often does.',
+  'What you carry is not yours until you reach a town. Out here it is only a haul.',
+  'What is cheap at home is often dear a few days away.',
+  'Every hex you uncover is worth something to a mapmaker in town.',
+  'Your people get better at what they do. A hunter who hunts becomes a better one.',
+  'Click a herd to hunt it. It costs half a day.',
+  'Water comes free at any well, spring or river. Food you have to buy, or hunt.',
+  'Rest at an inn mends the hurt. Home is free.',
+  'Number keys pick a choice on the road. Space pauses.',
+  'Right-drag turns the view. Left-drag moves it. A click walks.',
+  'A frontier town sells gear you will not find at home.',
+];
 
 // --- The world --------------------------------------------------------------------------------
 const view = new PlanetView($('view'));
@@ -158,9 +171,7 @@ let historyWorker: Worker | null = null;
 function begin(worldName: string) {
   $('launch').hidden = true;
   params = paramsFor(worldName);
-  loader = mountLoader(worldName, pendingNew ? pendingNew.name : save!.caravan.name);
-  const word = document.querySelector('.loader .ld-word');
-  if (word) word.textContent = 'PRIMUNDI';
+  loader = mountLoader(worldName, pendingNew ? pendingNew.name : save!.caravan.name, { word: 'PRIMUNDI', cls: 'pm-loader', tips: LOAD_TIPS });
   view.setRunning(true);
   const { mode, style, relief, blend, trees } = viewOpts;
   worker.postMessage({ id: 1, params: { ...params }, opts: { mode, style, relief, blend, trees }, clouds: true } satisfies BuildRequest);
@@ -231,7 +242,7 @@ function startIntro(loaded: Promise<unknown>) {
   save.hints = [...(save.hints ?? []), 'intro'];
   const cap = document.createElement('div');
   cap.id = 'intro-cap';
-  cap.innerHTML = `<b>${esc(save.world)}</b><span>All of it under storm. Somewhere down there is ${esc(atlas.places[save.home].name)}, and the people who will be your caravan.</span>`;
+  cap.innerHTML = `<b>${esc(save.world)}</b>`;
   document.body.appendChild(cap);
   // Dark until the real view is up: the stand-in planet underneath shows the world clear.
   const veil = document.createElement('div');
@@ -911,7 +922,6 @@ addEventListener('message', (e) => {
     const k = gameHere(g, save.cell);
     if (k) showPending(huntHere(g, k));
   }
-  if (e.data.type === 'primundi-fled' && hexOpen) toast(hasKeen(save!.caravan) ? 'They saw you first, and they\'re off. They\'ll settle again.' : "They saw you first, and they're off. Try again when they settle: someone with Hunt 4 would help.", 5000);
   // The caravan walked up to someone on the road.
   if (e.data.type === 'primundi-meet' && hexOpen && g && save && hexCell === save.cell && !modal) {
     const f = folkHere(g, save.cell).find((x) => x.id === e.data.id)
@@ -923,6 +933,8 @@ addEventListener('message', (e) => {
     const pid = atlas.placeAt[hexCell];
     if (pid >= 0 && hexCell === save.cell && !modal) openTown(pid, String(e.data.tab));
   }
+  if (e.data.type === 'primundi-key') onKey(String(e.data.key), String(e.data.code));
+  if (e.data.type === 'primundi-anchor-at') placeAnchored(e.data.at as Anchor | null);
   if (e.data.type === 'primundi-thunder') thunder.roll(Math.min(1, e.data.near * 0.9), 0.5 + (1 - e.data.near) * 2.5, Math.random() * 1.2 - 0.6);
 });
 function sendValleys() {
@@ -973,11 +985,49 @@ function hoverText(c: number): string {
 }
 
 // --- Cards ------------------------------------------------------------------------------------
+// A town's card stands by its building in the hex, above it or below, whichever has the room
+// (Bill, 2026-11-09). The hex says where the building is on screen, each frame it moves.
+interface Anchor { x: number; top: number; bottom: number }
+let anchorTab: string | null = null, anchorAt: Anchor | null = null;
+const anchorable = () => innerWidth >= 720;
+function anchorTo(tab: string) {
+  if (!anchorable()) return;
+  if (anchorTab !== tab) { anchorTab = tab; anchorAt = null; hexSend({ type: 'primundi-anchor', tab }); }
+  panel.classList.add('anchored');
+  // Hidden until the hex says where (a frame or two); not found, it docks as before.
+  if (anchorAt) placeAnchored(anchorAt); else { panel.style.visibility = 'hidden'; setTimeout(() => { if (!anchorAt && anchorTab === tab) unanchor(); }, 600); }
+}
+function unanchor() {
+  if (anchorTab) hexSend({ type: 'primundi-anchor', tab: null });
+  anchorTab = null; anchorAt = null;
+  panel.classList.remove('anchored', 'above', 'below');
+  panel.style.left = panel.style.top = panel.style.maxHeight = panel.style.visibility = '';
+}
+function placeAnchored(at: Anchor | null) {
+  if (!anchorTab || panelKind !== 'town') return;
+  if (!at) { panel.style.visibility = 'hidden'; anchorAt = null; return; }
+  anchorAt = at;
+  const GAP = 14, TOP = 64, BOTTOM = innerHeight - 84, w = panel.offsetWidth;
+  panel.style.maxHeight = '';
+  const h = panel.scrollHeight + 2;
+  const roomUp = at.top - GAP - TOP, roomDown = BOTTOM - at.bottom - GAP;
+  const up = h <= roomUp || (h > roomDown && roomUp >= roomDown);
+  const room = Math.max(160, up ? roomUp : roomDown);
+  const hh = Math.min(h, room);
+  panel.style.maxHeight = `${room}px`;
+  const top = up ? Math.max(TOP, at.top - GAP - hh) : Math.min(BOTTOM - hh, at.bottom + GAP);
+  const left = Math.max(12, Math.min(innerWidth - w - 12, at.x - w / 2));
+  panel.style.left = `${Math.round(left)}px`; panel.style.top = `${Math.round(top)}px`;
+  panel.style.setProperty('--ax', `${Math.round(Math.max(18, Math.min(w - 18, at.x - left)))}px`);
+  panel.classList.toggle('above', up); panel.classList.toggle('below', !up);
+  panel.style.visibility = '';
+}
 // One card at a time, in Mundi's glass (style.css: the hex card, the drawer). Town and journal
 // cards dock at the side; the road's cards come up in the middle with the world dimmed behind.
 const panel = $('card');
 let panelKind = '';
 function showPanel(kind: string, html: string, isModal = false) {
+  if (kind !== 'town' || !hexOpen) unanchor();
   panel.innerHTML = html;
   panel.hidden = false;
   panel.dataset.kind = kind;
@@ -993,6 +1043,7 @@ function showPanel(kind: string, html: string, isModal = false) {
 function closePanel() {
   const was = panelKind;
   panel.hidden = true;
+  unanchor();
   panelKind = '';
   // Done with the first building in town: where next.
   if ((was === 'town' || was === 'errand') && save && !save.setup && save.day < 1 && (cargoUsed(save.caravan) > 0 || save.jobs.length)) {
@@ -1011,6 +1062,8 @@ const chips = (xs: string[]) => (xs.length ? `<div class="facts">${xs.map((x) =>
 const opt = (act: string, title: string, note = '', right = '', attrs = '', disabled = false) =>
   `<button class="opt" data-act="${act}" ${attrs} ${disabled ? 'disabled' : ''}><span class="ot"><b>${title}</b>${note ? `<small>${note}</small>` : ''}</span>${right ? `<span class="or">${right}</span>` : ''}</button>`;
 const ORREL = '<i class="orrel"></i>';
+const pill = (act: string, label: string, right: string, attrs = '', disabled = false, tip = '') =>
+  `<button class="pill" data-act="${act}" ${attrs} ${disabled ? 'disabled' : ''}${tip ? ` title="${esc(tip)}"` : ''}><b>${label}</b><span>${right}</span></button>`;
 /** A stat sheet's lines as chips: what helps, what costs (caravan.ts memberStats, crewSheet). */
 const stats = (st: Stat[]) => st.map((x) => `<span class="st${x.good === true ? ' up' : x.good === false ? ' dn' : ''}">${x.k} <b>${x.v}</b></span>`).join('');
 
@@ -1049,8 +1102,8 @@ function outfitter(pid: number): string {
   const adds = (it: Item) => Object.entries(it.adds).map(([k, v]) => ({ k: SKILL_NAMES[k as Skill], v: `+${v}`, good: true }));
   return `<h3>Outfitter</h3><div class="opts">${items.map((it) => {
     const to = bestHolder(c, it);
-    return opt('gear', `${esc(it.name)}${it.tier > 1 ? ` <small class="tier t${it.tier}">${it.tier === 3 ? 'frontier' : 'fine'}</small>` : ''}`, `<span class="chips">${stats([{ k: SLOT_NAMES[it.slot], v: '', good: null }, ...adds(it)])}</span>${to ? `<span class="dim small">for ${esc(to.name)}</span>` : '<span class="dim small">nobody gains: to the stores</span>'}`, `${ORREL}${it.cost}`, `data-id="${it.id}"`, c.orrels < it.cost);
-  }).join('')}${cg.map((k) => opt('cgear', CARAVAN_GEAR[k].name, CARAVAN_GEAR[k].text, `${ORREL}${CARAVAN_GEAR[k].cost}`, `data-k="${k}"`, c.orrels < CARAVAN_GEAR[k].cost)).join('')}</div>`;
+    return opt('gear', `${esc(it.name)}${it.tier > 1 ? ` <small class="tier t${it.tier}">${it.tier === 3 ? 'frontier' : 'fine'}</small>` : ''}`, `<span class="chips">${stats(adds(it))}</span>`, `${ORREL}${it.cost}`, `data-id="${it.id}" title="${esc(`${SLOT_NAMES[it.slot]}. ${to ? `For ${to.name}, who gains most.` : 'Nobody gains: to the stores.'}`)}"`, c.orrels < it.cost);
+  }).join('')}${cg.map((k) => opt('cgear', CARAVAN_GEAR[k].name, '', `${ORREL}${CARAVAN_GEAR[k].cost}`, `data-k="${k}" title="${esc(CARAVAN_GEAR[k].text)}"`, c.orrels < CARAVAN_GEAR[k].cost)).join('')}</div>`;
 }
 /** What can be made out of a hex's finds from a distance: reasons to walk into it. */
 function findHints(c: number): string {
@@ -1086,78 +1139,78 @@ function openTown(pid: number, tab = townTab) {
   const tabs = [['market', 'Market'], ['supplies', 'Supplies'], ['work', due ? `Work · ${due}` : 'Work'], ['tavern', 'Tavern'], ['rest', home ? 'Home' : 'Inn']];
   const purse = chips([`${ORREL}${fmt(c.orrels)}`, `${cargoUsed(c)} of ${c.capacity} loads`]);
   let body = '';
+  // Short cards, the detail in tooltips (Bill, 2026-11-09: "more concise, tooltips for further info").
   if (tab === 'market') {
     const short = shortHere(g!, p.id);
-    body = `${purse}<div class="mkt">
+    body = `${purse}<div class="mkt" title="Prices move as you trade and settle back over a fortnight. Shift-click trades five.">
       ${GOODS.map((g, i) => {
         const best = bestKnownSell(a, s.known, i, p.id);
         const here = q[i].buy || q[i].sell;
         const better = best && best.price > here;
         const k = q[i].buy ? q[i].buy / g.base : 1;
-        const hint = k < 0.7 ? '<em class="cheap">cheap here</em>' : k > 1.4 ? '<em class="dear">dear here</em>' : '';
+        const tag = k < 0.7 ? '<em class="cheap">cheap</em>' : k > 1.4 ? '<em class="dear">dear</em>' : '';
         const buyable = !short.has(i) && q[i].buy && q[i].stock >= 1 && c.orrels >= q[i].buy && cargoUsed(c) < c.capacity;
-        // What you carry: what it cost you, and what selling one here makes or loses.
-        const paid = c.cargo[i] && c.basis[i] > 0 ? c.basis[i] / c.cargo[i] : 0, gain = paid ? q[i].sell - paid : 0;
-        const pl = paid ? `<small class="pl ${Math.round(gain) > 0 ? 'gain' : Math.round(gain) < 0 ? 'loss' : ''}">paid ${fmt(Math.round(paid))} · ${Math.round(gain) >= 0 ? '+' : '−'}${fmt(Math.abs(Math.round(gain)))} each</small>` : '';
-        return `<div class="mrow${c.cargo[i] ? ' held' : ''}">
-          <div class="g"><b>${g.name}</b>${hint}${pl}${better ? `<small class="up">fetches ${best!.price} in ${esc(best!.place.name)}, ${agoText(day - best!.day)}</small>` : ''}</div>
-          <button class="sell" data-act="sell" data-g="${i}" ${c.cargo[i] < 1 ? 'disabled' : ''} title="Sell one (shift: five)"><span>sell</span>${q[i].sell}</button>
+        // What you carry: what it cost you, and what selling one here makes or loses (in the tooltip;
+        // the sell button goes green or red by it).
+        const paid = c.cargo[i] && c.basis[i] > 0 ? c.basis[i] / c.cargo[i] : 0, gain = paid ? Math.round(q[i].sell - paid) : 0;
+        const tip = [k < 0.7 ? 'Cheap here.' : k > 1.4 ? 'Dear here.' : '', paid ? `You paid ${fmt(Math.round(paid))} each: ${gain >= 0 ? '+' : '−'}${fmt(Math.abs(gain))} each sold here.` : '',
+          better ? `Fetches ${best!.price} in ${best!.place.name} (${agoText(day - best!.day)}).` : ''].filter(Boolean).join(' ');
+        return `<div class="mrow${c.cargo[i] ? ' held' : ''}"${tip ? ` title="${esc(tip)}"` : ''}>
+          <div class="g"><b>${g.name}</b>${tag}${better ? '<i class="better" title="Sells for more somewhere you know">▲</i>' : ''}</div>
+          <button class="sell${paid ? (gain > 0 ? ' gain' : gain < 0 ? ' loss' : '') : ''}" data-act="sell" data-g="${i}" ${c.cargo[i] < 1 ? 'disabled' : ''} title="Sell one (shift: five)"><span>sell</span>${q[i].sell}</button>
           <span class="have" title="You carry">${c.cargo[i] || '·'}</span>
-          ${short.has(i) ? '<span class="nobuy" title="Wanted on the notice board: there is none to be had here">none to be had</span>' : q[i].buy ? `<button class="buy" data-act="buy" data-g="${i}" ${buyable ? '' : 'disabled'} title="Buy one (shift: five)"><span>buy</span>${q[i].buy}</button>` : '<span class="nobuy">not sold</span>'}
+          ${short.has(i) ? '<span class="nobuy" title="Wanted on the notice board: there is none to be had here">none</span>' : q[i].buy ? `<button class="buy" data-act="buy" data-g="${i}" ${buyable ? '' : 'disabled'} title="Buy one (shift: five)"><span>buy</span>${q[i].buy}</button>` : '<span class="nobuy">not sold</span>'}
         </div>`;
       }).join('')}</div>
-      ${(() => { const o = localOffer(g!, p.id); return o ? `<h3>This town's own</h3><div class="opts">${opt('local', esc(o.label), esc(o.note), `${ORREL}${o.cost}`, '', c.orrels < o.cost)}</div>` : ''; })()}
-      <p class="dim small">Prices move as you trade and settle back over a fortnight. Shift-click trades five.</p>`;
+      ${(() => { const o = localOffer(g!, p.id); return o ? `<div class="pills">${pill('local', esc(o.label), `${ORREL}${o.cost}`, '', c.orrels < o.cost, o.note)}</div>` : ''; })()}`;
   } else if (tab === 'supplies') {
     const eat = appetite(c);
     const rd = c.rations / Math.max(1, eat);
     const chart = Math.round(c.unsoldCharts * chartRate(g!, p));
-    body = `${purse}<h3>Provisions</h3>
-      <p>Food for <b>${Math.floor(rd)} days</b>. The skins are filled at the well, free: ${Math.floor(waterCap(c) / Math.max(1, thirst(c)))} days of water.</p>
-      <div class="opts">${[5, 10, 20].map((d) => { const cost = rationCost(g!, p.id, d); return opt('rations', `${d} days of food`, `for ${living(c).length} people`, `${ORREL}${cost}`, `data-n="${d}"`, c.orrels < cost); }).join('')}</div>
+    body = `${purse}${chips([`<b>${Math.floor(rd)}</b> days of food`, `<b>${Math.floor(waterCap(c) / Math.max(1, thirst(c)))}</b> days of water <span class="dim">(free at the well)</span>`])}
+      <h3>Food</h3>
+      <div class="pills">${[5, 10, 20].map((d) => { const cost = rationCost(g!, p.id, d); return pill('rations', `${d} days`, `${ORREL}${cost}`, `data-n="${d}"`, c.orrels < cost, `${d} days of food for ${living(c).length} people`); }).join('')}</div>
       ${outfitter(p.id)}
-      <h3>Charts</h3>
-      ${c.unsoldCharts ? `<p>You have mapped ${fmt(c.unsoldCharts)} hexes nobody here has seen drawn.</p><div class="opts">${opt('charts', 'Sell your charts', `${p.town ? 'A town pays well' : 'A village pays half'}`, `${ORREL}${fmt(chart)}`)}</div>`
-        : '<p class="dim">Nothing new to sell. Every hex you uncover on the road is worth something here.</p>'}`;
+      ${c.unsoldCharts ? `<h3>Charts</h3><div class="pills">${pill('charts', `Sell ${fmt(c.unsoldCharts)} hexes of charts`, `${ORREL}${fmt(chart)}`, '', false, `Hexes you have mapped that nobody here has seen drawn. ${p.town ? 'A town pays well.' : 'A village pays half.'}`)}</div>` : ''}`;
   } else if (tab === 'work') {
     const handIn = s.jobs.filter((x) => canHandIn(x, p.id, c.cargo));
     const offers = jobsOffered(g!, p);
     const dir = (cell: number) => bearing(w, p.cell, cell);
-    body = `${handIn.length ? `<h3>To hand in</h3>${handIn.map((q) => `<div class="job-card due"><b>${esc(questTitle(q, a))}</b><small>for ${esc(q.giver)}</small>
-        <button class="go" data-act="handin" data-q="${q.id}">Hand it in<span>${q.reward} orrels</span></button></div>`).join('')}` : ''}
-      ${hexOpen ? '' : '<h3>The notice board</h3>'}
-      ${offers.length ? offers.map((q) => `<div class="job-card"><blockquote>${esc(questPitch(q, a, dir))}<cite>${esc(q.giver)}</cite></blockquote>
-        <div class="job-foot"><span>${q.reward} orrels${q.kind === 'deliver' ? ' on delivery' : ''}</span>
-        <button class="go" data-act="take" data-q="${q.id}" ${s.jobs.length >= MAX_QUESTS ? 'disabled' : ''}>Take it</button></div></div>`).join('')
-        : `<p class="dim">Nothing else posted in ${esc(p.name)} this month.</p>`}
-      ${s.jobs.length ? `<p class="dim small">You hold ${s.jobs.length} of ${MAX_QUESTS} jobs. The journal lists them.</p>` : ''}`;
+    body = `${handIn.map((q) => `<div class="job due"><span class="jt"><b>${esc(questTitle(q, a))}</b><small>for ${esc(q.giver)}</small></span>
+        <button class="go" data-act="handin" data-q="${q.id}">Hand in · ${ORREL}${q.reward}</button></div>`).join('')}
+      ${offers.length ? offers.map((q) => `<div class="job" title="${esc(`"${questPitch(q, a, dir)}" (${q.giver})`)}"><span class="jt"><b>${esc(questTitle(q, a))}</b><small>${esc(q.giver)}${q.kind === 'deliver' ? ' · paid on delivery' : ''}</small></span>
+        <span class="jr">${ORREL}${q.reward}</span>
+        <button class="take" data-act="take" data-q="${q.id}" ${s.jobs.length >= MAX_QUESTS ? 'disabled title="You hold as many jobs as you can"' : ''}>Take</button></div>`).join('')
+        : `<p class="dim">Nothing else posted this month.</p>`}
+      <p class="dim small">${s.jobs.length} of ${MAX_QUESTS} jobs held. Hover a job for the notice.</p>`;
   } else if (tab === 'tavern') {
     const mapped = s.maps.includes(p.id), mapCost = p.town ? 40 : 25;
-    body = `${purse}<h3>Talk</h3>
-      <div class="opts">${opt('round', 'Stand a round', 'Someone always knows of a place you don\'t', `${ORREL}8`, '', c.orrels < 8)}
-      ${opt('localmap', 'Buy a map of the country round', mapped ? 'You have it' : 'Four days\' walk in every direction', `${ORREL}${mapCost}`, `data-n="${mapCost}"`, mapped || c.orrels < mapCost)}</div>
-      <h3>${esc(p.name)} remembers</h3>
-      ${p.story.length ? `<ul class="log">${p.story.slice(-4).reverse().map((x) => { const i = x.indexOf(': '); return `<li><span>Year ${x.slice(0, i)}</span>${esc(x.slice(i + 2))}</li>`; }).join('')}</ul>` : '<p class="dim">Nothing anyone tells twice.</p>'}`;
+    const told = p.story.slice(-4).reverse().map((x) => { const i = x.indexOf(': '); return `Year ${x.slice(0, i)}: ${x.slice(i + 2)}`; });
+    body = `<div class="acts">
+        <button class="act" data-act="round" ${c.orrels < 8 ? 'disabled' : ''} title="Someone always knows of a place you don't: a rumour on your map."><svg viewBox="0 0 24 24"><path d="M6 7h10v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2zM16 10h2a2 2 0 0 1 0 4h-2M7 4.5c1-.8 2-.8 3 0s2 .8 3 0"/></svg><b>Stand a round</b><span>${ORREL}8</span></button>
+        <button class="act" data-act="localmap" data-n="${mapCost}" ${mapped || c.orrels < mapCost ? 'disabled' : ''} title="${mapped ? 'You have it.' : "Four days' walk in every direction, drawn on your map."}"><svg viewBox="0 0 24 24"><path d="M9 4l-6 2.5v13.5l6-2.5 6 2.5 6-2.5V4l-6 2.5L9 4zM9 4v13.5M15 6.5V20"/></svg><b>${mapped ? 'Map bought' : 'Buy a local map'}</b><span>${mapped ? '✓' : `${ORREL}${mapCost}`}</span></button>
+      </div>
+      ${told.length ? `<p class="lore" title="${esc(told.join('\n'))}">${esc(told[0])}</p>` : ''}
+      ${purse}`;
   } else {
     const cost = restCost(g!, p.id, 1), cost3 = restCost(g!, p.id, 3);
     const hires = townRecruits(g!, p.id);
-    body = `${purse}${hexOpen ? '' : `<h3>${home ? 'Home' : 'The inn'}</h3>`}
-      <p>${home ? 'Your own people put you up. Resting here costs nothing.' : `A yard for the beasts and a roof for the people, ${cost} orrels a night.`} Rest mends the hurt and lifts spirits.</p>
-      <div class="opts">${opt('rest', 'Rest a day', '', home ? 'free' : `${ORREL}${cost}`, 'data-n="1"', c.orrels < cost)}${opt('rest', 'Rest three days', '', home ? 'free' : `${ORREL}${cost3}`, 'data-n="3"', c.orrels < cost3)}</div>
-      <h3>Hire</h3>
-      ${living(c).length >= 9 ? '<p class="dim">The caravan is as big as it can feed.</p>' : hires.length ? `<p class="dim small">Your caravan: <span class="chips">${stats(crewSheet(c))}</span></p><div class="opts">${hires.map((r) => { const d = crewDiff(c, r.m); return opt('hire', esc(r.m.name), `<span class="chips">${stats(memberStats(r.m))}</span>${d.length ? `<span class="chips diff">${stats(d)}</span>` : ''}`, `${ORREL}${r.cost}`, `data-i="${r.i}"`, c.orrels < r.cost); }).join('')}</div>` : '<p class="dim">Nobody else is looking for work this month.</p>'}
-      <h3>Beasts</h3>
-      <div class="opts">${opt('beast', 'A pack beast', 'Carries four more loads', `${ORREL}45`, '', c.orrels < 45)}</div>`;
+    body = `${purse}
+      <div class="pills">${pill('rest', 'Rest a day', home ? 'free' : `${ORREL}${cost}`, 'data-n="1"', c.orrels < cost, 'Rest mends the hurt and lifts spirits.')}${pill('rest', 'Rest three days', home ? 'free' : `${ORREL}${cost3}`, 'data-n="3"', c.orrels < cost3, 'Rest mends the hurt and lifts spirits.')}</div>
+      <h3 title="Your caravan: ${esc(crewSheet(c).map((x) => `${x.k} ${x.v}`).join(', '))}">Hire</h3>
+      ${living(c).length >= 9 ? '<p class="dim">The caravan is as big as it can feed.</p>' : hires.length ? `<div class="opts">${hires.map((r) => { const d = crewDiff(c, r.m); return opt('hire', esc(r.m.name), `${d.length ? `<span class="chips diff">${stats(d)}</span>` : `<span class="chips">${stats(memberStats(r.m))}</span>`}`, `${ORREL}${r.cost}`, `data-i="${r.i}" title="${esc(memberStats(r.m).map((x) => `${x.k} ${x.v}`).join(', '))}"`, c.orrels < r.cost); }).join('')}</div>` : '<p class="dim">Nobody looking for work this month.</p>'}
+      <div class="pills">${pill('beast', 'A pack beast', `${ORREL}45`, '', c.orrels < 45, 'Carries four more loads.')}</div>`;
   }
   body = setupBody(tab, purse, body);
   // Walking the town's hex, each building is its own card: you go to the market for the market.
   // (The whole card with its tabs is still here for when there's no hex view open.)
   if (hexOpen) {
     const where = BUILDING[tab] ?? tab;
-    showPanel('town', `${close}${head(`${esc(p.name)}${home ? ' · your home' : ''}`, tab === 'rest' && home ? 'Home' : where)}
-      ${tab === 'tavern' ? `<p class="about">${townCharacter(p)}</p>` : ''}
+    showPanel('town', `${close}<div title="${townCharacter(p)}">${head(`${esc(p.name)}${home ? ' · your home' : ''}`, tab === 'rest' && home ? 'Home' : where)}</div>
       ${tab === 'rest' && home ? '' : whoIsThere(p, tab)}
       <div class="tab-body">${body}</div>`);
+    panel.dataset.tab = tab;
+    anchorTo(tab);
   } else showPanel('town', `${close}${head(`${p.town ? 'Town' : 'Village'}${p.realm ? ` · ${esc(p.realm)}` : ''}`, esc(p.name), `${fmt(p.pop)} people${home ? ' · <b>your home</b>' : ''}`)}
     <p class="about">${townCharacter(p)}</p>
     <nav class="tabs">${tabs.map(([k, l]) => `<button data-act="tab" data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</nav>
@@ -1176,7 +1229,7 @@ function whoIsThere(p: Place, tab: string): string {
   const greet = m && m.helped > 0 ? `"${esc(save.caravan.name)}! Always welcome here." A little comes off the price for friends.`
     : m && m.visits > 1 ? '"Back again," they say. "Safe roads?"'
     : esc(f.line);
-  return `<p class="who"><b>${esc(f.name)}</b> ${f.does}. <span>${greet}</span></p>`;
+  return `<p class="who"><b>${esc(f.name)}</b> <span>${greet}</span></p>`;
 }
 /** A line of who a place is: where it sits, what it's known for, where it came from. */
 function townCharacter(p: Place): string {
@@ -1199,10 +1252,75 @@ function showFind(kind: FindKind) {
   showPending(p);
 }
 function showEncounter(e: Encounter, ctx: Ctx, quest?: string) { showPending(pending(e, ctx, quest)); }
+// A road card's choices, each with an icon and what it tends to cost or bring (Bill, 2026-11-09:
+// "numbers and icons"). The numbers are found by playing the choice out a few hundred times on
+// the side: its outcomes are drawn from the card's dice and change nothing until one is chosen.
+const CHOICE_ICON: Record<string, string> = {
+  fight: '<path d="M5 19l9-9M14 5h5v5l-9 9M5 15l4 4M3 21l3-3"/>',
+  scout: '<path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"/><circle cx="12" cy="12" r="2.6"/>',
+  hunt: '<path d="M4 20L18 6M14 6h4v4M4 20l2-5M4 20l5-2"/>',
+  barter: '<path d="M12 4v16M5 20h14M4 9l4-4 4 4M12 9l4-4 4 4M4 9l2 5H2zM16 9l2 5h-4z"/>',
+  mend: '<path d="M12 20s-7-4.4-7-9.5A3.8 3.8 0 0 1 12 8a3.8 3.8 0 0 1 7 2.5C19 15.6 12 20 12 20z"/>',
+  pay: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.6"/>',
+  away: '<path d="M5 12h13M13 6l6 6-6 6"/>',
+  wait: '<path d="M4 20l8-14 8 14zM12 6v14"/>',
+  talk: '<path d="M4 6h16v10H10l-4 4v-4H4z"/>',
+};
+function choiceIcon(ch: Choice): string {
+  const l = ch.label.toLowerCase();
+  const k = ch.uses ?? (/\b(pay|give|hand|buy|bribe|share)\b/.test(l) ? 'pay' : /\b(sell|trade|swap|haggle)\b/.test(l) ? 'barter'
+    : /\b(fight|stand|charge|drive)\b/.test(l) ? 'fight' : /\b(leave|let|press|turn|go round|back|send|run|move on|walk|keep)\b/.test(l) ? 'away'
+    : /\b(wait|dig|camp|rest|sleep|shelter)\b/.test(l) ? 'wait' : /\b(talk|ask|news|listen|parley)\b/.test(l) ? 'talk' : '');
+  return `<svg class="ci" viewBox="0 0 24 24">${CHOICE_ICON[k] ?? '<circle cx="12" cy="12" r="2.5"/>'}</svg>`;
+}
+/** What a choice tends to do: chips (good, bad, plain), from playing it out on the side. */
+function choiceOdds(p: Pending, ch: Choice): string {
+  const N = 240, tally: Record<string, { n: number; sum: number }> = {}, goods = new Set<number>();
+  const add = (k: string, v: number) => { const t = (tally[k] ??= { n: 0, sum: 0 }); t.n++; t.sum += v; };
+  for (let i = 0; i < N; i++) {
+    let e: Effect;
+    try { e = ch.resolve({ ...p.ctx, rng: makeRng((i * 2654435761 + 977) >>> 0), name: () => '' }).effect; } catch { return ''; }
+    if (e.days) add('days', e.days);
+    if (e.orrels) add('orrels', e.orrels);
+    if (e.rations) add('rations', e.rations);
+    if (e.water) add('water', e.water);
+    if (e.cargo) { add('cargo', e.cargo.reduce((a, [, n]) => a + n, 0)); for (const [gi] of e.cargo) goods.add(gi); }
+    if (e.sell) add('sold', e.sell[1] * e.sell[2]);
+    if (e.loseCargo) add('lose', e.loseCargo);
+    if (e.hurt) add('hurt', 1);
+    if (e.sick) add('sick', 1);
+    if (e.dies) add('dies', 1);
+    if (e.reveal || e.rumour) add('map', 1);
+    if (e.recruit) add('recruit', 1);
+  }
+  const share = (k: string) => (tally[k]?.n ?? 0) / N, mean = (k: string) => tally[k] ? tally[k].sum / tally[k].n : 0;
+  const pct = (k: string) => (share(k) < 0.95 ? ` · ${Math.max(1, Math.round(share(k) * 100))}%` : '');
+  // "+40" when it always comes; "+40 · 55%" when only sometimes.
+  const amt = (k: string, unit: string) => {
+    const v = Math.round(mean(k));
+    if (share(k) < 0.03 || !v) return null;
+    return `${v > 0 ? '+' : '−'}${Math.abs(v)}${unit}${pct(k)}`;
+  };
+  const out: [string, string][] = [];
+  const d = mean('days');
+  if (share('days') >= 0.03) out.push(['', `${d < 1 ? '½ day' : `${Math.round(d)} day${Math.round(d) === 1 ? '' : 's'}`}${pct('days')}`]);
+  const o = amt('orrels', ''); if (o) out.push([mean('orrels') > 0 ? 'good' : 'bad', `${ORREL}${o}`]);
+  const sold = amt('sold', ''); if (sold) out.push(['good', `${ORREL}${sold}`]);
+  const r = amt('rations', ' food'); if (r) out.push([mean('rations') > 0 ? 'good' : 'bad', r]);
+  const wa = amt('water', ' water'); if (wa) out.push([mean('water') > 0 ? 'good' : 'bad', wa]);
+  const cg = amt('cargo', goods.size === 1 ? ` ${GOODS[[...goods][0]].name.toLowerCase()}` : ' loads'); if (cg) out.push(['good', cg]);
+  if (share('lose') >= 0.03) out.push(['bad', `cargo lost${pct('lose')}`]);
+  if (share('map') >= 0.03) out.push(['good', `maps country${pct('map')}`]);
+  if (share('recruit') >= 0.03) out.push(['good', `someone joins${pct('recruit')}`]);
+  if (share('sick') >= 0.03) out.push(['bad', `sickness${pct('sick')}`]);
+  if (share('hurt') >= 0.03) out.push(['bad', `injury${pct('hurt')}`]);
+  if (share('dies') >= 0.004) out.push(['bad dire', `death${pct('dies')}`]);
+  return out.length ? `<span class="odds">${out.map(([c, t]) => `<span class="${c}">${t}</span>`).join('')}</span>` : '';
+}
 function showPending(p: Pending) {
   speed = 0;
   showPanel('encounter', `${head(roadKicker(), esc(p.e.title))}<p class="tale">${esc(p.e.text(p.ctx))}</p>
-    <div class="opts">${p.choices.map((ch, i) => opt('choose', esc(ch.label), ch.locked ? `Needs ${esc(ch.locked)}` : ch.hint ? esc(ch.hint) : '', '', `data-i="${i}"`, !!ch.locked)).join('')}</div>`, true);
+    <div class="opts choices">${p.choices.map((ch, i) => `<button class="opt" data-act="choose" data-i="${i}" ${ch.locked ? 'disabled' : ''}>${choiceIcon(ch)}<span class="ot"><b>${esc(ch.label)}</b>${ch.locked ? `<small>Needs ${esc(ch.locked)}</small>` : ch.hint ? `<small>${esc(ch.hint)}</small>` : ''}${ch.locked ? '' : choiceOdds(p, ch)}</span><kbd>${i + 1}</kbd></button>`).join('')}</div>`, true);
   pendingChoices = p;
 }
 let pendingChoices: Pending | null = null;
@@ -1217,7 +1335,8 @@ function choose(i: number) {
   const p = pendingChoices;
   pendingChoices = null;
   const { out, lines, extra } = resolve(g, p, i);
-  if (p.hunt) hexSend({ type: 'primundi-hunted' });
+  // Hunted: the game moves off. Let be, it grazes on (and can be hunted later).
+  if (p.hunt) hexSend({ type: out.effect.days ? 'primundi-hunted' : 'primundi-letbe' });
   showPanel('encounter', `${head(roadKicker(), esc(p.e.title))}<p class="tale">${esc(out.text)}</p>${extra ? `<p>${esc(extra)}</p>` : ''}
     ${fxChips(lines)}<button class="go" data-act="after">Go on</button>`, true);
   hud();
@@ -1328,7 +1447,7 @@ function showJournal(tab = journalTab) {
   } else {
     body = `<ul class="log">${s.log.slice(-40).reverse().map((l) => `<li><span>${dateText(l.day, north())}</span>${esc(l.text)}</li>`).join('')}</ul>`;
   }
-  showPanel('journal', `${close}${head(`Journal · ${o.label}`, esc(c.name), `From ${esc(a.places[s.home].name)} · ${dateText(s.day, north())}`)}
+  showPanel('journal', `${close}${head('Journal', esc(c.name), `From ${esc(a.places[s.home].name)} · ${dateText(s.day, north())}`)}
     <nav class="tabs">${tabs.map(([k, l]) => `<button data-act="jtab" data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</nav>
     <div class="tab-body">${body}</div>`);
   if (tab === 'caravan' && showGlobes) drawGlobes();
@@ -1498,10 +1617,20 @@ $('b-menu').onclick = () => {
   store();
   location.reload();
 };
+/** A key, here or in the hex view (which passes its keys on). True if the game used it. */
+function onKey(key: string, code: string): boolean {
+  if (!save) return false;
+  // A road card: its number picks a choice; then Enter or Space goes on.
+  if (pendingChoices && /^[1-9]$/.test(key)) { const i = Number(key) - 1; if (pendingChoices.choices[i] && !pendingChoices.choices[i].locked) choose(i); return true; }
+  if (panelKind === 'encounter' && (key === 'Enter' || code === 'Space') && panel.querySelector('[data-act="after"]')) { afterEncounter(); return true; }
+  if (key === 'Escape' && panelKind && !modal) { closePanel(); return true; }
+  if (code === 'Space') { setSpeed(paused() ? lastSpeed : 0); return true; }
+  if (key === '1' || key === '2' || key === '3') { setSpeed(Number(key)); return true; }
+  return false;
+}
 addEventListener('keydown', (e) => {
-  if (!save || (e.target as HTMLElement).tagName === 'INPUT') return;
-  if (e.code === 'Space') { e.preventDefault(); setSpeed(paused() ? lastSpeed : 0); }
-  if (e.key === '1' || e.key === '2' || e.key === '3') setSpeed(Number(e.key));
+  if ((e.target as HTMLElement).tagName === 'INPUT') return;
+  if (onKey(e.key, e.code)) e.preventDefault();
 });
 addEventListener('pagehide', () => store());
 

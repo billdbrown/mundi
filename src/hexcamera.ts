@@ -42,6 +42,9 @@ export class HexCamera {
   /** The point looked at (as drawn: eased). Setting it, then snap(), jumps there. */
   readonly target = new THREE.Vector3();
   enabled = true;
+  /** Right-drag turns (and tilts, up tilting toward the horizon) instead of panning: Primundi's
+   * mouse (Bill, 2026-11-09), where left-drag pans and a left click walks. */
+  rightTurns = false;
   feel: CameraFeel = FEEL.silky;
   /** Closest and farthest the camera may be from the point, metres. */
   minDistance = 6;
@@ -202,7 +205,7 @@ export class HexCamera {
       this.startTouch();
       return;
     }
-    const turn = e.button === 1 || ((e.button === 0 || e.button === 2) && (e.ctrlKey || e.altKey));
+    const turn = e.button === 1 || (this.rightTurns && e.button === 2) || ((e.button === 0 || e.button === 2) && (e.ctrlKey || e.altKey));
     const pan = !turn && (e.button === 0 || e.button === 2);
     if (!turn && !pan) return;
     e.preventDefault();
@@ -225,7 +228,7 @@ export class HexCamera {
     if (d.mode === 'turn') {
       const dyaw = -dx * 0.006;
       this.yawGoal += dyaw;
-      this.tiltGoal += dy * 0.004;
+      this.tiltGoal += (this.rightTurns ? -dy : dy) * 0.004;
       this.yawVel = THREE.MathUtils.lerp(this.yawVel, dyaw / dt, 0.5);
     } else if (d.grab) this.panTo(d.grab, e.clientX, e.clientY, dt);
     d.x = e.clientX; d.y = e.clientY; d.t = now;
