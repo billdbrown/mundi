@@ -160,10 +160,12 @@ test('a job is handed in where it should be, and only when it is done', () => {
 
 import { hexesToBand } from '../src/primundi/start.ts';
 test('hometowns sit nearer the wild from gentle to harsh to inhospitable', () => {
-  const toWild = hexesToBand(hw, atlas, 2);
-  const avg = (b: 'gentle' | 'harsh' | 'inhospitable') => { let t = 0; for (let k = 0; k < 20; k++) t += toWild[atlas.places[pickHome(hw, atlas, b, k)].cell]; return t / 20; };
-  const g = avg('gentle'), h = avg('harsh'), i = avg('inhospitable');
-  assert.ok(g > h && h >= i, `hexes to the Wild: gentle ${g.toFixed(1)}, harsh ${h.toFixed(1)}, inhospitable ${i.toFixed(1)}`);
+  const toWild = hexesToBand(hw, atlas, 2), toDeep = hexesToBand(hw, atlas, 3);
+  const avg = (b: 'gentle' | 'harsh' | 'inhospitable', d: Uint8Array) => { let t = 0; for (let k = 0; k < 20; k++) t += d[atlas.places[pickHome(hw, atlas, b, k)].cell]; return t / 20; };
+  const g = avg('gentle', toWild), h = avg('harsh', toWild);
+  assert.ok(g > h, `hexes to the Wild: gentle ${g.toFixed(1)}, harsh ${h.toFixed(1)}`);
+  const hd = avg('harsh', toDeep), id = avg('inhospitable', toDeep);
+  assert.ok(id < hd, `hexes to the Deep: harsh ${hd.toFixed(1)}, inhospitable ${id.toFixed(1)}`);
 });
 
 import { Nav } from '../src/primundi/hexcaravan.ts';

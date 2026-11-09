@@ -89,6 +89,9 @@ export function pickHome(w: World, a: Atlas, bias: StartBias, seed: number): num
   const places = a.places;
   const rng = makeRng((seed ^ (bias === 'gentle' ? 0x93 : bias === 'harsh' ? 0x2d : bias === 'inhospitable' ? 0xe7 : 0x61)) >>> 0);
   const toWild = hexesToBand(w, a, 2), toDeep = bias === 'inhospitable' ? hexesToBand(w, a, 3) : null;
+  // Inhospitable: within a few hexes of the Deep, or on a world with no town that near, the
+  // towns nearest it (rather than falling back to harsh).
+  const deepReach = toDeep ? Math.max(HOME_WILD.inhospitable, Math.min(...places.map((p) => toDeep[p.cell])) + 2) : 0;
   const ids: number[] = [], weights: number[] = [];
   for (const p of places) {
     const size = 1 / (1 + Math.abs(Math.log(p.pop / 1500)));
@@ -96,7 +99,7 @@ export function pickHome(w: World, a: Atlas, bias: StartBias, seed: number): num
     let wt: number;
     if (bias === 'gentle') wt = wild >= HOME_WILD.gentle ? size : 0;
     else if (bias === 'harsh') wt = wild >= HOME_WILD.harsh[0] && wild <= HOME_WILD.harsh[1] ? size : 0;
-    else if (bias === 'inhospitable') wt = toDeep![p.cell] <= HOME_WILD.inhospitable ? size : 0;
+    else if (bias === 'inhospitable') wt = toDeep![p.cell] <= deepReach ? size : 0;
     else wt = size;
     if (wt > 0) { ids.push(p.id); weights.push(wt); }
   }
